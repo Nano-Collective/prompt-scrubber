@@ -98,7 +98,7 @@ export function deleteSessionMap(sessionId: string): boolean {
 /**
  * Lists all available session IDs by inspecting the storage directory.
  */
-export function listSessions(): Array<{ id: string; sizeBytes: number }> {
+export function listSessions(): Array<{ id: string; sizeBytes: number; createdAt: Date }> {
   const sessionsDir = path.join(getConfigDir(), 'sessions');
   if (!fs.existsSync(sessionsDir)) {
     return [];
@@ -113,8 +113,9 @@ export function listSessions(): Array<{ id: string; sizeBytes: number }> {
         id: path.basename(file, '.json'),
         sizeBytes: stats.size,
         mtimeMs: stats.mtimeMs,
+        createdAt: stats.mtime,
       };
     })
     .sort((a, b) => b.mtimeMs - a.mtimeMs)
-    .map(({ id, sizeBytes }) => ({ id, sizeBytes }));
+    .map(({ id, sizeBytes, createdAt }) => ({ id, sizeBytes, createdAt }));
 }
