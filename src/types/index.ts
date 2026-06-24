@@ -33,7 +33,7 @@ export interface ScrubOptions {
 }
 
 export interface ScrubResult {
-  scrubbedContent: string;
+  scrubbedContent: string | Message[];
   sessionId: string;
 }
 
