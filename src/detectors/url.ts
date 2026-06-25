@@ -1,8 +1,7 @@
 import type { Detector, Finding } from '../types/index.js';
 
 // Full HTTP/HTTPS URLs, including paths, query strings, and fragments.
-const FULL_URL_REGEX =
-  /https?:\/\/(?:[a-zA-Z0-9\-._~:/?#[\]@!$&'()*+,;=%]+)/g;
+const FULL_URL_REGEX = /https?:\/\/(?:[a-zA-Z0-9\-._~:/?#[\]@!$&'()*+,;=%]+)/g;
 
 // Bare API endpoint pattern: hostname/path (no scheme).
 // Requires: a dot in the hostname (rejects bare words) + at least one path segment.

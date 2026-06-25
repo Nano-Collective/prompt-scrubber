@@ -25,9 +25,7 @@ test('detects URL with path and query string', (t) => {
 });
 
 test('detects multiple URLs in one string', (t) => {
-  const findings = detector.detect(
-    'See https://foo.com and https://bar.com for more.',
-  );
+  const findings = detector.detect('See https://foo.com and https://bar.com for more.');
   t.is(findings.length, 2);
 });
 

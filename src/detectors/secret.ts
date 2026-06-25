@@ -4,7 +4,10 @@ import type { Detector, Finding } from '../types/index.js';
 // These are high-precision patterns: specific vendor prefixes + characteristic lengths.
 const PREFIX_PATTERNS: { regex: RegExp; name: string }[] = [
   // OpenAI: sk-...48 alphanumeric chars (new format: sk-proj-..., sk-svcacct-...)
-  { regex: /sk-(?:proj-|svcacct-|ant-api\d+-)?[A-Za-z0-9_\-]{20,80}/g, name: 'OpenAI/Anthropic key' },
+  {
+    regex: /sk-(?:proj-|svcacct-|ant-api\d+-)?[A-Za-z0-9_\-]{20,80}/g,
+    name: 'OpenAI/Anthropic key',
+  },
   // GitHub personal access tokens
   { regex: /ghp_[A-Za-z0-9]{36}/g, name: 'GitHub PAT' },
   { regex: /gho_[A-Za-z0-9]{36}/g, name: 'GitHub OAuth' },
@@ -26,13 +29,11 @@ const PREFIX_PATTERNS: { regex: RegExp; name: string }[] = [
 // Matches KEY=value or KEY: value where the key name suggests it's a secret.
 const SECRET_KEY_NAMES =
   /(?:key|secret|token|password|pass|pwd|api|auth|cred|credential|private|access)[_\-]?(?:id|key|secret|token)?/i;
-const KV_PATTERN =
-  /(?:^|[\s,;{])([a-zA-Z0-9_.\-]+)\s*[:=]\s*["']?([A-Za-z0-9+/\-_.~@]{8,})["']?/gm;
+const KV_PATTERN = /(?:^|[\s,;{])([a-zA-Z0-9_.\-]+)\s*[:=]\s*["']?([A-Za-z0-9+/\-_.~@]{8,})["']?/gm;
 
 // --- Layer 3: High-entropy strings ---
 // Only fires when the value is surrounded by quotes or follows an = sign.
-const HIGH_ENTROPY_PATTERN =
-  /(?:=|["'])([A-Za-z0-9+/]{20,})(?:["']|={0,2}(?!\w))/g;
+const HIGH_ENTROPY_PATTERN = /(?:=|["'])([A-Za-z0-9+/]{20,})(?:["']|={0,2}(?!\w))/g;
 const LOG2 = Math.log(2);
 
 function shannonEntropy(str: string): number {
@@ -58,9 +59,10 @@ export class SecretDetector implements Detector {
       let match: RegExpExecArray | null;
       while ((match = regex.exec(text)) !== null) {
         // For Bearer token, capture group 1 is the token value; otherwise use full match
-        const value = match[1] !== undefined && match[1].length > 0 && !match[0].startsWith(match[1])
-          ? match[1]
-          : match[0];
+        const value =
+          match[1] !== undefined && match[1].length > 0 && !match[0].startsWith(match[1])
+            ? match[1]
+            : match[0];
         const start = match.index + (match[0].length - value.length);
         raw.push({
           category: 'Secret',
@@ -108,15 +110,11 @@ export class SecretDetector implements Detector {
     const findings: Finding[] = [];
     for (const candidate of raw) {
       const overlapIdx = findings.findIndex(
-        (existing) =>
-          candidate.span[0] < existing.span[1] &&
-          candidate.span[1] > existing.span[0],
+        (existing) => candidate.span[0] < existing.span[1] && candidate.span[1] > existing.span[0],
       );
       if (overlapIdx === -1) {
         findings.push(candidate);
-      } else if (
-        candidate.value.length > (findings[overlapIdx]?.value.length ?? 0)
-      ) {
+      } else if (candidate.value.length > (findings[overlapIdx]?.value.length ?? 0)) {
         findings[overlapIdx] = candidate;
       }
     }

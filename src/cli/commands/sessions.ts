@@ -2,9 +2,7 @@ import { Command } from 'commander';
 import { listSessions, readSessionMap, deleteSessionMap } from '../../session/storage.js';
 
 export function setupSessionsCommands(program: Command) {
-  const sessionsCommand = program
-    .command('sessions')
-    .description('Manage scrub sessions');
+  const sessionsCommand = program.command('sessions').description('Manage scrub sessions');
 
   sessionsCommand
     .command('list')
@@ -24,7 +22,7 @@ export function setupSessionsCommands(program: Command) {
         const map = readSessionMap(session.id);
         const count = Object.keys(map).length;
         const dateStr = session.createdAt.toLocaleString();
-        
+
         console.log(`${session.id.padEnd(40)} | ${dateStr.padEnd(25)} | ${count}`);
       }
     });

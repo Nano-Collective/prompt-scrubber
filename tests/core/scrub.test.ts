@@ -71,15 +71,17 @@ test('customDetectors option adds a detector on top of defaults', (t) => {
     detect: (text: string) => {
       const match = text.match(/CustomToken/);
       if (match) {
-        return [{
-          category: 'Custom',
-          span: [match.index!, match.index! + match[0].length] as [number, number],
-          value: match[0],
-          placeholderPrefix: 'Custom',
-        }];
+        return [
+          {
+            category: 'Custom',
+            span: [match.index!, match.index! + match[0].length] as [number, number],
+            value: match[0],
+            placeholderPrefix: 'Custom',
+          },
+        ];
       }
       return [];
-    }
+    },
   };
 
   const result = scrub({

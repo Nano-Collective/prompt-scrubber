@@ -2,12 +2,7 @@ import test from 'ava';
 import { resolveCollisions } from '../../src/core/collision-resolver.js';
 import type { Finding } from '../../src/types/index.js';
 
-function makeFinding(
-  category: string,
-  start: number,
-  end: number,
-  value = 'test',
-): Finding {
+function makeFinding(category: string, start: number, end: number, value = 'test'): Finding {
   return {
     category,
     span: [start, end],
@@ -21,10 +16,7 @@ test('returns empty array for empty input', (t) => {
 });
 
 test('accepts two non-overlapping findings', (t) => {
-  const findings = [
-    makeFinding('Email', 0, 10),
-    makeFinding('Phone', 20, 30),
-  ];
+  const findings = [makeFinding('Email', 0, 10), makeFinding('Phone', 20, 30)];
   const result = resolveCollisions(findings);
   t.is(result.length, 2);
   t.is(result[0]?.category, 'Email');
@@ -81,7 +73,7 @@ test('partial overlap: higher-priority candidate replaces lower-priority accepte
 test('three findings: two overlap, one standalone', (t) => {
   const email = makeFinding('Email', 0, 20);
   const phone = makeFinding('Phone', 10, 25); // overlaps with email, email wins
-  const url = makeFinding('Url', 40, 60);     // standalone
+  const url = makeFinding('Url', 40, 60); // standalone
   const result = resolveCollisions([email, phone, url]);
   t.is(result.length, 2);
   t.is(result[0]?.category, 'Email');

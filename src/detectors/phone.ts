@@ -40,9 +40,7 @@ export class PhoneDetector implements Detector {
     const findings: Finding[] = [];
     for (const candidate of raw) {
       const overlaps = findings.some(
-        (existing) =>
-          candidate.span[0] < existing.span[1] &&
-          candidate.span[1] > existing.span[0],
+        (existing) => candidate.span[0] < existing.span[1] && candidate.span[1] > existing.span[0],
       );
       if (!overlaps) {
         findings.push(candidate);
@@ -50,8 +48,7 @@ export class PhoneDetector implements Detector {
         // Replace with the longer match if candidate is longer
         const existingIdx = findings.findIndex(
           (existing) =>
-            candidate.span[0] < existing.span[1] &&
-            candidate.span[1] > existing.span[0],
+            candidate.span[0] < existing.span[1] && candidate.span[1] > existing.span[0],
         );
         if (
           existingIdx >= 0 &&

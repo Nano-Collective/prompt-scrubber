@@ -16,7 +16,7 @@ export class SessionManager {
       this.sessionId = crypto.randomUUID();
       this.map = {};
     }
-    
+
     this.categoryCounts = this.rebuildCategoryCounts(this.map);
   }
 
@@ -26,20 +26,20 @@ export class SessionManager {
    */
   private rebuildCategoryCounts(map: SessionMap): Record<string, number> {
     const counts: Record<string, number> = {};
-    
+
     for (const placeholder of Object.keys(map)) {
       // Placeholder format: "Category_Index"
       const match = placeholder.match(/^([A-Za-z]+)_(\d+)$/);
       if (match && match[1] && match[2]) {
         const category = match[1];
         const index = parseInt(match[2], 10);
-        
+
         if (!counts[category] || index >= counts[category]) {
           counts[category] = index + 1;
         }
       }
     }
-    
+
     return counts;
   }
 
@@ -81,10 +81,10 @@ export class SessionManager {
 
     const count = this.categoryCounts[category] || 1;
     this.categoryCounts[category] = count + 1;
-    
+
     const newPlaceholder = `${category}_${count}`;
     this.map[newPlaceholder] = originalValue;
-    
+
     return newPlaceholder;
   }
 

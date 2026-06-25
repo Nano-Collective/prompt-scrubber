@@ -13,9 +13,7 @@ test('detects OpenAI API key (sk- prefix)', (t) => {
 });
 
 test('detects GitHub personal access token (ghp_ prefix)', (t) => {
-  const findings = detector.detect(
-    'Token: ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ1234567890',
-  );
+  const findings = detector.detect('Token: ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ1234567890');
   t.is(findings.length, 1);
   t.true(findings[0]!.value.startsWith('ghp_'));
 });
@@ -27,9 +25,7 @@ test('detects AWS Access Key ID (AKIA prefix)', (t) => {
 });
 
 test('detects Google API key (AIza prefix)', (t) => {
-  const findings = detector.detect(
-    'google_api_key = AIzaSyD-9tSrke72I6kT0lKjT5hTjHfkHj3sxDM',
-  );
+  const findings = detector.detect('google_api_key = AIzaSyD-9tSrke72I6kT0lKjT5hTjHfkHj3sxDM');
   t.true(findings.length >= 1);
   const apiKey = findings.find((f) => f.value.startsWith('AIza'));
   t.truthy(apiKey);

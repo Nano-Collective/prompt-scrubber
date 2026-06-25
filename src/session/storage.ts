@@ -13,7 +13,10 @@ function getConfigDir(): string {
   if (platform === 'darwin') {
     return path.join(homedir, 'Library', 'Application Support', 'prompt-scrub');
   } else if (platform === 'win32') {
-    return path.join(process.env.APPDATA || path.join(homedir, 'AppData', 'Roaming'), 'prompt-scrub');
+    return path.join(
+      process.env.APPDATA || path.join(homedir, 'AppData', 'Roaming'),
+      'prompt-scrub',
+    );
   } else {
     // Linux and others
     return path.join(process.env.XDG_CONFIG_HOME || path.join(homedir, '.config'), 'prompt-scrub');
@@ -72,7 +75,9 @@ export function writeSessionMap(sessionId: string, map: SessionMap): void {
   } catch (error) {
     console.error(`Error writing session map for ID ${sessionId}:`, error);
     if (fs.existsSync(tmpPath)) {
-      try { fs.unlinkSync(tmpPath); } catch {}
+      try {
+        fs.unlinkSync(tmpPath);
+      } catch {}
     }
     throw error;
   }
@@ -104,9 +109,9 @@ export function listSessions(): Array<{ id: string; sizeBytes: number; createdAt
     return [];
   }
 
-  const files = fs.readdirSync(sessionsDir).filter(file => file.endsWith('.json'));
+  const files = fs.readdirSync(sessionsDir).filter((file) => file.endsWith('.json'));
   return files
-    .map(file => {
+    .map((file) => {
       const filePath = path.join(sessionsDir, file);
       const stats = fs.statSync(filePath);
       return {

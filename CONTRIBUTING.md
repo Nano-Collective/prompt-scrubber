@@ -1,0 +1,56 @@
+# Contributing to prompt-scrub
+
+Welcome! We are glad you're here. `prompt-scrub` is an open-source project by the Nano Collective. We welcome contributors of all skill levels. Whether you are fixing a bug, adding a new detector, or improving documentation, your help is appreciated.
+
+## Code of Conduct
+
+All contributors and participants are expected to adhere to the [Nano Collective Code of Conduct](https://nanocollective.org/collective/organisation/community). Please review it before participating.
+
+We also operate under the [Nano Collective Economics Charter](https://nanocollective.org/collective/organisation/economics-charter).
+
+## Development Setup
+
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/akramcodez/prompt-scrubber.git
+   cd prompt-scrubber
+   ```
+
+2. **Install dependencies:**
+   We use npm for dependency management.
+   ```bash
+   npm install
+   ```
+
+3. **Build the project:**
+   ```bash
+   npm run build
+   ```
+
+## Testing and Linting
+
+We maintain a high bar for quality and test coverage. Before submitting a PR, ensure your changes pass the full test and linting gate.
+
+You can run the entire check in one command:
+```bash
+npm run check
+```
+
+This single command will:
+- Format the code with Prettier
+- Lint the code with ESLint
+- Compile the TypeScript
+- Run the Ava test suite with coverage
+- Check for dead code and unused dependencies with Knip
+
+### Coding Standards
+
+- **Strictness:** We use strict TypeScript. Avoid `any` where possible.
+- **Error Handling:** Use clear, descriptive error messages. Throw native `Error` objects or specific subclasses.
+- **Formatting:** Handled automatically by Prettier. Do not disable lint rules without a comment explaining why.
+
+## Release Process
+
+**Note for contributors:** Please do not bump the version number in `package.json` in your pull requests. Version bumping and releases are handled exclusively by the project maintainers using automated workflows when merging to `main`.
+
+Thank you for contributing!

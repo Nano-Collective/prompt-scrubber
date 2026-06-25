@@ -1,9 +1,4 @@
-import type {
-  ScrubRequest,
-  ScrubResult,
-  Message,
-  Detector,
-} from '../types/index.js';
+import type { ScrubRequest, ScrubResult, Message, Detector } from '../types/index.js';
 import { SessionManager } from '../session/session-manager.js';
 import { resolveCollisions } from './collision-resolver.js';
 import { EmailDetector } from '../detectors/email.js';
@@ -39,10 +34,7 @@ function scrubString(text: string, detectors: Detector[], session: SessionManage
   let result = text;
   for (const finding of [...findings].reverse()) {
     const placeholder = session.createPlaceholder(finding.placeholderPrefix, finding.value);
-    result =
-      result.slice(0, finding.span[0]) +
-      placeholder +
-      result.slice(finding.span[1]);
+    result = result.slice(0, finding.span[0]) + placeholder + result.slice(finding.span[1]);
   }
 
   return result;
@@ -59,10 +51,10 @@ export function scrub(request: ScrubRequest): ScrubResult {
 
   // Build active detector list
   const disabledSet = new Set(
-    (options?.disabledDetectors ?? []).map((d) => d.toLowerCase().replace('detector', ''))
+    (options?.disabledDetectors ?? []).map((d) => d.toLowerCase().replace('detector', '')),
   );
   const activeDetectors = DEFAULT_DETECTORS.filter(
-    (d) => !disabledSet.has(d.name.toLowerCase().replace('detector', ''))
+    (d) => !disabledSet.has(d.name.toLowerCase().replace('detector', '')),
   );
   if (options?.customDetectors) {
     activeDetectors.push(...options.customDetectors);

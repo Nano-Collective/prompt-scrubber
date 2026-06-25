@@ -23,7 +23,8 @@ test.after.always(() => {
 });
 
 test('MVP round-trip: scrub then rehydrate restores the original string exactly', (t) => {
-  const original = 'My email is akram@example.com and my key is sk-aBcDeFgHiJkLmNoPqRsTuVwXyZ1234567890abc';
+  const original =
+    'My email is akram@example.com and my key is sk-aBcDeFgHiJkLmNoPqRsTuVwXyZ1234567890abc';
 
   // Step 1: Scrub
   const scrubResult = scrub({ content: original });

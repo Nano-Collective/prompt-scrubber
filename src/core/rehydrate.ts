@@ -41,9 +41,7 @@ export function rehydrate(request: RehydrateRequest): RehydrateResult {
       // Replace all occurrences of this exact placeholder
       result = result.split(token).join(sessionMap[token]!);
     } else {
-      warnings.push(
-        `Warning: placeholder ${token} not found in session — left as-is.`,
-      );
+      warnings.push(`Warning: placeholder ${token} not found in session — left as-is.`);
     }
   }
 

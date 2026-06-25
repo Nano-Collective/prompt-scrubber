@@ -3,9 +3,7 @@ import { readFileSync } from 'fs';
 import { scrub } from '../../core/scrub.js';
 
 export function handleScrub(text: string, options: { sessionId?: string; disable?: string }) {
-  const disabledDetectors = options.disable
-    ? options.disable.split(',').map((s) => s.trim())
-    : [];
+  const disabledDetectors = options.disable ? options.disable.split(',').map((s) => s.trim()) : [];
 
   const result = scrub({
     content: text,

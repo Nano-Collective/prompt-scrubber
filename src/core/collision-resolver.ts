@@ -32,9 +32,7 @@ export function resolveCollisions(findings: Finding[]): Finding[] {
 
   for (const candidate of sorted) {
     const overlapIdx = accepted.findIndex(
-      (existing) =>
-        candidate.span[0] < existing.span[1] &&
-        candidate.span[1] > existing.span[0],
+      (existing) => candidate.span[0] < existing.span[1] && candidate.span[1] > existing.span[0],
     );
 
     if (overlapIdx === -1) {
@@ -47,8 +45,7 @@ export function resolveCollisions(findings: Finding[]): Finding[] {
 
       if (
         candidatePriority < existingPriority ||
-        (candidatePriority === existingPriority &&
-          candidate.value.length > existing.value.length)
+        (candidatePriority === existingPriority && candidate.value.length > existing.value.length)
       ) {
         // Candidate wins — replace
         accepted[overlapIdx] = candidate;

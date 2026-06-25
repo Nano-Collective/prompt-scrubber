@@ -47,10 +47,7 @@ test('CLI: rehydrate reads from stdin and restores', (t) => {
   const sessionId = sessionIdMatch![1]!;
 
   // Step 2: rehydrate
-  const rehydrateRes = runCli(
-    ['rehydrate', '--session-id', sessionId],
-    'Secret: Secret_1',
-  );
+  const rehydrateRes = runCli(['rehydrate', '--session-id', sessionId], 'Secret: Secret_1');
   t.is(rehydrateRes.status, 0);
   t.is(rehydrateRes.stdout, 'Secret: sk-abcdefghijklmnopqrstuvwxyz');
 });
