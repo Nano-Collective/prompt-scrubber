@@ -7,6 +7,7 @@ import {
   writeSessionMap,
   deleteSessionMap,
   listSessions,
+  getSessionStoragePath,
 } from '../src/session/storage.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -102,4 +103,27 @@ test('listSessions ignores non-.json files', (t) => {
   t.true(fileIds.includes(id));
   t.false(fileIds.includes('junk'));
   t.false(fileIds.includes(`${id}.json`)); // shouldn't match the `.tmp` extension incorrectly
+});
+
+test('listSessions returns sessions sorted by most recently modified', async (t) => {
+  const id1 = 'sort-test-1';
+  const id2 = 'sort-test-2';
+  
+  writeSessionMap(id1, { Email_1: 'a@b.com' });
+  // Need a small delay so mtime is strictly greater
+  await new Promise(r => setTimeout(r, 10));
+  writeSessionMap(id2, { Email_1: 'c@d.com' });
+  
+  const sessions = listSessions();
+  // Filter out other tests' sessions
+  const sorted = sessions.filter(s => s.id.startsWith('sort-test-'));
+  
+  t.is(sorted.length, 2);
+  t.is(sorted[0]!.id, id2); // most recently written comes first
+  t.is(sorted[1]!.id, id1);
+});
+
+test('getSessionStoragePath returns correctly formatted path', (t) => {
+  const p = getSessionStoragePath('123');
+  t.true(p.endsWith(path.join('prompt-scrub', 'sessions', '123.json')));
 });

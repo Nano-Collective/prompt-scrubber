@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const cliEntry = path.resolve(__dirname, '../../src/cli/index.ts');
+const tmpConfigDir = path.join(__dirname, '.tmp-config-e2e');
 
 function runCli(args: string[], input?: string) {
   return spawnSync('npx', ['tsx', cliEntry, ...args], {
@@ -14,20 +15,18 @@ function runCli(args: string[], input?: string) {
     encoding: 'utf-8',
     env: {
       ...process.env,
-      XDG_CONFIG_HOME: path.join(__dirname, '.tmp-config-e2e'),
+      XDG_CONFIG_HOME: tmpConfigDir,
     },
   });
 }
 
 test.before(() => {
-  const tmpConfigDir = path.join(__dirname, '.tmp-config-e2e');
   if (fs.existsSync(tmpConfigDir)) {
     fs.rmSync(tmpConfigDir, { recursive: true, force: true });
   }
 });
 
 test.after.always(() => {
-  const tmpConfigDir = path.join(__dirname, '.tmp-config-e2e');
   if (fs.existsSync(tmpConfigDir)) {
     fs.rmSync(tmpConfigDir, { recursive: true, force: true });
   }
@@ -62,6 +61,31 @@ test('CLI: inspect does a dry run', (t) => {
   t.true(result.stdout.includes('alice@example.com'));
   t.true(result.stdout.includes('Email_1'));
   t.true(result.stdout.includes('No session written'));
+});
+
+test('CLI: rehydrate emits warning to stderr for hallucinated placeholder', (t) => {
+  const scrubRes = runCli(['scrub'], 'My secret is sk-1234567890abcdefghijklmno');
+  const sessionIdMatch = scrubRes.stderr.match(/Session ID: (\S+)/);
+  const sessionId = sessionIdMatch![1]!;
+
+  const rehydrateRes = runCli(
+    ['rehydrate', '--session-id', sessionId],
+    'My secret is Secret_1 and Secret_99',
+  );
+  t.is(rehydrateRes.status, 0);
+  t.is(rehydrateRes.stdout, 'My secret is sk-1234567890abcdefghijklmno and Secret_99');
+  t.true(rehydrateRes.stderr.includes('Secret_99'));
+});
+
+test.serial('CLI: sessions list shows empty state', (t) => {
+  // Clear the dir first for this test to ensure empty state
+  const sessionsDir = path.join(tmpConfigDir, 'prompt-scrub', 'sessions');
+  if (fs.existsSync(sessionsDir)) {
+    fs.rmSync(sessionsDir, { recursive: true, force: true });
+  }
+  const result = runCli(['sessions', 'list']);
+  t.is(result.status, 0);
+  t.true(result.stdout.includes('No saved sessions.'));
 });
 
 test('CLI: sessions commands manage state', (t) => {

@@ -11,7 +11,7 @@ Scrubs identifying content from a prompt or message.
 ```typescript
 import { scrub } from '@nanocollective/prompt-scrub';
 
-const result = await scrub({
+const result = scrub({
   content: prompt, // A string or an array of {role, content} objects
   sessionId: "abc123" // Optional. If omitted, a new session is generated.
 });
@@ -27,7 +27,7 @@ Restores the original identifying content into a model response.
 ```typescript
 import { rehydrate } from '@nanocollective/prompt-scrub';
 
-const restored = await rehydrate({
+const restored = rehydrate({
   content: response, // The response from the LLM containing placeholders
   sessionId: "abc123" // The session ID used during the scrub phase
 });
@@ -59,7 +59,7 @@ export interface ScrubOptions {
 }
 
 export interface ScrubResult {
-  scrubbedContent: string;
+  scrubbedContent: string | Message[];
   sessionId: string;
 }
 

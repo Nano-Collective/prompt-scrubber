@@ -65,6 +65,30 @@ test('disabledDetectors suppresses named detector', (t) => {
   t.is(result.scrubbedContent, 'Email me at test@example.com');
 });
 
+test('customDetectors option adds a detector on top of defaults', (t) => {
+  const customDetector = {
+    name: 'CustomDetector',
+    detect: (text: string) => {
+      const match = text.match(/CustomToken/);
+      if (match) {
+        return [{
+          category: 'Custom',
+          span: [match.index!, match.index! + match[0].length] as [number, number],
+          value: match[0],
+          placeholderPrefix: 'Custom',
+        }];
+      }
+      return [];
+    }
+  };
+
+  const result = scrub({
+    content: 'Check test@example.com and CustomToken.',
+    options: { customDetectors: [customDetector] },
+  });
+  t.is(result.scrubbedContent, 'Check Email_1 and Custom_1.');
+});
+
 test('no disk write when nothing is scrubbed', (t) => {
   const sessionsBefore = fs.existsSync(path.join(tmpConfigDir, 'prompt-scrub', 'sessions'))
     ? fs.readdirSync(path.join(tmpConfigDir, 'prompt-scrub', 'sessions')).length

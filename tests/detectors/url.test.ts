@@ -42,6 +42,18 @@ test('does not double-match a full URL as both full and bare', (t) => {
   t.is(findings.length, 1);
 });
 
+test('handles bare API endpoint at start of string', (t) => {
+  const findings = detector.detect('api.example.com/v1/test is the endpoint');
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, 'api.example.com/v1/test');
+});
+
+test('handles URL ending with trailing punctuation', (t) => {
+  const findings = detector.detect('Visit https://example.com/path.');
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, 'https://example.com/path.');
+});
+
 test('returns correct span for a URL', (t) => {
   const text = 'Go to https://example.com now';
   const findings = detector.detect(text);

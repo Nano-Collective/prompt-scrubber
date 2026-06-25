@@ -4,14 +4,15 @@ The `prompt-scrub` package provides a command-line interface for manual inspecti
 
 ## Core Commands
 
-### `prompt-scrub scrub`
-Reads a message from `stdin` and prints the scrubbed message to `stdout`. The session ID is printed to `stderr`.
+### `prompt-scrub scrub [file]`
+Reads a message from `stdin` or a file and prints the scrubbed message to `stdout`. The session ID is printed to `stderr`.
 
 **Options:**
 - `--session-id <id>`: Reuse an existing session map. If omitted, a new UUID is generated.
+- `--disable <detectors>`: Comma-separated list of detectors to disable (e.g. `EmailDetector,PhoneDetector`).
 
 ### `prompt-scrub rehydrate`
-Reads a scrubbed response from `stdin` and prints the rehydrated response to `stdout`.
+Reads a scrubbed response from `stdin` or a file and prints the rehydrated response to `stdout`.
 
 **Warnings (stderr):**
 If the model hallucinates a placeholder that does not exist in the session map (e.g., the model outputs `Secret_2` but only `Secret_1` was scrubbed), the tool passes the string through unchanged to `stdout`, but emits a warning directly to `stderr`.
@@ -19,10 +20,11 @@ If the model hallucinates a placeholder that does not exist in the session map (
 **Options:**
 - `--session-id <id>` (Required): The session ID used during the `scrub` phase to restore original values.
 
-### `prompt-scrub inspect`
-Reads a message from `stdin` and prints a human-readable diff of the transformations the scrubber will apply.
+### `prompt-scrub inspect [file]`
+Reads a message from `stdin` or a file and prints a human-readable diff of the transformations the scrubber will apply.
 
-**Crucially**, it also prints the **hash** of the scrubbed output. This allows callers to verify that the prefix is byte-stable across calls, proving the cache-aware determinism contract is intact.
+**Options:**
+- `--disable <detectors>`: Comma-separated list of detectors to disable.
 
 ## Session Management
 
@@ -34,11 +36,6 @@ Prints the raw JSON contents of a session map for inspection or manual editing.
 
 ### `prompt-scrub sessions rm <id>`
 Deletes a session map from the disk permanently.
-
-## Extensibility
-
-### `prompt-scrub rules list`
-Lists the active detector set, including both built-in rules and any registered custom rule packs.
 
 ## Utility
 

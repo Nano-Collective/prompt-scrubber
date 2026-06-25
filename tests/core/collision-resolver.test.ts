@@ -87,3 +87,18 @@ test('three findings: two overlap, one standalone', (t) => {
   t.is(result[0]?.category, 'Email');
   t.is(result[1]?.category, 'Url');
 });
+
+test('handles exactly abutting spans (no overlap)', (t) => {
+  const email = makeFinding('Email', 0, 10);
+  const phone = makeFinding('Phone', 10, 20);
+  const result = resolveCollisions([email, phone]);
+  t.is(result.length, 2);
+});
+
+test('handles unknown custom detector priority', (t) => {
+  const unknown1 = makeFinding('UnknownDetectorA', 0, 10, 'short');
+  const unknown2 = makeFinding('UnknownDetectorB', 5, 20, 'much_longer');
+  const result = resolveCollisions([unknown1, unknown2]);
+  t.is(result.length, 1);
+  t.is(result[0]?.category, 'UnknownDetectorB');
+});

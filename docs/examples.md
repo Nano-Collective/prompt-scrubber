@@ -73,3 +73,23 @@ The error means the workflow is trying to read ANTHROPIC_API_KEY from the enviro
 
 **What Slipped Through (The Gap):**
 The developer's writing style ("Hey, I'm Will. My team is hitting..."), the fact that they have a team, and the cadence of their question. Style fingerprinting is not solved in v1.
+
+## Example 4: Node.js Library Integration
+
+**Code**
+```typescript
+import { scrub, rehydrate } from '@nanocollective/prompt-scrub';
+
+const prompt = "My secret is sk-123456789";
+
+// 1. Scrub the prompt
+const { scrubbedContent, sessionId } = scrub({ content: prompt });
+console.log(scrubbedContent); // "My secret is Secret_1"
+
+// 2. Send to LLM...
+const response = "You shouldn't share Secret_1.";
+
+// 3. Rehydrate the response
+const { content } = rehydrate({ content: response, sessionId });
+console.log(content); // "You shouldn't share sk-123456789."
+```

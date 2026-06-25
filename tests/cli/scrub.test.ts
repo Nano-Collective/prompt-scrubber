@@ -11,3 +11,8 @@ test('handleScrub respects disabled detectors', (t) => {
   const result = handleScrub('My email is test@example.com', { disable: 'EmailDetector' });
   t.is(result.scrubbedContent, 'My email is test@example.com');
 });
+
+test('handleScrub uses provided sessionId', (t) => {
+  const result = handleScrub('My email is test@example.com', { sessionId: 'my-custom-id' });
+  t.is(result.sessionId, 'my-custom-id');
+});

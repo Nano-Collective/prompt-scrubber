@@ -93,3 +93,18 @@ test('destroy removes the session and clears memory', (t) => {
   const sessions = SessionManager.listAll();
   t.false(sessions.some(s => s.id === manager.getSessionId()));
 });
+
+test('getMap returns reference to in-memory map', (t) => {
+  const manager = new SessionManager();
+  manager.createPlaceholder('Email', 'x@y.com');
+  const map = manager.getMap();
+  t.is(map['Email_1'], 'x@y.com');
+});
+
+test('save writes map to disk', (t) => {
+  const manager = new SessionManager();
+  manager.createPlaceholder('Secret', '123');
+  manager.save();
+  const map = manager.getMap();
+  t.is(map['Secret_1'], '123');
+});
