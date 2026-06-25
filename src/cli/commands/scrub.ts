@@ -56,6 +56,8 @@ export function setupScrubCommand(program: Command) {
       process.stdout.write(result.scrubbedContent as string);
 
       // Print session ID to stderr
-      process.stderr.write(`\nSession ID: ${result.sessionId}\n`);
+      if (result.scrubbedContent !== input) {
+        console.error(`Session ID: ${result.sessionId}`);
+      }
     });
 }

@@ -58,9 +58,11 @@ export function scrub(request: ScrubRequest): ScrubResult {
   const session = new SessionManager(sessionId);
 
   // Build active detector list
-  const disabledSet = new Set(options?.disabledDetectors ?? []);
+  const disabledSet = new Set(
+    (options?.disabledDetectors ?? []).map((d) => d.toLowerCase().replace('detector', ''))
+  );
   const activeDetectors = DEFAULT_DETECTORS.filter(
-    (d) => !disabledSet.has(d.name),
+    (d) => !disabledSet.has(d.name.toLowerCase().replace('detector', ''))
   );
   if (options?.customDetectors) {
     activeDetectors.push(...options.customDetectors);

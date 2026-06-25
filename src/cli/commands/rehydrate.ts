@@ -48,9 +48,8 @@ export function setupRehydrateCommand(program: Command) {
 
       // Print any warnings to stderr
       if (result.warnings && result.warnings.length > 0) {
-        process.stderr.write('\n');
         for (const warning of result.warnings) {
-          process.stderr.write(`${warning}\n`);
+          console.error(warning);
         }
       }
     });
