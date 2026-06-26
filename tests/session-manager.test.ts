@@ -1,7 +1,7 @@
 import test from 'ava';
-import * as path from 'path';
-import * as fs from 'fs';
-import { fileURLToPath } from 'url';
+import * as path from 'node:path';
+import * as fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { SessionManager } from '../src/session/session-manager.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -47,8 +47,8 @@ test('rebuildCategoryCounts handles gaps and correctly infers next index', (t) =
 
   // Manually insert placeholders with gaps
   const map = manager.getMap();
-  map['Email_1'] = 'a@test.com';
-  map['Email_3'] = 'b@test.com';
+  map.Email_1 = 'a@test.com';
+  map.Email_3 = 'b@test.com';
 
   // Force a rebuild by re-instantiating with the saved state
   manager.save();
@@ -63,9 +63,9 @@ test('regression: overlapping prefixes do not cause collision', (t) => {
   const map = manager.getMap();
 
   // Populate with overlapping, similarly named prefixes
-  map['Email_2'] = 'email2@test.com';
-  map['EMail_2'] = 'email_weird@test.com';
-  map['URL_1'] = 'https://test.com';
+  map.Email_2 = 'email2@test.com';
+  map.EMail_2 = 'email_weird@test.com';
+  map.URL_1 = 'https://test.com';
 
   manager.save();
 
@@ -85,7 +85,7 @@ test('destroy removes the session and clears memory', (t) => {
   manager.createPlaceholder('Secret', 'sk-xyz');
   manager.save();
 
-  t.truthy(manager.getMap()['Secret_1']);
+  t.truthy(manager.getMap().Secret_1);
   manager.destroy();
 
   t.deepEqual(manager.getMap(), {});
@@ -98,7 +98,7 @@ test('getMap returns reference to in-memory map', (t) => {
   const manager = new SessionManager();
   manager.createPlaceholder('Email', 'x@y.com');
   const map = manager.getMap();
-  t.is(map['Email_1'], 'x@y.com');
+  t.is(map.Email_1, 'x@y.com');
 });
 
 test('save writes map to disk', (t) => {
@@ -106,5 +106,5 @@ test('save writes map to disk', (t) => {
   manager.createPlaceholder('Secret', '123');
   manager.save();
   const map = manager.getMap();
-  t.is(map['Secret_1'], '123');
+  t.is(map.Secret_1, '123');
 });

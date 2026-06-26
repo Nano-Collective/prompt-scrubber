@@ -38,9 +38,9 @@ pnpm run test:all
 ```
 
 This single command will run through the following gates:
-- `pnpm run test:format` - Format checking with Prettier
+- `pnpm run test:format` - Format checking with Biome
 - `pnpm run test:types` - Type checking with tsc
-- `pnpm run test:lint` - Lint checking with ESLint
+- `pnpm run test:lint` - Lint checking with Biome
 - `pnpm run test:ava` - Ava test suite
 - `pnpm run test:knip` - Dead code analysis
 - `pnpm run test:audit` - Security audit of dependencies
@@ -52,7 +52,7 @@ You can also run any of these individual gates in isolation by calling the scrip
 
 - **Strictness:** We use strict TypeScript. Avoid `any` where possible.
 - **Error Handling:** Use clear, descriptive error messages. Throw native `Error` objects or specific subclasses.
-- **Formatting:** Handled automatically by Prettier. Do not disable lint rules without a comment explaining why.
+- **Formatting:** Handled automatically by Biome. Do not disable lint rules without a comment explaining why.
 
 ## Release Process
 

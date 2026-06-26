@@ -5,7 +5,7 @@ import type { Detector, Finding } from '../types/index.js';
 const PREFIX_PATTERNS: { regex: RegExp; name: string }[] = [
   // OpenAI: sk-...48 alphanumeric chars (new format: sk-proj-..., sk-svcacct-...)
   {
-    regex: /sk-(?:proj-|svcacct-|ant-api\d+-)?[A-Za-z0-9_\-]{20,80}/g,
+    regex: /sk-(?:proj-|svcacct-|ant-api\d+-)?[A-Za-z0-9_-]{20,80}/g,
     name: 'OpenAI/Anthropic key',
   },
   // GitHub personal access tokens
@@ -28,8 +28,8 @@ const PREFIX_PATTERNS: { regex: RegExp; name: string }[] = [
 // --- Layer 2: Key-value heuristic ---
 // Matches KEY=value or KEY: value where the key name suggests it's a secret.
 const SECRET_KEY_NAMES =
-  /(?:key|secret|token|password|pass|pwd|api|auth|cred|credential|private|access)[_\-]?(?:id|key|secret|token)?/i;
-const KV_PATTERN = /(?:^|[\s,;{])([a-zA-Z0-9_.\-]+)\s*[:=]\s*["']?([A-Za-z0-9+/\-_.~@]{8,})["']?/gm;
+  /(?:key|secret|token|password|pass|pwd|api|auth|cred|credential|private|access)[_-]?(?:id|key|secret|token)?/i;
+const KV_PATTERN = /(?:^|[\s,;{])([a-zA-Z0-9_.-]+)\s*[:=]\s*["']?([A-Za-z0-9+/\-_.~@]{8,})["']?/gm;
 
 // --- Layer 3: High-entropy strings ---
 // Only fires when the value is surrounded by quotes or follows an = sign.

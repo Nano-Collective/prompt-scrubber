@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 import { Command } from 'commander';
-import { readFileSync } from 'fs';
-import { dirname, join } from 'path';
-import { fileURLToPath } from 'url';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { setupScrubCommand } from './commands/scrub.js';
 import { setupRehydrateCommand } from './commands/rehydrate.js';
 import { setupInspectCommand } from './commands/inspect.js';
@@ -14,7 +14,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 // Depending on whether we run from src or dist, package.json might be up 2 or 3 levels.
 // Easiest is just checking both or requiring it dynamically. Wait, standard ESM trick:
-let pkg;
+let pkg: { version?: string };
 try {
   pkg = JSON.parse(readFileSync(join(__dirname, '..', '..', 'package.json'), 'utf8'));
 } catch {

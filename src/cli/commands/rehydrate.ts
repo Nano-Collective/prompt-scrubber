@@ -1,5 +1,5 @@
-import { Command } from 'commander';
-import { readFileSync } from 'fs';
+import type { Command } from 'commander';
+import { readFileSync } from 'node:fs';
 import { rehydrate } from '../../core/rehydrate.js';
 
 export function handleRehydrate(text: string, options: { sessionId: string }) {

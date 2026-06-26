@@ -2,11 +2,11 @@ import type { Detector, Finding } from '../types/index.js';
 
 // Linux/macOS absolute path: must start with / and have at least 2 segments.
 // Negative lookbehind for '://' prevents matching URL paths like https://example.com/path
-const UNIX_PATH_REGEX = /(?<!:\/)(?<![\w~])(\/((?:[a-zA-Z0-9_.@\-]+\/)+[a-zA-Z0-9_.@\-]*))(?!\w)/g;
+const UNIX_PATH_REGEX = /(?<!:\/)(?<![\w~])(\/((?:[a-zA-Z0-9_.@-]+\/)+[a-zA-Z0-9_.@-]*))(?!\w)/g;
 
 // Home directory shorthand: ~/something or ~/.config
 // Negative lookbehind ensures we don't catch it as part of a longer word
-const HOME_PATH_REGEX = /(?<![\w/])(~\/[a-zA-Z0-9_.@\-][a-zA-Z0-9_.@\-/]*)(?![\w])/g;
+const HOME_PATH_REGEX = /(?<![\w/])(~\/[a-zA-Z0-9_.@-][a-zA-Z0-9_.@\-/]*)(?![\w])/g;
 
 // Windows absolute path: C:\Users\... or D:\Projects\...
 const WIN_PATH_REGEX = /([A-Za-z]:\\(?:[^\\/:*?"<>|\r\n]+\\)*[^\\/:*?"<>|\r\n]*)/g;

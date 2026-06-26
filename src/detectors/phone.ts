@@ -8,7 +8,7 @@ const PHONE_PATTERNS: RegExp[] = [
   // US: (555) 123-4567, (555)123-4567
   /(?<!\d)(\(\d{3}\)[\s\-.]?\d{3}[\s\-.]?\d{4})(?!\d)/g,
   // US/local with dashes or dots: 555-123-4567, 555.123.4567
-  /(?<!\d)(\d{3}[\-.]\d{3}[\-.]\d{4})(?!\d)/g,
+  /(?<!\d)(\d{3}[-.]\d{3}[-.]\d{4})(?!\d)/g,
 ];
 
 export class PhoneDetector implements Detector {

@@ -1,1 +1,5 @@
-{ "$schema": "https://unpkg.com/knip@5/schema.json", "ignoreDependencies": ["eslint-plugin-prettier"], "ignoreBinaries": ["semgrep"] }
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "ignoreDependencies": [],
+  "ignoreBinaries": ["semgrep"]
+}

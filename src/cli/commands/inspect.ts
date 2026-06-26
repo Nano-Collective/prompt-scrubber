@@ -1,5 +1,5 @@
-import { Command } from 'commander';
-import { readFileSync } from 'fs';
+import type { Command } from 'commander';
+import { readFileSync } from 'node:fs';
 import { resolveCollisions } from '../../core/collision-resolver.js';
 import { EmailDetector } from '../../detectors/email.js';
 import { PhoneDetector } from '../../detectors/phone.js';
@@ -45,7 +45,7 @@ export function formatInspectOutput(findings: Finding[]): string {
     // Format: [Category] value -> Placeholder (chars start-end)
     const catStr = `[${finding.category}]`.padEnd(10);
     // Truncate very long values for display
-    const valDisp = finding.value.length > 30 ? finding.value.slice(0, 27) + '...' : finding.value;
+    const valDisp = finding.value.length > 30 ? `${finding.value.slice(0, 27)}...` : finding.value;
     const valStr = valDisp.padEnd(32);
 
     output += `  ${catStr} ${valStr} → ${placeholder.padEnd(10)} (chars ${finding.span[0]}-${finding.span[1]})\n`;

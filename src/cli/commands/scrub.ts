@@ -1,5 +1,5 @@
-import { Command } from 'commander';
-import { readFileSync } from 'fs';
+import type { Command } from 'commander';
+import { readFileSync } from 'node:fs';
 import { scrub } from '../../core/scrub.js';
 
 export function handleScrub(text: string, options: { sessionId?: string; disable?: string }) {

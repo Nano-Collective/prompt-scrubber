@@ -6,7 +6,7 @@ const FULL_URL_REGEX = /https?:\/\/(?:[a-zA-Z0-9\-._~:/?#[\]@!$&'()*+,;=%]+)/g;
 // Bare API endpoint pattern: hostname/path (no scheme).
 // Requires: a dot in the hostname (rejects bare words) + at least one path segment.
 const BARE_API_REGEX =
-  /(?<![/\w])([a-zA-Z0-9][a-zA-Z0-9\-]*\.[a-zA-Z]{2,}(?:\.[a-zA-Z]{2,})?\/[a-zA-Z0-9\-._~:/?#[\]@!$&'()*+,;=%]+)/g;
+  /(?<![/\w])([a-zA-Z0-9][a-zA-Z0-9-]*\.[a-zA-Z]{2,}(?:\.[a-zA-Z]{2,})?\/[a-zA-Z0-9\-._~:/?#[\]@!$&'()*+,;=%]+)/g;
 
 export class UrlDetector implements Detector {
   readonly name = 'UrlDetector';
