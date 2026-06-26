@@ -13,14 +13,24 @@
     "test": "tests"
   },
   "scripts": {
-    "build": "tsc",
-    "pretest": "tsc --noEmit",
-    "test": "ava",
+    "build": "rm -rf dist && tsc && chmod +x dist/cli/index.js",
+    "pretest": "pnpm run test:types",
+    "test": "pnpm run test:ava",
     "test:watch": "ava --watch",
-    "test:coverage": "c8 ava",
-    "check": "pnpm run format && pnpm run lint && pnpm run build && pnpm run test:coverage && pnpm exec knip",
-    "lint": "eslint \"src/**/*.ts\" \"tests/**/*.ts\"",
-    "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\""
+    "test:coverage": "pnpm run test:ava:coverage",
+    "check": "pnpm run test:all",
+    "lint": "pnpm run test:lint",
+    "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\"",
+    "test:all": "bash scripts/test.sh",
+    "test:format": "prettier --check \"src/**/*.ts\" \"tests/**/*.ts\"",
+    "test:types": "tsc --noEmit",
+    "test:lint": "eslint \"src/**/*.ts\" \"tests/**/*.ts\"",
+    "test:lint:fix": "eslint --fix \"src/**/*.ts\" \"tests/**/*.ts\"",
+    "test:ava": "ava",
+    "test:ava:coverage": "c8 --reporter=text --reporter=json-summary ava",
+    "test:knip": "knip",
+    "test:audit": "pnpm audit --audit-level=high --ignore-unfixable",
+    "test:security": "semgrep scan --config auto --error"
   },
   "repository": {
     "type": "git",

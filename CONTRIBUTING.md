@@ -34,15 +34,19 @@ We maintain a high bar for quality and test coverage. Before submitting a PR, en
 
 You can run the entire check in one command:
 ```bash
-pnpm run check
+pnpm run test:all
 ```
 
-This single command will:
-- Format the code with Prettier
-- Lint the code with ESLint
-- Compile the TypeScript
-- Run the Ava test suite with coverage
-- Check for dead code and unused dependencies with Knip
+This single command will run through the following gates:
+- `pnpm run test:format` - Format checking with Prettier
+- `pnpm run test:types` - Type checking with tsc
+- `pnpm run test:lint` - Lint checking with ESLint
+- `pnpm run test:ava` - Ava test suite
+- `pnpm run test:knip` - Dead code analysis
+- `pnpm run test:audit` - Security audit of dependencies
+- `pnpm run test:security` - Static analysis with Semgrep (if installed)
+
+You can also run any of these individual gates in isolation by calling the script name.
 
 ### Coding Standards
 

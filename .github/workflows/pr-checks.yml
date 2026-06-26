@@ -14,8 +14,8 @@ jobs:
         with:
           node-version: 20
       - run: pnpm install --frozen-lockfile
-      - run: pnpm run format
-      - run: pnpm run lint
+      - run: pnpm run test:format
+      - run: pnpm run test:lint
 
   test-build:
     runs-on: ubuntu-latest
@@ -38,7 +38,7 @@ jobs:
         with:
           node-version: 20
       - run: pnpm install --frozen-lockfile
-      - run: pnpm exec knip
+      - run: pnpm run test:knip
 
   security-audit:
     runs-on: ubuntu-latest
@@ -48,4 +48,4 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: pnpm audit --audit-level=high
+      - run: pnpm run test:audit
