@@ -1,8 +1,8 @@
 # prompt-scrub
 
-`prompt-scrub` is a local-first utility designed to strip identifying content out of prompts and messages before they hit any cloud LLM.
+Built by the [Nano Collective](https://nanocollective.org) — a community collective building AI tooling not for profit, but for the community.
 
-**A Nano Collective project.** Building open, privacy-respecting, local-first tools for the next generation of software.
+`prompt-scrub` is a local-first utility designed to strip identifying content out of prompts and messages before they hit any cloud LLM.
 
 ![Build Status](https://img.shields.io/github/actions/workflow/status/Nano-Collective/prompt-scrubber/pr-checks.yml?branch=main)
 ![Coverage](https://img.shields.io/badge/coverage-100%25-success)

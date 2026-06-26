@@ -17,14 +17,15 @@ We also operate under the [Nano Collective Economics Charter](https://nanocollec
    ```
 
 2. **Install dependencies:**
-   We use npm for dependency management.
+   We use pnpm for development. If you don't have it, you can bootstrap it via Corepack:
    ```bash
-   npm install
+   corepack enable && corepack prepare pnpm@11.0.9 --activate
+   pnpm install
    ```
 
-3. **Build the project:**
+2. **Build the project:**
    ```bash
-   npm run build
+   pnpm run build
    ```
 
 ## Testing and Linting
@@ -33,7 +34,7 @@ We maintain a high bar for quality and test coverage. Before submitting a PR, en
 
 You can run the entire check in one command:
 ```bash
-npm run check
+pnpm run check
 ```
 
 This single command will:

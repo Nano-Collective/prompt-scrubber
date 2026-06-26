@@ -15,7 +15,7 @@ Please describe how you tested this change.
 
 ## Checklist
 - [ ] I have self-reviewed my code.
-- [ ] I have formatted and linted my code (`npm run check`).
+- [ ] I have formatted and linted my code (`pnpm run check`).
 - [ ] I have added/updated documentation if necessary.
 - [ ] I have added/updated tests if necessary.
 - [ ] I have NOT bumped the version in `package.json` (maintainers will handle this).

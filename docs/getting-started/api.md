@@ -43,7 +43,7 @@ const restored = rehydrate({
 ```
 
 ## Cache-Aware Determinism
-For a given session ID and input text, `scrub()` is **deterministic**. The system generates byte-identical output across repeated calls with the same map. This property is critical because it preserves provider prompt caching (which relies on exact prefix bytes). Callers can verify prefix stability via the hash output in the `inspect` CLI command.
+For a given session ID and input text, `scrub()` is **deterministic**. The system generates byte-identical output across repeated calls with the same map. This property is critical because it preserves provider prompt caching (which relies on exact prefix bytes).
 
 ## Types
 

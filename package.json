@@ -1,6 +1,7 @@
 {
   "name": "prompt-scrub",
   "version": "1.0.0",
+  "packageManager": "pnpm@11.0.9",
   "type": "module",
   "description": "`prompt-scrub` is a small open-source, local-first utility designed to strip identifying content out of prompts and messages before they hit any cloud LLM. It maps your sensitive data (emails, secrets, paths) to stable placeholders, allowing you to rehydrate the model's responses back to their original forms locally.",
   "main": "index.js",
@@ -17,7 +18,7 @@
     "test": "ava",
     "test:watch": "ava --watch",
     "test:coverage": "c8 ava",
-    "check": "npm run format && npm run lint && npm run build && npm run test:coverage && npx knip",
+    "check": "pnpm run format && pnpm run lint && pnpm run build && pnpm run test:coverage && pnpm exec knip",
     "lint": "eslint \"src/**/*.ts\" \"tests/**/*.ts\"",
     "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\""
   },
@@ -61,5 +62,10 @@
   },
   "dependencies": {
     "commander": "^15.0.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   }
 }

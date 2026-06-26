@@ -10,7 +10,7 @@ const cliEntry = path.resolve(__dirname, '../../src/cli/index.ts');
 const tmpConfigDir = path.join(__dirname, '.tmp-config-e2e');
 
 function runCli(args: string[], input?: string) {
-  return spawnSync('npx', ['tsx', cliEntry, ...args], {
+  return spawnSync(process.execPath, ['--import', 'tsx', cliEntry, ...args], {
     input,
     encoding: 'utf-8',
     env: {

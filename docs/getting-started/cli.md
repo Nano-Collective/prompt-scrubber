@@ -17,7 +17,7 @@ Reads a message from `stdin` or a file and prints the scrubbed message to `stdou
 - `--session-id <id>`: Reuse an existing session map. If omitted, a new UUID is generated.
 - `--disable <detectors>`: Comma-separated list of detectors to disable (e.g. `EmailDetector,PhoneDetector`).
 
-### `prompt-scrub rehydrate`
+### `prompt-scrub rehydrate [file]`
 Reads a scrubbed response from `stdin` or a file and prints the rehydrated response to `stdout`.
 
 **Warnings (stderr):**
