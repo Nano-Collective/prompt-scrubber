@@ -23,7 +23,7 @@ We also operate under the [Nano Collective Economics Charter](https://nanocollec
    pnpm install
    ```
 
-2. **Build the project:**
+3. **Build the project:**
    ```bash
    pnpm run build
    ```
