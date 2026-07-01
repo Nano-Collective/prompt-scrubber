@@ -170,3 +170,52 @@ test('postal address round-tripping works correctly', (t) => {
 
   t.is(restored.content, text);
 });
+
+test('NameDetector is off by default', (t) => {
+  const text = 'John Doe lives in London.';
+  const scrubbed = scrub({ content: text });
+
+  // NameDetector should not run, so the text should remain unmodified
+  t.is(scrubbed.scrubbedContent, text);
+});
+
+test('NameDetector works when explicitly enabled', (t) => {
+  const text = 'John Doe lives in London.';
+  const scrubbed = scrub({
+    content: text,
+    options: { enabledDetectors: ['NameDetector'] },
+  });
+  t.is(scrubbed.scrubbedContent, 'Name_2 lives in Name_1.');
+});
+
+test('NameDetector works in strict mode', (t) => {
+  // 'John' and 'London' (not in allowlist) vs allowlisted 'France'
+  const text = 'John visited France and London.';
+  const scrubbed = scrub({
+    content: text,
+    options: {
+      enabledDetectors: ['NameDetector'],
+      strictNameDetector: true,
+    },
+  });
+
+  // France is allowlisted, John is allowlisted (wait, 'John' is in allowlist!).
+  // London is not allowlisted.
+  t.is(scrubbed.scrubbedContent, 'John visited France and Name_1.');
+});
+
+test('NameDetector round-trips correctly', (t) => {
+  const text = 'Alice went to Paris.';
+  const scrubbed = scrub({
+    content: text,
+    options: { enabledDetectors: ['NameDetector'] },
+  });
+  t.is(scrubbed.scrubbedContent, 'Name_2 went to Name_1.');
+
+  const restored = rehydrate({
+    content: scrubbed.scrubbedContent as string,
+    sessionId: scrubbed.sessionId,
+  });
+
+  t.is(restored.content, text);
+});

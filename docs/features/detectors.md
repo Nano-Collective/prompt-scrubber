@@ -35,6 +35,10 @@ export interface Detector {
 - `SecretDetector`: Detects high-entropy strings, API keys, and tokens.
 - `AddressDetector`: Detects unambiguous postal addresses (e.g., street shapes).
 
+### Opt-in Detectors (Off by Default)
+
+- `NameDetector`: Detects proper nouns (capitalized words). Because proper-noun detection has a high risk of false positives, this detector is **disabled by default**. It can be enabled via the API or CLI. It also features a "strict mode" that leverages an allowlist to skip common countries, languages, and products to minimize false positives.
+
 ## Priority & Collision System
 
 When multiple detectors flag overlapping spans, a collision resolution system determines which finding wins.
@@ -46,12 +50,17 @@ Priority is implicitly handled by a defined order of precedence:
 4. `PathDetector`
 5. `PhoneDetector`
 6. `AddressDetector`
+7. `NameDetector`
 
 If `SecretDetector` and `UrlDetector` match the same string (e.g., a URL with a token), `SecretDetector` wins.
 
 ## Registration System
 
-By default, the core scrub function runs the built-in detectors in priority order. You can optionally pass `disabledDetectors` in the `ScrubOptions` to turn off specific built-ins.
+By default, the core scrub function runs the built-in detectors in priority order. You can optionally configure detectors via `ScrubOptions` in the API, or through the CLI:
+
+- **Disable defaults**: Pass `disabledDetectors` (or `--disable` via CLI) to turn off specific built-ins.
+- **Enable opt-ins**: Pass `enabledDetectors` (or `--enable` via CLI) to activate off-by-default detectors like `NameDetector`.
+- **Strict Mode**: Pass `strictNameDetector: true` (or `--strict-name` via CLI) to reduce false positives for the `NameDetector`.
 
 ### Custom Detectors
 

@@ -30,6 +30,8 @@ export interface ScrubRequest {
 export interface ScrubOptions {
   customDetectors?: Detector[];
   disabledDetectors?: string[]; // Array of detector names to skip
+  enabledDetectors?: string[]; // Array of off-by-default detector names to enable
+  strictNameDetector?: boolean; // Enable stricter allowlisting for the NameDetector
 }
 
 export interface ScrubResult {
