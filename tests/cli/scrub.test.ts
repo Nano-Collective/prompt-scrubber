@@ -20,6 +20,22 @@ test('handleScrub uses provided sessionId', (t) => {
   t.is(result.sessionId, 'test-session-2');
 });
 
+test('handleScrub respects enabled detectors', (t) => {
+  const result = handleScrub('say hello to Alice.', {
+    enable: 'NameDetector',
+  });
+  t.is(result.scrubbedContent, 'say hello to Name_1.');
+});
+
+test('handleScrub respects strictName option', (t) => {
+  const result = handleScrub('Hello John.', {
+    enable: 'NameDetector',
+    strictName: true,
+  });
+  // 'John' is in the allowlist, so it should not be scrubbed in strict mode
+  t.is(result.scrubbedContent, 'Hello John.');
+});
+
 import { setupScrubCommand } from '../../src/cli/commands/scrub.js';
 import { Command } from 'commander';
 

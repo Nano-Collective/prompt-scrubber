@@ -7,6 +7,7 @@ import { UrlDetector } from '../detectors/url.js';
 import { PathDetector } from '../detectors/path.js';
 import { SecretDetector } from '../detectors/secret.js';
 import { PostalAddressDetector } from '../detectors/postal-address.js';
+import { NameDetector } from '../detectors/name.js';
 
 const DEFAULT_DETECTORS: Detector[] = [
   new SecretDetector(),
@@ -51,26 +52,39 @@ export function scrub(request: ScrubRequest): ScrubResult {
 
   const session = new SessionManager(sessionId);
 
-  // Build active detector list
-  const disabledSet = new Set(
-    (options?.disabledDetectors ?? []).map((d) => d.toLowerCase().replace('detector', '')),
-  );
-  const activeDetectors = DEFAULT_DETECTORS.filter(
-    (d) => !disabledSet.has(d.name.toLowerCase().replace('detector', '')),
-  );
+  const activeDetectors = [...DEFAULT_DETECTORS];
+
+  if (options?.enabledDetectors) {
+    for (const detectorName of options.enabledDetectors) {
+      if (detectorName === 'NameDetector') {
+        activeDetectors.push(new NameDetector(options?.strictNameDetector));
+      }
+    }
+  }
+
+  let detectors = activeDetectors;
+  if (options?.disabledDetectors) {
+    const disabledSet = new Set(
+      options.disabledDetectors.map((d) => d.toLowerCase().replace('detector', '')),
+    );
+    detectors = detectors.filter(
+      (d) => !disabledSet.has(d.name.toLowerCase().replace('detector', '')),
+    );
+  }
+
   if (options?.customDetectors) {
-    activeDetectors.push(...options.customDetectors);
+    detectors.push(...options.customDetectors);
   }
 
   let scrubbedContent: string | Message[];
 
   if (typeof content === 'string') {
-    scrubbedContent = scrubString(content, activeDetectors, session);
+    scrubbedContent = scrubString(content, detectors, session);
   } else {
     // Message[] — scrub each message's content independently, preserve structure
     scrubbedContent = content.map((msg) => ({
       ...msg,
-      content: scrubString(msg.content, activeDetectors, session),
+      content: scrubString(msg.content, detectors, session),
     }));
   }
 
