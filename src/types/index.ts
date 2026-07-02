@@ -32,6 +32,7 @@ export interface ScrubOptions {
   disabledDetectors?: string[]; // Array of detector names to skip
   enabledDetectors?: string[]; // Array of off-by-default detector names to enable
   strictNameDetector?: boolean; // Enable stricter allowlisting for the NameDetector
+  codeTellTerms?: string[]; // User-enumerated private identifiers (classes, variables)
 }
 
 export interface ScrubResult {

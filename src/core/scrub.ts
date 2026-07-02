@@ -8,6 +8,7 @@ import { PathDetector } from '../detectors/path.js';
 import { SecretDetector } from '../detectors/secret.js';
 import { PostalAddressDetector } from '../detectors/postal-address.js';
 import { NameDetector } from '../detectors/name.js';
+import { CodeTellDetector } from '../detectors/code-tell.js';
 
 const DEFAULT_DETECTORS: Detector[] = [
   new SecretDetector(),
@@ -58,8 +59,18 @@ export function scrub(request: ScrubRequest): ScrubResult {
     for (const detectorName of options.enabledDetectors) {
       if (detectorName === 'NameDetector') {
         activeDetectors.push(new NameDetector(options?.strictNameDetector));
+      } else if (detectorName === 'CodeTellDetector') {
+        activeDetectors.push(new CodeTellDetector(options?.codeTellTerms));
       }
     }
+  }
+
+  if (
+    options?.codeTellTerms &&
+    options.codeTellTerms.length > 0 &&
+    !options?.enabledDetectors?.includes('CodeTellDetector')
+  ) {
+    activeDetectors.push(new CodeTellDetector(options.codeTellTerms));
   }
 
   let detectors = activeDetectors;

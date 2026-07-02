@@ -219,3 +219,24 @@ test('NameDetector round-trips correctly', (t) => {
 
   t.is(restored.content, text);
 });
+
+test('CodeTellDetector is a no-op by default', (t) => {
+  const text = 'const instance = new SecretClass();';
+  const scrubbed = scrub({ content: text });
+  t.is(scrubbed.scrubbedContent, text);
+});
+
+test('CodeTellDetector runs when terms are provided and round-trips correctly', (t) => {
+  const text = 'const instance = new SecretClass();';
+  const scrubbed = scrub({
+    content: text,
+    options: { codeTellTerms: ['SecretClass'] },
+  });
+  t.is(scrubbed.scrubbedContent, 'const instance = new CodeTell_1();');
+
+  const restored = rehydrate({
+    content: scrubbed.scrubbedContent as string,
+    sessionId: scrubbed.sessionId,
+  });
+  t.is(restored.content, text);
+});

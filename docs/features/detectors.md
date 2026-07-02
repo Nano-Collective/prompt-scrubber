@@ -38,6 +38,7 @@ export interface Detector {
 ### Opt-in Detectors (Off by Default)
 
 - `NameDetector`: Detects proper nouns (capitalized words). Because proper-noun detection has a high risk of false positives, this detector is **disabled by default**. It can be enabled via the API or CLI. It also features a "strict mode" that leverages an allowlist to skip common countries, languages, and products to minimize false positives.
+- `CodeTellDetector`: Detects user-enumerated private identifiers and variables. It is **disabled by default** because the false-positive risk of supplying overly generic terms on code payloads is very high. It acts as a no-op unless explicitly configured with a list of terms.
 
 ## Priority & Collision System
 
@@ -51,6 +52,7 @@ Priority is implicitly handled by a defined order of precedence:
 5. `PhoneDetector`
 6. `AddressDetector`
 7. `NameDetector`
+8. `CodeTellDetector`
 
 If `SecretDetector` and `UrlDetector` match the same string (e.g., a URL with a token), `SecretDetector` wins.
 
@@ -61,6 +63,7 @@ By default, the core scrub function runs the built-in detectors in priority orde
 - **Disable defaults**: Pass `disabledDetectors` (or `--disable` via CLI) to turn off specific built-ins.
 - **Enable opt-ins**: Pass `enabledDetectors` (or `--enable` via CLI) to activate off-by-default detectors like `NameDetector`.
 - **Strict Mode**: Pass `strictNameDetector: true` (or `--strict-name` via CLI) to reduce false positives for the `NameDetector`.
+- **Code Tell**: Pass `codeTellTerms` (or `--code-tell-terms` via CLI) as an array of identifiers to enable and configure the `CodeTellDetector`.
 
 ### Custom Detectors
 

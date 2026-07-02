@@ -9,6 +9,7 @@ const DETECTOR_PRIORITY: Record<string, number> = {
   PhoneDetector: 5,
   AddressDetector: 6,
   NameDetector: 7,
+  CodeTellDetector: 8,
 };
 
 function priorityOf(finding: Finding): number {

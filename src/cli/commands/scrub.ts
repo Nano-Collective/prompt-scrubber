@@ -4,10 +4,19 @@ import { scrub } from '../../core/scrub.js';
 
 export function handleScrub(
   text: string,
-  options: { sessionId?: string; disable?: string; enable?: string; strictName?: boolean },
+  options: {
+    sessionId?: string;
+    disable?: string;
+    enable?: string;
+    strictName?: boolean;
+    codeTellTerms?: string;
+  },
 ) {
   const disabledDetectors = options.disable ? options.disable.split(',').map((s) => s.trim()) : [];
   const enabledDetectors = options.enable ? options.enable.split(',').map((s) => s.trim()) : [];
+  const codeTellTerms = options.codeTellTerms
+    ? options.codeTellTerms.split(',').map((s) => s.trim())
+    : undefined;
 
   const result = scrub({
     content: text,
@@ -16,6 +25,7 @@ export function handleScrub(
       disabledDetectors,
       enabledDetectors,
       ...(options.strictName !== undefined ? { strictNameDetector: options.strictName } : {}),
+      ...(codeTellTerms !== undefined ? { codeTellTerms } : {}),
     },
   });
 
@@ -36,6 +46,10 @@ export function setupScrubCommand(program: Command) {
     .option(
       '--strict-name',
       'Enable strict allowlisting for NameDetector to reduce false positives',
+    )
+    .option(
+      '--code-tell-terms <terms>',
+      'Comma-separated list of private identifiers to detect (enables CodeTellDetector)',
     )
     .action((file, options) => {
       let input = '';

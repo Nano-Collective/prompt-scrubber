@@ -36,6 +36,13 @@ test('handleScrub respects strictName option', (t) => {
   t.is(result.scrubbedContent, 'Hello John.');
 });
 
+test('handleScrub respects codeTellTerms', (t) => {
+  const result = handleScrub('const myVar = 1;', {
+    codeTellTerms: 'myVar, otherVar',
+  });
+  t.is(result.scrubbedContent, 'const CodeTell_1 = 1;');
+});
+
 import { setupScrubCommand } from '../../src/cli/commands/scrub.js';
 import { Command } from 'commander';
 
