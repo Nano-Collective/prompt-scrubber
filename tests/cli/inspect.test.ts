@@ -1,5 +1,5 @@
 import test from 'ava';
-import { handleInspect, formatInspectOutput } from '../../src/cli/commands/inspect.js';
+import { handleInspect, formatInspectOutput, computeHash } from '../../src/cli/commands/inspect.js';
 
 test('handleInspect finds entities without side effects', (t) => {
   const findings = handleInspect('My email is test@example.com', {});
@@ -7,16 +7,40 @@ test('handleInspect finds entities without side effects', (t) => {
   t.is(findings[0]?.category, 'Email');
 });
 
-test('formatInspectOutput formats findings', (t) => {
+test('formatInspectOutput formats findings and includes hash', (t) => {
   const findings = handleInspect('My email is test@example.com', {});
-  const output = formatInspectOutput(findings);
+  const hash = computeHash('My email is test@example.com', findings);
+  const output = formatInspectOutput(findings, hash);
   t.true(output.includes('test@example.com'));
   t.true(output.includes('Email_1'));
+  t.true(output.includes(`Hash: ${hash}`));
 });
 
-test('formatInspectOutput handles empty findings', (t) => {
-  const output = formatInspectOutput([]);
+test('formatInspectOutput handles empty findings and includes hash', (t) => {
+  const hash = computeHash('Hello', []);
+  const output = formatInspectOutput([], hash);
   t.true(output.includes('No sensitive entities detected'));
+  t.true(output.includes(`Hash: ${hash}`));
+});
+
+test('computeHash yields identical hash for identical scrubbed output (byte stability)', (t) => {
+  const text = 'My email is test@example.com';
+  const findings = handleInspect(text, {});
+  const hash1 = computeHash(text, findings);
+  const hash2 = computeHash(text, findings);
+  t.is(hash1, hash2);
+});
+
+test('computeHash yields different hashes for different scrubbed outputs', (t) => {
+  const text1 = 'My email is test@example.com';
+  const findings1 = handleInspect(text1, {});
+  const hash1 = computeHash(text1, findings1);
+  
+  const text2 = 'Your email is other@example.com';
+  const findings2 = handleInspect(text2, {});
+  const hash2 = computeHash(text2, findings2);
+  
+  t.not(hash1, hash2);
 });
 
 import { setupInspectCommand } from '../../src/cli/commands/inspect.js';

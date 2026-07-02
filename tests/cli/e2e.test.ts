@@ -54,12 +54,22 @@ test('CLI: rehydrate reads from stdin and restores', (t) => {
   t.is(rehydrateRes.stdout, 'Secret: sk-abcdefghijklmnopqrstuvwxyz');
 });
 
-test('CLI: inspect does a dry run', (t) => {
+test('CLI: inspect does a dry run and prints hash', (t) => {
   const result = runCli(['inspect'], 'Check alice@example.com');
   t.is(result.status, 0);
   t.true(result.stdout.includes('alice@example.com'));
   t.true(result.stdout.includes('Email_1'));
   t.true(result.stdout.includes('No session written'));
+  t.true(result.stdout.includes('Hash: '));
+});
+
+test('CLI: inspect --hash prints only the hash', (t) => {
+  const result = runCli(['inspect', '--hash'], 'Check alice@example.com');
+  t.is(result.status, 0);
+  t.false(result.stdout.includes('alice@example.com'));
+  t.false(result.stdout.includes('Email_1'));
+  t.false(result.stdout.includes('No session written'));
+  t.regex(result.stdout.trim(), /^[a-f0-9]{64}$/i);
 });
 
 test('CLI: rehydrate emits warning to stderr for hallucinated placeholder', (t) => {

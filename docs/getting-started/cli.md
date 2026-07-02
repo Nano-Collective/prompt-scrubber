@@ -27,10 +27,11 @@ If the model hallucinates a placeholder that does not exist in the session map (
 - `--session-id <id>` (Required): The session ID used during the `scrub` phase to restore original values.
 
 ### `prompt-scrub inspect [file]`
-Reads a message from `stdin` or a file and prints a human-readable diff of the transformations the scrubber will apply.
+Reads a message from `stdin` or a file and prints a human-readable diff of the transformations the scrubber will apply. Also prints a SHA-256 hash of the final byte-stable output for verifying prompt cache deterministic prefix stability.
 
 **Options:**
 - `--disable <detectors>`: Comma-separated list of detectors to disable.
+- `--hash`: Print *only* the SHA-256 hash for scripting purposes.
 
 ## Session Management
 
