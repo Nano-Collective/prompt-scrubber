@@ -8,6 +8,7 @@ import { setupScrubCommand } from './commands/scrub.js';
 import { setupRehydrateCommand } from './commands/rehydrate.js';
 import { setupInspectCommand } from './commands/inspect.js';
 import { setupSessionsCommands } from './commands/sessions.js';
+import { setupRulesCommands } from './commands/rules.js';
 
 // Get version from package.json
 const __filename = fileURLToPath(import.meta.url);
@@ -37,6 +38,7 @@ setupScrubCommand(program);
 setupRehydrateCommand(program);
 setupInspectCommand(program);
 setupSessionsCommands(program);
+setupRulesCommands(program);
 
 if (process.argv[1] === __filename) {
   program.parse(process.argv);

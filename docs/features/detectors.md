@@ -69,4 +69,12 @@ By default, the core scrub function runs the built-in detectors in priority orde
 
 Custom detectors can be passed in during the execution of the library by providing them in the `customDetectors` array in the `ScrubOptions` (see `src/types/index.ts`). This effectively overrides or appends to the default list.
 
-*Note: In v1, there is no rule-pack installer or rules CLI surface. All custom detectors must be configured via the library API.*
+## CLI Rules Command
+
+You can inspect the active detector set using the `rules` command:
+
+```bash
+npx prompt-scrub rules list
+```
+
+This will print a list of all available detectors, indicating their source (e.g., `built-in`) and their default state (`on` or `off`). This allows you to verify which detectors will run by default before you pass any additional flags like `--disable` or `--enable`.
