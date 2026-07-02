@@ -42,11 +42,11 @@ export interface ScrubResult {
 }
 
 export interface RehydrateRequest {
-  content: string;
+  content: string | Message[];
   sessionId: string;
 }
 
 export interface RehydrateResult {
-  content: string;
+  content: string | Message[];
   warnings?: string[]; // Populated if the model invents a placeholder not in the session map
 }
