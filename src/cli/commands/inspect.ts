@@ -3,25 +3,44 @@ import { readFileSync } from 'node:fs';
 import * as crypto from 'node:crypto';
 import { SessionManager } from '../../session/session-manager.js';
 import { resolveCollisions } from '../../core/collision-resolver.js';
-import { EmailDetector } from '../../detectors/email.js';
-import { PhoneDetector } from '../../detectors/phone.js';
-import { UrlDetector } from '../../detectors/url.js';
-import { PathDetector } from '../../detectors/path.js';
-import { SecretDetector } from '../../detectors/secret.js';
 import type { Detector, Finding } from '../../types/index.js';
+import { getActiveDetectors } from '../../core/scrub.js';
+import { loadConfiguredRulePacks } from '../../core/rule-packs.js';
+import { loadConfig } from '../../core/config.js';
 
-export function handleInspect(text: string, options: { disable?: string }) {
-  const disabledDetectors = new Set(
-    (options.disable ?? '').split(',').map((s) => s.trim().toLowerCase().replace('detector', '')),
-  );
+export async function handleInspect(
+  text: string,
+  options: {
+    disable?: string;
+    enable?: string;
+    strictName?: boolean;
+    codeTellTerms?: string;
+    urlAllowlist?: string;
+  },
+) {
+  const disabledDetectors = options.disable ? options.disable.split(',').map((s) => s.trim()) : [];
+  const enabledDetectors = options.enable ? options.enable.split(',').map((s) => s.trim()) : [];
+  const codeTellTerms = options.codeTellTerms
+    ? options.codeTellTerms.split(',').map((s) => s.trim())
+    : undefined;
 
-  const detectors: Detector[] = [
-    new SecretDetector(),
-    new EmailDetector(),
-    new UrlDetector(),
-    new PathDetector(),
-    new PhoneDetector(),
-  ].filter((d) => !disabledDetectors.has(d.name.toLowerCase().replace('detector', '')));
+  const cliUrlAllowlist = options.urlAllowlist
+    ? options.urlAllowlist.split(',').map((s) => s.trim())
+    : [];
+
+  const config = loadConfig();
+  const urlAllowlist = Array.from(new Set([...(config.urlAllowlist || []), ...cliUrlAllowlist]));
+
+  const { detectors: rulePackDetectors } = await loadConfiguredRulePacks();
+
+  const detectors = getActiveDetectors({
+    disabledDetectors,
+    enabledDetectors,
+    ...(options.strictName !== undefined ? { strictNameDetector: options.strictName } : {}),
+    ...(codeTellTerms !== undefined ? { codeTellTerms } : {}),
+    ...(urlAllowlist.length > 0 ? { urlAllowlist } : {}),
+    customDetectors: rulePackDetectors,
+  });
 
   const allFindings = detectors.flatMap((d) => d.detect(text));
   const findings = resolveCollisions(allFindings);
@@ -76,8 +95,24 @@ export function setupInspectCommand(program: Command) {
     .description('Show detected entities without scrubbing')
     .argument('[file]', 'File to inspect. If omitted, reads from stdin.')
     .option('--disable <detectors>', 'Comma-separated list of detector names to skip')
+    .option(
+      '--enable <detectors>',
+      'Comma-separated list of off-by-default detectors to enable (e.g., NameDetector)',
+    )
+    .option(
+      '--strict-name',
+      'Enable strict allowlisting for NameDetector to reduce false positives',
+    )
+    .option(
+      '--code-tell-terms <terms>',
+      'Comma-separated list of private identifiers to detect (enables CodeTellDetector)',
+    )
+    .option(
+      '--url-allowlist <hosts>',
+      'Comma-separated list of hostnames to pass-through in URLs (subdomains are implicitly allowed)',
+    )
     .option('--hash', 'Print only the SHA-256 hash of the scrubbed output')
-    .action((file, options) => {
+    .action(async (file, options) => {
       let input = '';
 
       if (file) {
@@ -104,7 +139,7 @@ export function setupInspectCommand(program: Command) {
         return;
       }
 
-      const findings = handleInspect(input, options);
+      const findings = await handleInspect(input, options);
       const hash = computeHash(input, findings);
 
       if (options.hash) {

@@ -44,15 +44,7 @@ function scrubString(text: string, detectors: Detector[], session: SessionManage
   return result;
 }
 
-/**
- * Main scrub entry point. Accepts a string or Message[] and returns scrubbed
- * content in the same shape, along with the session ID used.
- */
-export function scrub(request: ScrubRequest): ScrubResult {
-  const { content, sessionId, options } = request;
-
-  const session = new SessionManager(sessionId);
-
+export function getActiveDetectors(options?: ScrubRequest['options']): Detector[] {
   const activeDetectors = [...DEFAULT_DETECTORS];
 
   if (options?.enabledDetectors) {
@@ -93,6 +85,19 @@ export function scrub(request: ScrubRequest): ScrubResult {
   if (options?.customDetectors) {
     detectors.push(...options.customDetectors);
   }
+  
+  return detectors;
+}
+
+/**
+ * Main scrub entry point. Accepts a string or Message[] and returns scrubbed
+ * content in the same shape, along with the session ID used.
+ */
+export function scrub(request: ScrubRequest): ScrubResult {
+  const { content, sessionId, options } = request;
+
+  const session = new SessionManager(sessionId);
+  const detectors = getActiveDetectors(options);
 
   let scrubbedContent: string | Message[];
 

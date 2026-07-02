@@ -1,14 +1,14 @@
 import test from 'ava';
 import { handleInspect, formatInspectOutput, computeHash } from '../../src/cli/commands/inspect.js';
 
-test('handleInspect finds entities without side effects', (t) => {
-  const findings = handleInspect('My email is test@example.com', {});
+test('handleInspect finds entities without side effects', async (t) => {
+  const findings = await handleInspect('My email is test@example.com', {});
   t.is(findings.length, 1);
   t.is(findings[0]?.category, 'Email');
 });
 
-test('formatInspectOutput formats findings and includes hash', (t) => {
-  const findings = handleInspect('My email is test@example.com', {});
+test('formatInspectOutput formats findings and includes hash', async (t) => {
+  const findings = await handleInspect('My email is test@example.com', {});
   const hash = computeHash('My email is test@example.com', findings);
   const output = formatInspectOutput(findings, hash);
   t.true(output.includes('test@example.com'));
@@ -23,21 +23,21 @@ test('formatInspectOutput handles empty findings and includes hash', (t) => {
   t.true(output.includes(`Hash: ${hash}`));
 });
 
-test('computeHash yields identical hash for identical scrubbed output (byte stability)', (t) => {
+test('computeHash yields identical hash for identical scrubbed output (byte stability)', async (t) => {
   const text = 'My email is test@example.com';
-  const findings = handleInspect(text, {});
+  const findings = await handleInspect(text, {});
   const hash1 = computeHash(text, findings);
   const hash2 = computeHash(text, findings);
   t.is(hash1, hash2);
 });
 
-test('computeHash yields different hashes for different scrubbed outputs', (t) => {
+test('computeHash yields different hashes for different scrubbed outputs', async (t) => {
   const text1 = 'My email is test@example.com';
-  const findings1 = handleInspect(text1, {});
+  const findings1 = await handleInspect(text1, {});
   const hash1 = computeHash(text1, findings1);
   
   const text2 = 'Your email is other@example.com';
-  const findings2 = handleInspect(text2, {});
+  const findings2 = await handleInspect(text2, {});
   const hash2 = computeHash(text2, findings2);
   
   t.not(hash1, hash2);
