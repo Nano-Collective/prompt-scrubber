@@ -9,6 +9,14 @@
   "bin": {
     "prompt-scrub": "./dist/cli/index.js"
   },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
   "publishConfig": {
     "access": "public"
   },
@@ -18,6 +26,7 @@
   },
   "scripts": {
     "build": "rm -rf dist && tsc && chmod +x dist/cli/index.js",
+    "prepublishOnly": "pnpm run build",
     "pretest": "pnpm run test:types",
     "test": "pnpm run test:ava",
     "test:watch": "ava --watch",
@@ -40,7 +49,16 @@
     "type": "git",
     "url": "git+https://github.com/Nano-Collective/prompt-scrubber.git"
   },
-  "keywords": [],
+  "keywords": [
+    "prompt",
+    "privacy",
+    "redaction",
+    "pii",
+    "llm",
+    "scrubber",
+    "ai",
+    "sanitize"
+  ],
   "author": "Nano Collective",
   "license": "MIT",
   "bugs": {
