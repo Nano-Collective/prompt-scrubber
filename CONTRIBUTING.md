@@ -58,4 +58,20 @@ You can also run any of these individual gates in isolation by calling the scrip
 
 **Note for contributors:** Please do not bump the version number in `package.json` in your pull requests. Version bumping and releases are handled exclusively by the project maintainers using automated workflows when merging to `main`.
 
+### How releases work
+
+When a commit lands on `main` with a `package.json` version that differs from the currently published npm version, the `release.yml` workflow automatically:
+
+1. Runs the full test suite and build.
+2. Publishes the package to npm under `@nanocollective/prompt-scrub`.
+3. Creates a GitHub Release with install and usage instructions.
+
+Prerelease versions (`-alpha`, `-beta`, `-rc`) are published to their corresponding npm dist-tags instead of `latest`.
+
+### Required secrets (maintainers only)
+
+| Secret | Purpose |
+|---|---|
+| `NPM_TOKEN` | Authenticates `npm publish` to the npm registry. Must be set as a repository secret. |
+
 Thank you for contributing!
