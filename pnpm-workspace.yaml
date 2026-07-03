@@ -1,4 +1,6 @@
 packages:
-  - '.'
-  - 'examples/*'
-auditConfig: { ignoreGhsas: null }
+  - "."
+allowBuilds:
+  esbuild: true
+auditConfig:
+  ignoreGhsas: null

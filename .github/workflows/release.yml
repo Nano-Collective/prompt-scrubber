@@ -1,0 +1,171 @@
+name: Release to NPM and GitHub
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      should-publish: ${{ steps.version-check.outputs.should-publish }}
+      package-version: ${{ steps.version-check.outputs.package-version }}
+      npm-version: ${{ steps.version-check.outputs.npm-version }}
+      is-prerelease: ${{ steps.version-check.outputs.is-prerelease }}
+      npm-tag: ${{ steps.version-check.outputs.npm-tag }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Check version difference
+        id: version-check
+        run: |
+          # Get current package.json version
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          echo "package-version=$PACKAGE_VERSION" >> $GITHUB_OUTPUT
+
+          # Detect prerelease versions (beta, alpha, rc, etc.)
+          if [[ "$PACKAGE_VERSION" == *"-beta"* ]]; then
+            echo "is-prerelease=true" >> $GITHUB_OUTPUT
+            echo "npm-tag=beta" >> $GITHUB_OUTPUT
+            echo "Beta version detected: $PACKAGE_VERSION"
+          elif [[ "$PACKAGE_VERSION" == *"-alpha"* ]]; then
+            echo "is-prerelease=true" >> $GITHUB_OUTPUT
+            echo "npm-tag=alpha" >> $GITHUB_OUTPUT
+            echo "Alpha version detected: $PACKAGE_VERSION"
+          elif [[ "$PACKAGE_VERSION" == *"-rc"* ]]; then
+            echo "is-prerelease=true" >> $GITHUB_OUTPUT
+            echo "npm-tag=rc" >> $GITHUB_OUTPUT
+            echo "Release candidate detected: $PACKAGE_VERSION"
+          else
+            echo "is-prerelease=false" >> $GITHUB_OUTPUT
+            echo "npm-tag=latest" >> $GITHUB_OUTPUT
+          fi
+
+          # Get the version currently published on npm (empty string if not published yet)
+          NPM_VERSION=$(npm view @nanocollective/prompt-scrub version 2>/dev/null || echo "")
+          echo "npm-version=$NPM_VERSION" >> $GITHUB_OUTPUT
+
+          if [ "$PACKAGE_VERSION" != "$NPM_VERSION" ]; then
+            echo "should-publish=true" >> $GITHUB_OUTPUT
+            echo "Version bump detected: $NPM_VERSION -> $PACKAGE_VERSION"
+          else
+            echo "should-publish=false" >> $GITHUB_OUTPUT
+            echo "No version bump, skipping publish."
+          fi
+
+  publish:
+    needs: check-version
+    if: needs.check-version.outputs.should-publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Run full test suite
+        run: pnpm test:all
+
+      - name: Verify build output
+        run: |
+          if [ ! -f "dist/cli/index.js" ]; then
+            echo "Build output missing: dist/cli/index.js not found"
+            exit 1
+          fi
+          echo "Build output verified: dist/cli/index.js exists"
+
+      - name: Publish to npm
+        run: npm publish --tag ${{ needs.check-version.outputs.npm-tag }} --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create GitHub Release
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const version = '${{ needs.check-version.outputs.package-version }}';
+            const isPrerelease = '${{ needs.check-version.outputs.is-prerelease }}' === 'true';
+            const tag = `v${version}`;
+
+            const body = [
+              `## prompt-scrub v${version}`,
+              '',
+              '### Installation',
+              '```bash',
+              'npm install -g @nanocollective/prompt-scrub',
+              '```',
+              '',
+              '### CLI usage',
+              '```bash',
+              '# Inspect a prompt before sending (recommended first step)',
+              'echo "My email is alice@example.com" | prompt-scrub inspect',
+              '',
+              '# Scrub a prompt',
+              'echo "My email is alice@example.com" | prompt-scrub scrub',
+              '',
+              '# Rehydrate a response',
+              'echo "Contact Email_1 for details." | prompt-scrub rehydrate --session-id <id>',
+              '```',
+              '',
+              '### Library usage',
+              '```typescript',
+              'import { scrub, rehydrate } from "@nanocollective/prompt-scrub";',
+              '',
+              'const { scrubbedContent, sessionId } = scrub({ content: prompt });',
+              '// send scrubbedContent to LLM...',
+              'const { content } = rehydrate({ content: response, sessionId });',
+              '```',
+              '',
+              `[Full changelog](https://github.com/Nano-Collective/prompt-scrubber/commits/v${version})`,
+            ].join('\n');
+
+            await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: tag,
+              name: `v${version}`,
+              body,
+              prerelease: isPrerelease,
+              generate_release_notes: false,
+            });
+
+            console.log(`GitHub Release created: ${tag}`);
+
+  notify:
+    needs: [check-version, publish]
+    if: always() && needs.check-version.outputs.should-publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify result
+        run: |
+          if [ "${{ needs.publish.result }}" == "success" ]; then
+            echo "@nanocollective/prompt-scrub@${{ needs.check-version.outputs.package-version }} published successfully."
+          else
+            echo "Publish failed for @nanocollective/prompt-scrub@${{ needs.check-version.outputs.package-version }}."
+            exit 1
+          fi
