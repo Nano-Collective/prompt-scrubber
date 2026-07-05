@@ -1,6 +1,6 @@
 import * as crypto from 'node:crypto';
 import type { SessionMap } from '../types/index.js';
-import { readSessionMap, writeSessionMap, deleteSessionMap, listSessions } from './storage.js';
+import { deleteSessionMap, listSessions, readSessionMap, writeSessionMap } from './storage.js';
 
 export class SessionManager {
   private sessionId: string;

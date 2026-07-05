@@ -1,9 +1,7 @@
-import * as os from 'node:os';
-import * as path from 'node:path';
 import * as fs from 'node:fs';
-import type { SessionMap } from '../types/index.js';
-
+import * as path from 'node:path';
 import { getConfigDir } from '../core/config.js';
+import type { SessionMap } from '../types/index.js';
 /**
  * Gets the file path for a specific session ID.
  */

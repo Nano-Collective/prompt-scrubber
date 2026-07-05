@@ -1,12 +1,12 @@
-import type { Command } from 'commander';
-import { readFileSync } from 'node:fs';
 import * as crypto from 'node:crypto';
-import { SessionManager } from '../../session/session-manager.js';
+import { readFileSync } from 'node:fs';
+import type { Command } from 'commander';
 import { resolveCollisions } from '../../core/collision-resolver.js';
-import type { Detector, Finding } from '../../types/index.js';
-import { getActiveDetectors } from '../../core/scrub.js';
-import { loadConfiguredRulePacks } from '../../core/rule-packs.js';
 import { loadConfig } from '../../core/config.js';
+import { loadConfiguredRulePacks } from '../../core/rule-packs.js';
+import { getActiveDetectors } from '../../core/scrub.js';
+import { SessionManager } from '../../session/session-manager.js';
+import type { Finding } from '../../types/index.js';
 
 export async function handleInspect(
   text: string,
@@ -146,7 +146,7 @@ export function setupInspectCommand(program: Command) {
       const hash = computeHash(input, findings);
 
       if (options.hash) {
-        process.stdout.write(hash + '\n');
+        process.stdout.write(`${hash}\n`);
       } else {
         const output = formatInspectOutput(findings, hash);
         process.stdout.write(output);

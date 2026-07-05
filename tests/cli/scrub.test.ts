@@ -43,8 +43,8 @@ test('handleScrub respects codeTellTerms', async (t) => {
   t.is(result.scrubbedContent, 'const CodeTell_1 = 1;');
 });
 
-import { setupScrubCommand } from '../../src/cli/commands/scrub.js';
 import { Command } from 'commander';
+import { setupScrubCommand } from '../../src/cli/commands/scrub.js';
 
 test.serial('scrub command fails when file is unreadable', async (t) => {
   const program = new Command();

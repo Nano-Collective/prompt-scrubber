@@ -1,14 +1,14 @@
-import type { ScrubRequest, ScrubResult, Message, Detector } from '../types/index.js';
-import { SessionManager } from '../session/session-manager.js';
-import { resolveCollisions } from './collision-resolver.js';
-import { EmailDetector } from '../detectors/email.js';
-import { PhoneDetector } from '../detectors/phone.js';
-import { UrlDetector } from '../detectors/url.js';
-import { PathDetector } from '../detectors/path.js';
-import { SecretDetector } from '../detectors/secret.js';
-import { PostalAddressDetector } from '../detectors/postal-address.js';
-import { NameDetector } from '../detectors/name.js';
 import { CodeTellDetector } from '../detectors/code-tell.js';
+import { EmailDetector } from '../detectors/email.js';
+import { NameDetector } from '../detectors/name.js';
+import { PathDetector } from '../detectors/path.js';
+import { PhoneDetector } from '../detectors/phone.js';
+import { PostalAddressDetector } from '../detectors/postal-address.js';
+import { SecretDetector } from '../detectors/secret.js';
+import { UrlDetector } from '../detectors/url.js';
+import { SessionManager } from '../session/session-manager.js';
+import type { Detector, Message, ScrubRequest, ScrubResult } from '../types/index.js';
+import { resolveCollisions } from './collision-resolver.js';
 
 const DEFAULT_DETECTORS: Detector[] = [
   new SecretDetector(),

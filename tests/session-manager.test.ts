@@ -1,7 +1,7 @@
-import test from 'ava';
-import * as path from 'node:path';
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import test from 'ava';
 import { SessionManager } from '../src/session/session-manager.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -115,7 +115,7 @@ test('rebuildCategoryCounts ignores invalid placeholders and handles out-of-orde
   map.Email_2 = 'b@test.com';
   map.Email_1 = 'a@test.com'; // out of order, triggers index < counts[category]
   map.InvalidPlaceholder = 'invalid'; // triggers match == null
-  map['Email_'] = 'invalid2'; // triggers match == null
+  map.Email_ = 'invalid2'; // triggers match == null
 
   manager.save();
   const resumed = new SessionManager(manager.getSessionId());

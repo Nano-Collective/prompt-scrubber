@@ -1,4 +1,4 @@
-import { Command } from 'commander';
+import type { Command } from 'commander';
 import { getAvailableDetectorsAsync } from '../../core/detectors.js';
 
 export function setupRulesCommands(program: Command) {

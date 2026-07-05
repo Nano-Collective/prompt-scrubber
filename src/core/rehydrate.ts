@@ -1,5 +1,5 @@
-import type { RehydrateRequest, RehydrateResult, Message } from '../types/index.js';
 import { readSessionMap } from '../session/storage.js';
+import type { RehydrateRequest, RehydrateResult } from '../types/index.js';
 
 const PLACEHOLDER_REGEX = /\b([A-Za-z]+_\d+)\b/g;
 

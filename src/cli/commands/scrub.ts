@@ -1,9 +1,9 @@
-import type { Command } from 'commander';
 import { readFileSync } from 'node:fs';
-import { scrub } from '../../core/scrub.js';
+import type { Command } from 'commander';
+import { loadConfig } from '../../core/config.js';
 
 import { loadConfiguredRulePacks } from '../../core/rule-packs.js';
-import { loadConfig } from '../../core/config.js';
+import { scrub } from '../../core/scrub.js';
 
 export async function handleScrub(
   text: string,

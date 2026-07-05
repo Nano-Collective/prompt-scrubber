@@ -1,5 +1,5 @@
 import type { Command } from 'commander';
-import { listSessions, readSessionMap, deleteSessionMap } from '../../session/storage.js';
+import { deleteSessionMap, listSessions, readSessionMap } from '../../session/storage.js';
 
 export function setupSessionsCommands(program: Command) {
   const sessionsCommand = program.command('sessions').description('Manage scrub sessions');

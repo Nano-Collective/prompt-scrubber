@@ -1,6 +1,6 @@
+import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import * as fs from 'node:fs';
 
 export interface PromptScrubConfig {
   rulePacks?: string[];
@@ -64,7 +64,7 @@ export function loadConfig(): PromptScrubConfig {
           if (typeof host === 'string') urlAllowlist.add(host);
         }
       }
-    } catch (e) {
+    } catch (_e) {
       // Ignore global config read/parse errors
     }
   }
@@ -86,7 +86,7 @@ export function loadConfig(): PromptScrubConfig {
           if (typeof host === 'string') urlAllowlist.add(host);
         }
       }
-    } catch (e) {
+    } catch (_e) {
       // Ignore local config read/parse errors
     }
   }

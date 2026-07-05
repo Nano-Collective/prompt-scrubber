@@ -1,6 +1,6 @@
 import test from 'ava';
-import { setupSessionsCommands } from '../../src/cli/commands/sessions.js';
 import { Command } from 'commander';
+import { setupSessionsCommands } from '../../src/cli/commands/sessions.js';
 
 test.serial('sessions rm command fails when session does not exist', async (t) => {
   const program = new Command();

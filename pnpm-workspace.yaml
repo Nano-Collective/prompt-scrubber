@@ -2,5 +2,4 @@ packages:
   - "."
 allowBuilds:
   esbuild: true
-auditConfig:
-  ignoreGhsas: null
+auditConfig: {}

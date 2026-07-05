@@ -1,9 +1,9 @@
-import test from 'ava';
-import * as path from 'node:path';
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { scrub } from '../../src/core/scrub.js';
+import test from 'ava';
 import { rehydrate } from '../../src/core/rehydrate.js';
+import { scrub } from '../../src/core/scrub.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

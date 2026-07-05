@@ -1,4 +1,4 @@
-import type { Detector, Finding } from '../types/index.js';
+import type { Detector } from '../types/index.js';
 import { loadConfig } from './config.js';
 import type { DetectorMetadata } from './detectors.js';
 

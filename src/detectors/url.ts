@@ -16,9 +16,9 @@ export class UrlDetector implements Detector {
   private isHostAllowed(urlStr: string): boolean {
     if (this.allowlist.length === 0) return false;
     try {
-      const parsed = new URL(urlStr.startsWith('http') ? urlStr : 'http://' + urlStr);
+      const parsed = new URL(urlStr.startsWith('http') ? urlStr : `http://${urlStr}`);
       const host = parsed.hostname;
-      return this.allowlist.some((allowed) => host === allowed || host.endsWith('.' + allowed));
+      return this.allowlist.some((allowed) => host === allowed || host.endsWith(`.${allowed}`));
     } catch {
       return false;
     }

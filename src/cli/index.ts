@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 
-import { Command } from 'commander';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { setupScrubCommand } from './commands/scrub.js';
-import { setupRehydrateCommand } from './commands/rehydrate.js';
+import { Command } from 'commander';
 import { setupInspectCommand } from './commands/inspect.js';
-import { setupSessionsCommands } from './commands/sessions.js';
+import { setupRehydrateCommand } from './commands/rehydrate.js';
 import { setupRulesCommands } from './commands/rules.js';
+import { setupScrubCommand } from './commands/scrub.js';
+import { setupSessionsCommands } from './commands/sessions.js';
 
 // Get version from package.json
 const __filename = fileURLToPath(import.meta.url);

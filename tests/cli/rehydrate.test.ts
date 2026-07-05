@@ -8,8 +8,8 @@ test('handleRehydrate restores placeholder', (t) => {
   t.is(result.content, 'Send to cli@example.com');
 });
 
-import { setupRehydrateCommand } from '../../src/cli/commands/rehydrate.js';
 import { Command } from 'commander';
+import { setupRehydrateCommand } from '../../src/cli/commands/rehydrate.js';
 
 test.serial('rehydrate command fails when file is unreadable', async (t) => {
   const program = new Command();

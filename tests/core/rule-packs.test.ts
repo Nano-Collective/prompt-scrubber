@@ -1,9 +1,9 @@
-import test from 'ava';
-import { loadConfiguredRulePacks } from '../../src/core/rule-packs.js';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import * as os from 'node:os';
-import * as fs from 'node:fs';
+import test from 'ava';
+import { loadConfiguredRulePacks } from '../../src/core/rule-packs.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

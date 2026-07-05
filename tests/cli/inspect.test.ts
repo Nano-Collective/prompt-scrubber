@@ -1,5 +1,5 @@
 import test from 'ava';
-import { handleInspect, formatInspectOutput, computeHash } from '../../src/cli/commands/inspect.js';
+import { computeHash, formatInspectOutput, handleInspect } from '../../src/cli/commands/inspect.js';
 
 test('handleInspect finds entities without side effects', async (t) => {
   const findings = await handleInspect('My email is test@example.com', {});
@@ -43,8 +43,8 @@ test('computeHash yields different hashes for different scrubbed outputs', async
   t.not(hash1, hash2);
 });
 
-import { setupInspectCommand } from '../../src/cli/commands/inspect.js';
 import { Command } from 'commander';
+import { setupInspectCommand } from '../../src/cli/commands/inspect.js';
 
 test.serial('inspect command fails when file is unreadable', async (t) => {
   const program = new Command();
