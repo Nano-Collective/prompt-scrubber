@@ -57,7 +57,7 @@ test.serial('scrub command fails when file is unreadable', async (t) => {
 
   process.exit = ((code?: number) => {
     exitCode = code;
-  }) as any;
+  }) as unknown as typeof process.exit;
   console.error = (msg: string) => {
     errorOutput += msg;
   };
@@ -82,7 +82,7 @@ test.serial('scrub command fails when no stdin is provided', async (t) => {
 
   process.exit = ((code?: number) => {
     exitCode = code;
-  }) as any;
+  }) as unknown as typeof process.exit;
   console.error = (msg: string) => {
     errorOutput += msg;
   };

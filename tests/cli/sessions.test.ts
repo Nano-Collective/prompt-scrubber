@@ -13,7 +13,7 @@ test.serial('sessions rm command fails when session does not exist', async (t) =
 
   process.exit = ((code?: number) => {
     exitCode = code;
-  }) as any;
+  }) as unknown as typeof process.exit;
   console.error = (msg: string) => {
     errorOutput += msg;
   };
