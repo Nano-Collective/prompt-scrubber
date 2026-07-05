@@ -103,8 +103,25 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      - name: Extract changelog
+        id: changelog
+        run: |
+          if CHANGELOG=$(node scripts/extract-changelog.js 2>/dev/null); then
+            echo "Changelog extracted for v${{ needs.check-version.outputs.package-version }}"
+          else
+            CHANGELOG="See the commit history for changes in this release."
+            echo "No changelog entry found for v${{ needs.check-version.outputs.package-version }}; using fallback."
+          fi
+          {
+            echo "CHANGELOG<<CHANGELOG_EOF"
+            echo "$CHANGELOG"
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Create GitHub Release
         uses: actions/github-script@v7
+        env:
+          CHANGELOG: ${{ steps.changelog.outputs.CHANGELOG }}
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
@@ -112,9 +129,12 @@ jobs:
             const isPrerelease = '${{ needs.check-version.outputs.is-prerelease }}' === 'true';
             const tag = `v${version}`;
 
+            const changelog = (process.env.CHANGELOG || '').trim();
+
             const body = [
               `## prompt-scrub v${version}`,
               '',
+              ...(changelog ? ['### What\'s changed', '', changelog, ''] : []),
               '### Installation',
               '```bash',
               'npm install -g @nanocollective/prompt-scrub',

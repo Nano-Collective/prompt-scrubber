@@ -37,15 +37,6 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3
 
-  examples/prompt-scrub-projectx:
-    devDependencies:
-      '@nanocollective/prompt-scrub':
-        specifier: workspace:*
-        version: link:../..
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-
 packages:
 
   '@ava/typescript@7.0.0':
@@ -1285,11 +1276,6 @@ packages:
     resolution: {integrity: sha512-34R7HTnG0XIJcBSn5XhDd7nNFPRcXYRZrBB2O2jdKqYODldSzBAqzsWoZYYvduky73toYS/ESqxPvkDf/F0XMg==}
     engines: {node: '>=10'}
 
-  typescript@5.9.3:
-    resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
-    engines: {node: '>=14.17'}
-    hasBin: true
-
   typescript@6.0.3:
     resolution: {integrity: sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw==}
     engines: {node: '>=14.17'}
@@ -2424,8 +2410,6 @@ snapshots:
       fsevents: 2.3.3
 
   type-fest@0.13.1: {}
-
-  typescript@5.9.3: {}
 
   typescript@6.0.3: {}
 
