@@ -119,7 +119,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         env:
           CHANGELOG: ${{ steps.changelog.outputs.CHANGELOG }}
         with:
