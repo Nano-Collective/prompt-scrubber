@@ -69,27 +69,7 @@ export function loadConfig(): PromptScrubConfig {
     }
   }
 
-  // 2. Read local package.json
-  const localPkgPath = path.join(process.cwd(), 'package.json');
-  if (fs.existsSync(localPkgPath)) {
-    try {
-      const localData = JSON.parse(fs.readFileSync(localPkgPath, 'utf8'));
-      const localRulePacks = localData?.['prompt-scrub']?.rulePacks;
-      if (Array.isArray(localRulePacks)) {
-        for (const pack of localRulePacks) {
-          if (typeof pack === 'string') rulePacks.add(pack);
-        }
-      }
-      const localUrlAllowlist = localData?.['prompt-scrub']?.urlAllowlist;
-      if (Array.isArray(localUrlAllowlist)) {
-        for (const host of localUrlAllowlist) {
-          if (typeof host === 'string') urlAllowlist.add(host);
-        }
-      }
-    } catch (_e) {
-      // Ignore local config read/parse errors
-    }
-  }
+
 
   config.rulePacks = Array.from(rulePacks);
   config.urlAllowlist = Array.from(urlAllowlist);

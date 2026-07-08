@@ -70,15 +70,15 @@ test('hallucinated placeholder does not corrupt the rest of a rehydration', (t) 
   const scrubbed = scrubbedContent as string;
 
   // Simulate model inventing an extra placeholder
-  const modelResponse = `${scrubbed} and also Phone_99`;
+  const modelResponse = `${scrubbed} and also «Phone_99»`;
 
   const { content: restored, warnings } = rehydrate({ content: modelResponse, sessionId });
 
   // The real placeholder is restored; the hallucinated one is left and warned
   t.true(restored.includes('real@example.com'));
-  t.true(restored.includes('Phone_99'));
+  t.true(restored.includes('«Phone_99»'));
   t.is(warnings?.length, 1);
-  t.regex(warnings![0]!, /Phone_99/);
+  t.regex(warnings![0]!, /«Phone_99»/);
 });
 
 test('Message[] round-trip: scrub preserves structure and rehydrate restores content', (t) => {
@@ -91,7 +91,7 @@ test('Message[] round-trip: scrub preserves structure and rehydrate restores con
   const scrubbedMessages = scrubbedContent as typeof messages;
 
   t.is(scrubbedMessages[0]?.role, 'user');
-  t.is(scrubbedMessages[0]?.content, 'My email is Email_1');
+  t.is(scrubbedMessages[0]?.content, 'My email is «Email_1»');
   t.is(scrubbedMessages[1]?.content, 'I understand. Let me help.');
 
   // Rehydrate the user message

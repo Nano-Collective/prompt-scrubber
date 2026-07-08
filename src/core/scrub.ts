@@ -94,9 +94,9 @@ export function getActiveDetectors(options?: ScrubRequest['options']): Detector[
  * content in the same shape, along with the session ID used.
  */
 export function scrub(request: ScrubRequest): ScrubResult {
-  const { content, sessionId, options } = request;
+  const { content, sessionId, sessionMap, options } = request;
 
-  const session = new SessionManager(sessionId);
+  const session = new SessionManager(sessionId, sessionMap);
   const detectors = getActiveDetectors(options);
 
   let scrubbedContent: string | Message[];
@@ -117,8 +117,13 @@ export function scrub(request: ScrubRequest): ScrubResult {
     session.save();
   }
 
-  return {
+  const res: ScrubResult = {
     scrubbedContent,
-    sessionId: session.getSessionId(),
+    sessionMap: session.getMap(),
   };
+  const sid = session.getSessionId();
+  if (sid) {
+    res.sessionId = sid;
+  }
+  return res;
 }

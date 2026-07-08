@@ -3,7 +3,7 @@ import { handleScrub } from '../../src/cli/commands/scrub.js';
 
 test('handleScrub processes text and returns result', async (t) => {
   const result = await handleScrub('My email is test@example.com', {});
-  t.is(result.scrubbedContent, 'My email is Email_1');
+  t.is(result.scrubbedContent, 'My email is «Email_1»');
   t.truthy(result.sessionId);
 });
 
@@ -24,7 +24,7 @@ test('handleScrub respects enabled detectors', async (t) => {
   const result = await handleScrub('say hello to Alice.', {
     enable: 'NameDetector',
   });
-  t.is(result.scrubbedContent, 'say hello to Name_1.');
+  t.is(result.scrubbedContent, 'say hello to «Name_1».');
 });
 
 test('handleScrub respects strictName option', async (t) => {
@@ -40,7 +40,7 @@ test('handleScrub respects codeTellTerms', async (t) => {
   const result = await handleScrub('const myVar = 1;', {
     codeTellTerms: 'myVar, otherVar',
   });
-  t.is(result.scrubbedContent, 'const CodeTell_1 = 1;');
+  t.is(result.scrubbedContent, 'const «CodeTell_1» = 1;');
 });
 
 import { Command } from 'commander';

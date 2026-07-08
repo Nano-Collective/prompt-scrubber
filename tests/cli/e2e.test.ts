@@ -37,7 +37,7 @@ test.after.always(() => {
 test('CLI: scrub reads from stdin and outputs to stdout/stderr', (t) => {
   const result = runCli(['scrub'], 'Contact me at alice@example.com');
   t.is(result.status, 0);
-  t.is(result.stdout, 'Contact me at Email_1');
+  t.is(result.stdout, 'Contact me at «Email_1»');
   t.regex(result.stderr, /Session ID: \w+/);
 });
 
@@ -49,7 +49,7 @@ test('CLI: rehydrate reads from stdin and restores', (t) => {
   const sessionId = sessionIdMatch![1]!;
 
   // Step 2: rehydrate
-  const rehydrateRes = runCli(['rehydrate', '--session-id', sessionId], 'Secret: Secret_1');
+  const rehydrateRes = runCli(['rehydrate', '--session-id', sessionId], 'Secret: «Secret_1»');
   t.is(rehydrateRes.status, 0);
   t.is(rehydrateRes.stdout, 'Secret: sk-abcdefghijklmnopqrstuvwxyz');
 });
@@ -58,7 +58,7 @@ test('CLI: inspect does a dry run and prints hash', (t) => {
   const result = runCli(['inspect'], 'Check alice@example.com');
   t.is(result.status, 0);
   t.true(result.stdout.includes('alice@example.com'));
-  t.true(result.stdout.includes('Email_1'));
+  t.true(result.stdout.includes('«Email_1»'));
   t.true(result.stdout.includes('No session written'));
   t.true(result.stdout.includes('Hash: '));
 });
@@ -67,7 +67,7 @@ test('CLI: inspect --hash prints only the hash', (t) => {
   const result = runCli(['inspect', '--hash'], 'Check alice@example.com');
   t.is(result.status, 0);
   t.false(result.stdout.includes('alice@example.com'));
-  t.false(result.stdout.includes('Email_1'));
+  t.false(result.stdout.includes('«Email_1»'));
   t.false(result.stdout.includes('No session written'));
   t.regex(result.stdout.trim(), /^[a-f0-9]{64}$/i);
 });
@@ -79,11 +79,11 @@ test('CLI: rehydrate emits warning to stderr for hallucinated placeholder', (t) 
 
   const rehydrateRes = runCli(
     ['rehydrate', '--session-id', sessionId],
-    'My secret is Secret_1 and Secret_99',
+    'My secret is «Secret_1» and «Secret_99»',
   );
   t.is(rehydrateRes.status, 0);
-  t.is(rehydrateRes.stdout, 'My secret is sk-1234567890abcdefghijklmno and Secret_99');
-  t.true(rehydrateRes.stderr.includes('Secret_99'));
+  t.is(rehydrateRes.stdout, 'My secret is sk-1234567890abcdefghijklmno and «Secret_99»');
+  t.true(rehydrateRes.stderr.includes('«Secret_99»'));
 });
 
 test.serial('CLI: sessions list shows empty state', (t) => {
