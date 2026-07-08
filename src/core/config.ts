@@ -69,8 +69,6 @@ export function loadConfig(): PromptScrubConfig {
     }
   }
 
-
-
   config.rulePacks = Array.from(rulePacks);
   config.urlAllowlist = Array.from(urlAllowlist);
   return config;
