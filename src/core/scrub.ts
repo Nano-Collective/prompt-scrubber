@@ -91,7 +91,13 @@ export function getActiveDetectors(options?: ScrubRequest['options']): Detector[
 
 /**
  * Main scrub entry point. Accepts a string or Message[] and returns scrubbed
- * content in the same shape, along with the session ID used.
+ * content in the same shape, along with the placeholder→value map.
+ *
+ * Stateless mode: when `sessionMap` is provided, no disk state is used and the
+ * map is the single source of truth. NOTE: the provided `sessionMap` object is
+ * mutated in place as new placeholders are created (it is also returned as
+ * `result.sessionMap`, which is the same reference). Callers may rely on either
+ * the returned value or the in-place mutation, but must not pass a frozen map.
  */
 export function scrub(request: ScrubRequest): ScrubResult {
   const { content, sessionId, sessionMap, options } = request;

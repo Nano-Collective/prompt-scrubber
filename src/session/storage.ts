@@ -21,13 +21,13 @@ export function readSessionMap(sessionId: string): SessionMap {
   try {
     const data = fs.readFileSync(filePath, 'utf-8');
     return JSON.parse(data) as SessionMap;
-  } catch (error) {
+  } catch {
     if (fs.existsSync(filePath)) {
       const corruptPath = `${filePath}.corrupt-${Date.now()}`;
       try {
         fs.renameSync(filePath, corruptPath);
-      } catch (renameError) {
-        // Silently handle
+      } catch {
+        // Best-effort quarantine; ignore rename failure.
       }
     }
     return {};
@@ -68,7 +68,7 @@ export function deleteSessionMap(sessionId: string): boolean {
     try {
       fs.unlinkSync(filePath);
       return true;
-    } catch (error) {
+    } catch {
       return false;
     }
   }

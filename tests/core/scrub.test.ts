@@ -10,7 +10,10 @@ const __dirname = path.dirname(__filename);
 const tmpConfigDir = path.join(__dirname, '.tmp-config-scrub');
 
 test.before(() => {
-  process.env.XDG_CONFIG_HOME = tmpConfigDir;
+  // PROMPT_SCRUB_CONFIG_DIR is honored on every platform; XDG_CONFIG_HOME is only
+  // read on Linux, so it does not isolate storage on macOS/Windows (which caused
+  // tests to read/write the user's real session dir).
+  process.env.PROMPT_SCRUB_CONFIG_DIR = tmpConfigDir;
   if (fs.existsSync(tmpConfigDir)) {
     fs.rmSync(tmpConfigDir, { recursive: true, force: true });
   }

@@ -9,10 +9,14 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 test('getVersion resolves package.json from ../.. correctly', (t) => {
-  // Pass current directory, so ../.. points to root prompt-scrubber dir
+  // Pass current directory, so ../.. points to root prompt-scrubber dir.
+  // Assert against the real package version so this test survives version bumps.
+  const rootPkg = JSON.parse(
+    fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf-8'),
+  ) as { version: string };
   const v = getVersion(__dirname);
   t.truthy(v);
-  t.is(v, '1.0.0'); // The actual package version is 1.0.0
+  t.is(v, rootPkg.version);
 });
 
 test('getVersion falls back to ../package.json when ../.. fails', (t) => {

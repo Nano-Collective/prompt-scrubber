@@ -67,7 +67,10 @@ export class SessionManager {
   }
 
   /**
-   * Returns the current session map.
+   * Returns the current session map. This is the live internal reference (not a
+   * copy) — in stateless mode it is the same object passed in as `initialMap`,
+   * mutated in place. Do not return a copy here without updating callers that
+   * rely on the in-place mutation contract (see `scrub`).
    */
   public getMap(): SessionMap {
     return this.map;

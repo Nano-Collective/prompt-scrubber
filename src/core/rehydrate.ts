@@ -30,9 +30,6 @@ function rehydrateString(
     if (fullToken in sessionMap) {
       // Replace all occurrences of this exact placeholder
       result = result.split(fullToken).join(sessionMap[fullToken]!);
-    } else if (token in sessionMap) {
-      // Fallback for older sessions that used "Email_1"
-      result = result.split(token).join(sessionMap[token]!);
     } else {
       warnings.push(`Warning: placeholder ${fullToken} not found in session — left as-is.`);
     }
