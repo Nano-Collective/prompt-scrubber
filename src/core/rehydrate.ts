@@ -1,7 +1,7 @@
 import { readSessionMap } from '../session/storage.js';
 import type { RehydrateRequest, RehydrateResult } from '../types/index.js';
 
-const PLACEHOLDER_REGEX = /\b([A-Za-z]+_\d+)\b/g;
+const PLACEHOLDER_REGEX = /«([A-Za-z]+_\d+)»/g;
 
 function rehydrateString(
   content: string,
@@ -26,11 +26,12 @@ function rehydrateString(
   const warnings: string[] = [];
 
   for (const token of sortedTokens) {
-    if (token in sessionMap) {
+    const fullToken = `«${token}»`;
+    if (fullToken in sessionMap) {
       // Replace all occurrences of this exact placeholder
-      result = result.split(token).join(sessionMap[token]!);
+      result = result.split(fullToken).join(sessionMap[fullToken]!);
     } else {
-      warnings.push(`Warning: placeholder ${token} not found in session — left as-is.`);
+      warnings.push(`Warning: placeholder ${fullToken} not found in session — left as-is.`);
     }
   }
 
@@ -49,8 +50,8 @@ function rehydrateString(
  * (e.g. Email_10 being corrupted to Email_1<remaining-0>).
  */
 export function rehydrate(request: RehydrateRequest): RehydrateResult {
-  const { content, sessionId } = request;
-  const sessionMap = readSessionMap(sessionId);
+  const { content, sessionId, sessionMap: reqSessionMap } = request;
+  const sessionMap = reqSessionMap || (sessionId ? readSessionMap(sessionId) : {});
 
   if (typeof content === 'string') {
     const { content: result, warnings } = rehydrateString(content, sessionMap);

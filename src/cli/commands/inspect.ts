@@ -77,7 +77,7 @@ export function formatInspectOutput(findings: Finding[], hash: string): string {
   for (const finding of findings) {
     const count = (counters[finding.placeholderPrefix] ?? 0) + 1;
     counters[finding.placeholderPrefix] = count;
-    const placeholder = `${finding.placeholderPrefix}_${count}`;
+    const placeholder = `«${finding.placeholderPrefix}_${count}»`;
 
     // Format: [Category] value -> Placeholder (chars start-end)
     const catStr = `[${finding.category}]`.padEnd(10);

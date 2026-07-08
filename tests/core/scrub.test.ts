@@ -10,7 +10,10 @@ const __dirname = path.dirname(__filename);
 const tmpConfigDir = path.join(__dirname, '.tmp-config-scrub');
 
 test.before(() => {
-  process.env.XDG_CONFIG_HOME = tmpConfigDir;
+  // PROMPT_SCRUB_CONFIG_DIR is honored on every platform; XDG_CONFIG_HOME is only
+  // read on Linux, so it does not isolate storage on macOS/Windows (which caused
+  // tests to read/write the user's real session dir).
+  process.env.PROMPT_SCRUB_CONFIG_DIR = tmpConfigDir;
   if (fs.existsSync(tmpConfigDir)) {
     fs.rmSync(tmpConfigDir, { recursive: true, force: true });
   }
@@ -26,7 +29,7 @@ test.after.always(() => {
 
 test('scrubs a single email from a plain string', (t) => {
   const result = scrub({ content: 'My email is hello@example.com' });
-  t.is(result.scrubbedContent, 'My email is Email_1');
+  t.is(result.scrubbedContent, 'My email is «Email_1»');
   t.truthy(result.sessionId);
 });
 
@@ -47,8 +50,8 @@ test('scrubbing the same value twice generates the same placeholder', (t) => {
     content: 'Again: repeat@example.com',
     sessionId: result1.sessionId,
   });
-  t.is(result1.scrubbedContent, 'Contact: Email_1');
-  t.is(result2.scrubbedContent, 'Again: Email_1');
+  t.is(result1.scrubbedContent, 'Contact: «Email_1»');
+  t.is(result2.scrubbedContent, 'Again: «Email_1»');
 });
 
 test('returns a valid sessionId', (t) => {
@@ -79,7 +82,7 @@ test('scrub works gracefully when options is empty object', (t) => {
     content: 'My email is test@example.com',
     options: {},
   });
-  t.is(result.scrubbedContent, 'My email is Email_1');
+  t.is(result.scrubbedContent, 'My email is «Email_1»');
 });
 
 test('customDetectors option adds a detector on top of defaults', (t) => {
@@ -105,7 +108,7 @@ test('customDetectors option adds a detector on top of defaults', (t) => {
     content: 'Check test@example.com and CustomToken.',
     options: { customDetectors: [customDetector] },
   });
-  t.is(result.scrubbedContent, 'Check Email_1 and Custom_1.');
+  t.is(result.scrubbedContent, 'Check «Email_1» and «Custom_1».');
 });
 
 test('no disk write when nothing is scrubbed', (t) => {
@@ -137,7 +140,7 @@ test('Message[] input: scrubs each message independently and preserves structure
 
   t.is(messages.length, 2);
   t.is(messages[0]?.role, 'user');
-  t.is(messages[0]?.content, 'My email is Email_1');
+  t.is(messages[0]?.content, 'My email is «Email_1»');
   t.is(messages[1]?.role, 'assistant');
   // Assistant message has no PII — should be unchanged
   t.is(messages[1]?.content, 'Hello! How can I help?');
@@ -153,15 +156,15 @@ test('Message[] input: each message gets its own scrubbing within shared session
 
   const messages = result.scrubbedContent as Array<{ role: string; content: string }>;
   // Same email in both messages should map to same placeholder
-  t.is(messages[0]?.content, 'From Email_1');
-  t.is(messages[1]?.content, 'Also from Email_1');
+  t.is(messages[0]?.content, 'From «Email_1»');
+  t.is(messages[1]?.content, 'Also from «Email_1»');
 });
 
 test('postal address round-tripping works correctly', (t) => {
   const text = 'Send it to 123 Main Street or 1600 Pennsylvania Ave.';
   const scrubbed = scrub({ content: text });
 
-  t.is(scrubbed.scrubbedContent, 'Send it to Address_2 or Address_1');
+  t.is(scrubbed.scrubbedContent, 'Send it to «Address_2» or «Address_1»');
 
   const restored = rehydrate({
     content: scrubbed.scrubbedContent as string,
@@ -185,7 +188,7 @@ test('NameDetector works when explicitly enabled', (t) => {
     content: text,
     options: { enabledDetectors: ['NameDetector'] },
   });
-  t.is(scrubbed.scrubbedContent, 'Name_2 lives in Name_1.');
+  t.is(scrubbed.scrubbedContent, '«Name_2» lives in «Name_1».');
 });
 
 test('NameDetector works in strict mode', (t) => {
@@ -201,7 +204,7 @@ test('NameDetector works in strict mode', (t) => {
 
   // France is allowlisted, John is allowlisted (wait, 'John' is in allowlist!).
   // London is not allowlisted.
-  t.is(scrubbed.scrubbedContent, 'John visited France and Name_1.');
+  t.is(scrubbed.scrubbedContent, 'John visited France and «Name_1».');
 });
 
 test('NameDetector round-trips correctly', (t) => {
@@ -210,7 +213,7 @@ test('NameDetector round-trips correctly', (t) => {
     content: text,
     options: { enabledDetectors: ['NameDetector'] },
   });
-  t.is(scrubbed.scrubbedContent, 'Name_2 went to Name_1.');
+  t.is(scrubbed.scrubbedContent, '«Name_2» went to «Name_1».');
 
   const restored = rehydrate({
     content: scrubbed.scrubbedContent as string,
@@ -232,7 +235,7 @@ test('CodeTellDetector runs when terms are provided and round-trips correctly', 
     content: text,
     options: { codeTellTerms: ['SecretClass'] },
   });
-  t.is(scrubbed.scrubbedContent, 'const instance = new CodeTell_1();');
+  t.is(scrubbed.scrubbedContent, 'const instance = new «CodeTell_1»();');
 
   const restored = rehydrate({
     content: scrubbed.scrubbedContent as string,

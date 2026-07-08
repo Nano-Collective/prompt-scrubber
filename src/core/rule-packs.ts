@@ -38,6 +38,9 @@ export async function loadConfiguredRulePacks(): Promise<RulePackResult> {
 
       if (packDetectors.length > 0) {
         for (const detector of packDetectors) {
+          // Silently skip invalid detectors (missing 'name' or 'detect()').
+          // A library must not write to stdout/stderr — doing so corrupts
+          // Ink/TUI rendering in consumers such as nanocoder.
           if (typeof detector.detect === 'function' && typeof detector.name === 'string') {
             loadedDetectors.push(detector);
             metadata.push({
@@ -45,21 +48,12 @@ export async function loadConfiguredRulePacks(): Promise<RulePackResult> {
               source: `rule-pack: ${packName}`,
               defaultState: 'on',
             });
-          } else {
-            console.warn(
-              `[prompt-scrub] Warning: Rule pack "${packName}" exported an invalid detector missing 'name' or 'detect()'.`,
-            );
           }
         }
-      } else {
-        console.warn(
-          `[prompt-scrub] Warning: Rule pack "${packName}" did not export any valid detectors.`,
-        );
       }
-    } catch (e) {
-      console.warn(
-        `[prompt-scrub] Warning: Could not load rule pack "${packName}". Is it installed? Error: ${(e as Error).message}`,
-      );
+    } catch {
+      // Rule pack could not be loaded (e.g. not installed). Best-effort:
+      // skip it silently rather than logging, for the reason noted above.
     }
   }
 
