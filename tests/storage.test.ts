@@ -40,7 +40,7 @@ test('readSessionMap returns {} on missing file', (t) => {
 
 test('writeSessionMap creates parent dirs and readSessionMap reads it back', (t) => {
   const id = 'test-write-id';
-  const map = { Email_1: 'test@example.com' };
+  const map = { '«Email_1»': 'test@example.com' };
 
   writeSessionMap(id, map);
 
@@ -50,7 +50,7 @@ test('writeSessionMap creates parent dirs and readSessionMap reads it back', (t)
 
 test('writeSessionMap handles JSON parse errors gracefully by renaming corrupt files', (t) => {
   const id = 'corrupt-test-id';
-  const map = { Secret_1: 'sk-1234' };
+  const map = { '«Secret_1»': 'sk-1234' };
 
   writeSessionMap(id, map);
 
@@ -81,7 +81,7 @@ test('writeSessionMap handles JSON parse errors gracefully by renaming corrupt f
 
 test('deleteSessionMap returns true on hit and false on miss', (t) => {
   const id = 'delete-test-id';
-  writeSessionMap(id, { Path_1: '/var/log' });
+  writeSessionMap(id, { '«Path_1»': '/var/log' });
 
   const deletedExisting = deleteSessionMap(id);
   t.true(deletedExisting);
@@ -95,7 +95,7 @@ test('deleteSessionMap handles unlinkSync error', (t) => {
   const filePath = getSessionStoragePath(id);
   const dirPath = path.dirname(filePath);
 
-  writeSessionMap(id, { Secret_1: 'sk-fail' });
+  writeSessionMap(id, { '«Secret_1»': 'sk-fail' });
   fs.chmodSync(dirPath, 0o555); // make directory read-only so unlink fails
 
   const originalError = console.error;
@@ -110,7 +110,7 @@ test('deleteSessionMap handles unlinkSync error', (t) => {
 
 test('listSessions ignores non-.json files', (t) => {
   const id = 'list-test-id';
-  writeSessionMap(id, { Phone_1: '555-1234' });
+  writeSessionMap(id, { '«Phone_1»': '555-1234' });
 
   const sessionsDir = path.join(tmpConfigDir, 'prompt-scrub', 'sessions');
   // Create some junk files
@@ -129,10 +129,10 @@ test('listSessions returns sessions sorted by most recently modified', async (t)
   const id1 = 'sort-test-1';
   const id2 = 'sort-test-2';
 
-  writeSessionMap(id1, { Email_1: 'a@b.com' });
+  writeSessionMap(id1, { '«Email_1»': 'a@b.com' });
   // Need a small delay so mtime is strictly greater
   await new Promise((r) => setTimeout(r, 10));
-  writeSessionMap(id2, { Email_1: 'c@d.com' });
+  writeSessionMap(id2, { '«Email_1»': 'c@d.com' });
 
   const sessions = listSessions();
   // Filter out other tests' sessions
@@ -241,7 +241,7 @@ test('writeSessionMap failure path handles unlinkSync error', (t) => {
   console.error = () => {};
 
   t.throws(() => {
-    writeSessionMap(id, { Email_1: 'fail@test.com' });
+    writeSessionMap(id, { '«Email_1»': 'fail@test.com' });
   });
 
   console.error = originalError;
@@ -253,7 +253,7 @@ test('readSessionMap fails to rename corrupt file gracefully', (t) => {
   const filePath = getSessionStoragePath(id);
   const dirPath = path.dirname(filePath);
 
-  writeSessionMap(id, { Secret_1: 'sk-1234' });
+  writeSessionMap(id, { '«Secret_1»': 'sk-1234' });
   fs.writeFileSync(filePath, '{ bad json', 'utf-8');
 
   fs.chmodSync(dirPath, 0o555); // Read-only directory prevents rename

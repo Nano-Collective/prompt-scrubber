@@ -21,15 +21,13 @@ export function readSessionMap(sessionId: string): SessionMap {
   try {
     const data = fs.readFileSync(filePath, 'utf-8');
     return JSON.parse(data) as SessionMap;
-  } catch (error) {
-    console.error(`Error reading session map for ID ${sessionId}: ${(error as Error).message}`);
+  } catch {
     if (fs.existsSync(filePath)) {
       const corruptPath = `${filePath}.corrupt-${Date.now()}`;
       try {
         fs.renameSync(filePath, corruptPath);
-        console.warn(`Renamed corrupt session map to ${corruptPath}`);
-      } catch (renameError) {
-        console.error(`Failed to rename corrupt session map:`, renameError);
+      } catch {
+        // Best-effort quarantine; ignore rename failure.
       }
     }
     return {};
@@ -52,7 +50,6 @@ export function writeSessionMap(sessionId: string, map: SessionMap): void {
     fs.writeFileSync(tmpPath, JSON.stringify(map, null, 2), { encoding: 'utf-8', mode: 0o600 });
     fs.renameSync(tmpPath, filePath);
   } catch (error) {
-    console.error(`Error writing session map for ID ${sessionId}:`, error);
     if (fs.existsSync(tmpPath)) {
       try {
         fs.unlinkSync(tmpPath);
@@ -71,8 +68,7 @@ export function deleteSessionMap(sessionId: string): boolean {
     try {
       fs.unlinkSync(filePath);
       return true;
-    } catch (error) {
-      console.error(`Error deleting session map for ID ${sessionId}:`, error);
+    } catch {
       return false;
     }
   }

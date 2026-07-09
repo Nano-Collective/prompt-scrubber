@@ -1,9 +1,31 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import test from 'ava';
 import { handleScrub } from '../../src/cli/commands/scrub.js';
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const tmpConfigDir = path.join(__dirname, '.tmp-config-cli-scrub');
+
+test.before(() => {
+  // Isolate session storage to a temp dir so tests never touch the user's real
+  // config dir. PROMPT_SCRUB_CONFIG_DIR is honored on every platform.
+  process.env.PROMPT_SCRUB_CONFIG_DIR = tmpConfigDir;
+  if (fs.existsSync(tmpConfigDir)) {
+    fs.rmSync(tmpConfigDir, { recursive: true, force: true });
+  }
+});
+
+test.after.always(() => {
+  if (fs.existsSync(tmpConfigDir)) {
+    fs.rmSync(tmpConfigDir, { recursive: true, force: true });
+  }
+});
+
 test('handleScrub processes text and returns result', async (t) => {
   const result = await handleScrub('My email is test@example.com', {});
-  t.is(result.scrubbedContent, 'My email is Email_1');
+  t.is(result.scrubbedContent, 'My email is «Email_1»');
   t.truthy(result.sessionId);
 });
 
@@ -24,7 +46,7 @@ test('handleScrub respects enabled detectors', async (t) => {
   const result = await handleScrub('say hello to Alice.', {
     enable: 'NameDetector',
   });
-  t.is(result.scrubbedContent, 'say hello to Name_1.');
+  t.is(result.scrubbedContent, 'say hello to «Name_1».');
 });
 
 test('handleScrub respects strictName option', async (t) => {
@@ -40,7 +62,7 @@ test('handleScrub respects codeTellTerms', async (t) => {
   const result = await handleScrub('const myVar = 1;', {
     codeTellTerms: 'myVar, otherVar',
   });
-  t.is(result.scrubbedContent, 'const CodeTell_1 = 1;');
+  t.is(result.scrubbedContent, 'const «CodeTell_1» = 1;');
 });
 
 import { Command } from 'commander';

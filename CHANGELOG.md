@@ -1,3 +1,15 @@
+# 1.0.1
+
+Refactor to a stateless API and hardening for TUI/agent consumers (e.g. nanocoder). Highlights:
+
+- **Stateless map-passing API** — `scrub()` and `rehydrate()` now accept an optional `sessionMap`, and `scrub()` returns the placeholder→value map. Callers can drive the whole scrub/rehydrate lifecycle from an in-memory map with no hidden global disk state and no session-id lifecycle. The existing session-id/on-disk mode still works. The provided `sessionMap` is mutated in place (and returned as `result.sessionMap`, the same reference), so callers may rely on either.
+- **New placeholder format** — placeholders are now delimited as `«Email_1»` instead of `Email_1`, to avoid collisions with genuine code identifiers a model might emit and to survive model reproduction more reliably. Note: session maps written by 1.0.0 (bare `Email_1`) will not rehydrate against 1.0.1-scrubbed content; callers using the stateless map API are unaffected.
+- **No more library logging** — removed all `console.warn`/`console.error` from session storage and rule-pack loading. A library writing to stdout/stderr corrupts Ink/TUI rendering in consumers; failures are now handled silently (best-effort) or surfaced via return values.
+- **Removed `cwd`-based config** — `loadConfig()` no longer reads `process.cwd()/package.json` for a `prompt-scrub` key. Reading config from an arbitrary working directory was surprising and risky; global config (`PROMPT_SCRUB_CONFIG_DIR`) is unchanged.
+- **Faster placeholder reuse** — reverse (value→placeholder) lookup is now O(1) instead of a linear scan per finding.
+- **Packaging** — added a `prepare` script so `file:`/git installs always build a fresh `dist` (prevents consumers from linking a stale build).
+- **Tests** — session-storage tests are now hermetic on every platform (use `PROMPT_SCRUB_CONFIG_DIR` rather than `XDG_CONFIG_HOME`, which only isolates on Linux), so they no longer read or write the user's real config directory.
+
 # 1.0.0
 
 First public release of `prompt-scrub` — a local-first utility that strips identifying content out of prompts and messages before they reach a cloud LLM, and rehydrates the model's response back to the original values locally.
