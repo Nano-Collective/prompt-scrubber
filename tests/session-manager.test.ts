@@ -120,7 +120,9 @@ test('rebuildCategoryCounts ignores invalid placeholders and handles out-of-orde
   const map = manager.getMap();
   map['«Email_2»'] = 'b@test.com';
   map['«Email_1»'] = 'a@test.com'; // out of order, triggers index < counts[category]
+  // biome-ignore lint/complexity/useLiteralKeys: arbitrary identifier-shaped test keys
   map['InvalidPlaceholder'] = 'invalid'; // triggers match == null
+  // biome-ignore lint/complexity/useLiteralKeys: arbitrary identifier-shaped test keys
   map['Email_'] = 'invalid2'; // triggers match == null
 
   manager.save();

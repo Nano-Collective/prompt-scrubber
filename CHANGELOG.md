@@ -1,3 +1,16 @@
+# 1.0.2
+
+Patch release — dev-dependency and CI maintenance only. No public-API or runtime changes.
+
+- **`@biomejs/biome`** — `^2.5.1` → `^2.5.2` (devDependency, via dependabot). Resolves the CLI/schema version warning at lint time (CLI `2.5.3` was reporting that the configured `2.5.1` schema was stale).
+- **`ava`** — `^5.3.1` → `^8.0.1` (devDependency, via dependabot). Bumps the test-runner major; no test-suite changes were needed.
+- **`knip`** — `^6.23.0` → `^6.25.0` (devDependency, via dependabot). No findings change.
+- **GitHub Actions** — bumps via dependabot:
+  - `actions/checkout` `4` → `7`
+  - `pnpm/action-setup` `4` → `6`
+  - `actions/setup-node` `4` → `6`
+  - `actions/github-script` `7` → `9`
+
 # 1.0.1
 
 Refactor to a stateless API and hardening for TUI/agent consumers (e.g. nanocoder). Highlights:

@@ -1,1 +1,29 @@
-[]
+[
+  {
+    "id": "8129ed87",
+    "title": "Add 1.0.2 entry to CHANGELOG.md",
+    "description": "Document biome 2.5.2 → 2.5.3, @types/node 26.1.0 → 26.0.1, tsx 4.23.0 → 4.22.4 under a new 1.0.2 heading",
+    "status": "completed",
+    "createdAt": "2026-07-09T22:09:17.213Z",
+    "updatedAt": "2026-07-09T22:09:17.213Z",
+    "completedAt": "2026-07-09T22:09:17.213Z"
+  },
+  {
+    "id": "e4cb50e3",
+    "title": "Bump version to 1.0.2 in package.json",
+    "description": "Update version field from 1.0.1 to 1.0.2",
+    "status": "completed",
+    "createdAt": "2026-07-09T22:09:17.213Z",
+    "updatedAt": "2026-07-09T22:09:17.213Z",
+    "completedAt": "2026-07-09T22:09:17.213Z"
+  },
+  {
+    "id": "b94eb6c4",
+    "title": "Verify pnpm test:all still passes",
+    "description": "Confirm nothing regressed after the edits",
+    "status": "completed",
+    "createdAt": "2026-07-09T22:09:17.213Z",
+    "updatedAt": "2026-07-09T22:09:17.213Z",
+    "completedAt": "2026-07-09T22:09:17.213Z"
+  }
+]
