@@ -12,7 +12,7 @@ test('formatInspectOutput formats findings and includes hash', async (t) => {
   const hash = computeHash('My email is test@example.com', findings);
   const output = formatInspectOutput(findings, hash);
   t.true(output.includes('test@example.com'));
-  t.true(output.includes('Email_1'));
+  t.true(output.includes('«Email_1»'));
   t.true(output.includes(`Hash: ${hash}`));
 });
 

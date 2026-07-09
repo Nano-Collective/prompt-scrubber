@@ -24,6 +24,7 @@ export interface Message {
 export interface ScrubRequest {
   content: string | Message[];
   sessionId?: string;
+  sessionMap?: Record<string, string>;
   options?: ScrubOptions;
 }
 
@@ -38,12 +39,14 @@ export interface ScrubOptions {
 
 export interface ScrubResult {
   scrubbedContent: string | Message[];
-  sessionId: string;
+  sessionId?: string;
+  sessionMap?: Record<string, string>;
 }
 
 export interface RehydrateRequest {
   content: string | Message[];
-  sessionId: string;
+  sessionId?: string;
+  sessionMap?: Record<string, string>;
 }
 
 export interface RehydrateResult {
