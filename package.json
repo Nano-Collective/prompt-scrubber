@@ -69,7 +69,7 @@
   "devDependencies": {
     "@ava/typescript": "^7.0.0",
     "@biomejs/biome": "^2.5.2",
-    "@types/node": "^26.0.0",
+    "@types/node": "^26.1.1",
     "ava": "^8.0.1",
     "c8": "^11.0.0",
     "knip": "^6.25.0",
