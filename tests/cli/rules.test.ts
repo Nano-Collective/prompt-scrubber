@@ -1,4 +1,4 @@
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'ava';
@@ -8,8 +8,10 @@ const __dirname = dirname(__filename);
 const CLI_BIN = join(__dirname, '../../src/cli/index.ts');
 
 function runRulesList(): string {
-  // Using tsx directly to run the CLI in tests without a build step
-  return execSync(`npx tsx ${CLI_BIN} rules list`, { encoding: 'utf8' });
+  // Use the local binary and an argument array so paths containing spaces are
+  // passed to Node unchanged.
+  const tsxBin = join(__dirname, '../../node_modules/.bin/tsx');
+  return execFileSync(tsxBin, [CLI_BIN, 'rules', 'list'], { encoding: 'utf8' });
 }
 
 test('CLI: rules list outputs header and built-in detectors', (t) => {

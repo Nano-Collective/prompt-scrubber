@@ -43,6 +43,16 @@ export interface ScrubResult {
   sessionMap?: Record<string, string>;
 }
 
+export interface InspectRequest {
+  content: string;
+  options?: ScrubOptions;
+}
+
+export interface InspectResult {
+  findings: Finding[];
+  categories: Record<string, number>;
+}
+
 export interface RehydrateRequest {
   content: string | Message[];
   sessionId?: string;
