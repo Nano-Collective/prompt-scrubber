@@ -42,6 +42,20 @@ const restored = rehydrate({
 // restored.warnings contains any placeholders hallucinated by the model
 ```
 
+### `inspect`
+
+Detects sensitive values without creating or loading a session. This is useful
+for preview steps in workflow tools and for reviewing what will be scrubbed.
+
+```typescript
+import { inspect } from '@nanocollective/prompt-scrub';
+
+const result = inspect({ content: 'Contact alice@example.com' });
+
+// result.categories: { Email: 1 }
+// result.findings contains the category, span, value, and placeholder prefix
+```
+
 ## Cache-Aware Determinism
 For a given session ID and input text, `scrub()` is **deterministic**. The system generates byte-identical output across repeated calls with the same map. This property is critical because it preserves provider prompt caching (which relies on exact prefix bytes).
 
@@ -68,16 +82,28 @@ export interface ScrubOptions {
 
 export interface ScrubResult {
   scrubbedContent: string | Message[];
-  sessionId: string;
+  sessionId?: string;
+  sessionMap?: Record<string, string>;
+}
+
+export interface InspectRequest {
+  content: string;
+  options?: ScrubOptions;
+}
+
+export interface InspectResult {
+  findings: Finding[];
+  categories: Record<string, number>;
 }
 
 export interface RehydrateRequest {
-  content: string;
-  sessionId: string;
+  content: string | Message[];
+  sessionId?: string;
+  sessionMap?: Record<string, string>;
 }
 
 export interface RehydrateResult {
-  content: string;
+  content: string | Message[];
   warnings?: string[]; // Populated if the model invents a placeholder not in the session map
 }
 ```

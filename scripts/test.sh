@@ -13,6 +13,9 @@ pnpm run test:lint
 echo "--- test:ava ---"
 pnpm run test:ava
 
+echo "--- test:n8n ---"
+pnpm run test:n8n
+
 echo "--- test:knip ---"
 pnpm run test:knip
 

@@ -1,10 +1,9 @@
 import * as crypto from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import type { Command } from 'commander';
-import { resolveCollisions } from '../../core/collision-resolver.js';
 import { loadConfig } from '../../core/config.js';
+import { inspect } from '../../core/inspect.js';
 import { loadConfiguredRulePacks } from '../../core/rule-packs.js';
-import { getActiveDetectors } from '../../core/scrub.js';
 import { SessionManager } from '../../session/session-manager.js';
 import type { Finding } from '../../types/index.js';
 
@@ -33,19 +32,19 @@ export async function handleInspect(
 
   const { detectors: rulePackDetectors } = await loadConfiguredRulePacks();
 
-  const detectors = getActiveDetectors({
-    disabledDetectors,
-    enabledDetectors,
-    ...(options.strictName !== undefined ? { strictNameDetector: options.strictName } : {}),
-    ...(codeTellTerms !== undefined ? { codeTellTerms } : {}),
-    ...(urlAllowlist.length > 0 ? { urlAllowlist } : {}),
-    customDetectors: rulePackDetectors,
+  const result = inspect({
+    content: text,
+    options: {
+      disabledDetectors,
+      enabledDetectors,
+      ...(options.strictName !== undefined ? { strictNameDetector: options.strictName } : {}),
+      ...(codeTellTerms !== undefined ? { codeTellTerms } : {}),
+      ...(urlAllowlist.length > 0 ? { urlAllowlist } : {}),
+      customDetectors: rulePackDetectors,
+    },
   });
 
-  const allFindings = detectors.flatMap((d) => d.detect(text));
-  const findings = resolveCollisions(allFindings);
-
-  return findings;
+  return result.findings;
 }
 
 export function computeHash(text: string, findings: Finding[]): string {

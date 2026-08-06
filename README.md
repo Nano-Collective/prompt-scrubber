@@ -49,6 +49,16 @@ Or install as a dependency in your Node.js project:
 npm install @nanocollective/prompt-scrub
 ```
 
+For n8n workflows, install the companion community node package:
+
+```bash
+npm install n8n-nodes-prompt-scrub
+```
+
+The node provides Inspect, Scrub, Scrub selected fields, and Rehydrate
+operations. See the [n8n integration guide](docs/integrations/n8n.md) for the
+recommended workflow and session-handling precautions.
+
 ### Recommended: Inspect first
 
 Before scrubbing, run `inspect` on a real prompt to review what the tool detected before sending your prompt:

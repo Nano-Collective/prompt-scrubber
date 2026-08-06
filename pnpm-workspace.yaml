@@ -1,5 +1,7 @@
 packages:
   - "."
+  - "packages/*"
 allowBuilds:
   esbuild: true
+  isolated-vm: false
 auditConfig: { ignoreGhsas: null }

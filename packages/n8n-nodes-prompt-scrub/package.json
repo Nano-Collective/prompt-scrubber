@@ -1,0 +1,67 @@
+{
+  "name": "n8n-nodes-prompt-scrub",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "n8n community node for inspecting, scrubbing, and rehydrating sensitive workflow data locally.",
+  "keywords": [
+    "n8n-community-node-package",
+    "n8n",
+    "prompt-scrub",
+    "privacy",
+    "pii",
+    "llm"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "homepage": "https://github.com/Nano-Collective/prompt-scrubber",
+  "author": "Nano Collective",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Nano-Collective/prompt-scrubber.git"
+  },
+  "main": "index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs",
+    "dev": "tsc -p tsconfig.json --watch",
+    "test": "ava",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepublishOnly": "pnpm run build"
+  },
+  "files": [
+    "dist"
+  ],
+  "n8n": {
+    "n8nNodesApiVersion": 1,
+    "nodes": [
+      "dist/nodes/PromptScrub/PromptScrub.node.js"
+    ]
+  },
+  "ava": {
+    "extensions": [
+      "ts"
+    ],
+    "nodeArguments": [
+      "--no-warnings",
+      "--import=tsx"
+    ],
+    "workerThreads": false,
+    "files": [
+      "test/**/*.test.ts"
+    ]
+  },
+  "dependencies": {
+    "@nanocollective/prompt-scrub": "workspace:*"
+  },
+  "peerDependencies": {
+    "n8n-workflow": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "ava": "^8.0.1",
+    "n8n-workflow": "^2.16.0",
+    "tsx": "^4.23.1",
+    "typescript": "^7.0.2"
+  }
+}

@@ -13,3 +13,4 @@ Welcome! In this section, you will learn how to set up `prompt-scrub` for your p
 - [CLI Reference](cli.md): Learn how to use the `prompt-scrub` command-line tool.
 - [API Reference](api.md): Use `prompt-scrub` as a library in your Node.js application.
 - [Examples](examples.md): See real-world examples of how to use the tool.
+- [n8n Integration](../integrations/n8n.md): Add a privacy step to an n8n workflow.
