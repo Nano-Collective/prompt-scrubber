@@ -4,18 +4,9 @@ import type { Detector, Finding } from '../types/index.js';
 // e.g., "Alice", "John Doe", "San Francisco"
 const NAME_REGEX = /\b[A-Z][a-z]+(?: [A-Z][a-z]+)*\b/g;
 
-// A small built-in allowlist for strict mode covering common first names, countries,
-// languages, and widely recognized product names.
+// A small built-in allowlist for strict mode covering countries, languages,
+// and widely recognized product names.
 const ALLOWLIST = new Set([
-  // Common first names
-  'john',
-  'jane',
-  'michael',
-  'sarah',
-  'david',
-  'emily',
-  'james',
-  'jessica',
   // Countries
   'united states',
   'canada',
