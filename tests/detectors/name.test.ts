@@ -35,9 +35,10 @@ test('detects multiple names', (t) => {
 
 // --- Strict Mode Cases ---
 
-test('strict mode skips allowlisted first names', (t) => {
-  const findings = strictDetector.detect('John went to the store with Jane.');
-  t.is(findings.length, 0); // John and Jane are allowlisted
+test('strict mode detects common first names', (t) => {
+  const findings = strictDetector.detect('John Doe works at Google.');
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, 'John Doe');
 });
 
 test('strict mode skips allowlisted countries and languages', (t) => {
