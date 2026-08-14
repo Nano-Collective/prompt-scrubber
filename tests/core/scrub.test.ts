@@ -192,7 +192,7 @@ test('NameDetector works when explicitly enabled', (t) => {
 });
 
 test('NameDetector works in strict mode', (t) => {
-  // 'John' and 'London' (not in allowlist) vs allowlisted 'France'
+  // Names are detected while allowlisted countries are left unchanged.
   const text = 'John visited France and London.';
   const scrubbed = scrub({
     content: text,
@@ -202,9 +202,7 @@ test('NameDetector works in strict mode', (t) => {
     },
   });
 
-  // France is allowlisted, John is allowlisted (wait, 'John' is in allowlist!).
-  // London is not allowlisted.
-  t.is(scrubbed.scrubbedContent, 'John visited France and «Name_1».');
+  t.is(scrubbed.scrubbedContent, '«Name_1» visited France and «Name_2».');
 });
 
 test('NameDetector round-trips correctly', (t) => {
