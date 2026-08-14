@@ -125,6 +125,48 @@ test('no disk write when nothing is scrubbed', (t) => {
   t.is(sessionsBefore, sessionsAfter);
 });
 
+test.serial('explicit undefined sessionMap warns before using disk storage', (t) => {
+  const sessionId = 'explicit-undefined-contract';
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (...args: unknown[]) => warnings.push(args.map(String).join(' '));
+
+  try {
+    scrub({
+      content: 'My email is omitted@example.com',
+      sessionId: 'omitted-map-contract',
+    });
+    t.deepEqual(warnings, []);
+
+    scrub({
+      content: 'My email is explicit@example.com',
+      sessionId,
+      sessionMap: undefined,
+    } as unknown as Parameters<typeof scrub>[0]);
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  t.deepEqual(warnings, [
+    'sessionMap was explicitly set to undefined; scrub() will use disk-backed session storage. Omit sessionMap for disk mode or pass {} for stateless mode.',
+  ]);
+  t.true(fs.existsSync(path.join(tmpConfigDir, 'sessions', `${sessionId}.json`)));
+});
+
+test('an empty sessionMap uses stateless mode without writing to disk', (t) => {
+  const sessionId = 'empty-map-stateless';
+  const sessionMap: Record<string, string> = {};
+  const result = scrub({
+    content: 'My email is stateless@example.com',
+    sessionId,
+    sessionMap,
+  });
+
+  t.is(result.sessionMap, sessionMap);
+  t.deepEqual(sessionMap, { '«Email_1»': 'stateless@example.com' });
+  t.false(fs.existsSync(path.join(tmpConfigDir, 'sessions', `${sessionId}.json`)));
+});
+
 // --- Message[] Input ---
 
 test('Message[] input: scrubs each message independently and preserves structure', (t) => {

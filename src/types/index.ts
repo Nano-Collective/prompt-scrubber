@@ -24,7 +24,12 @@ export interface Message {
 export interface ScrubRequest {
   content: string | Message[];
   sessionId?: string;
-  sessionMap?: Record<string, string>;
+  /**
+   * Providing a map, including an empty object, enables stateless mode and
+   * prevents disk I/O. Omit this property for disk-backed sessions. Explicit
+   * `undefined` is treated as omission at runtime and emits a warning.
+   */
+  sessionMap?: SessionMap;
   options?: ScrubOptions;
 }
 
@@ -40,7 +45,7 @@ export interface ScrubOptions {
 export interface ScrubResult {
   scrubbedContent: string | Message[];
   sessionId?: string;
-  sessionMap?: Record<string, string>;
+  sessionMap?: SessionMap;
 }
 
 export interface RehydrateRequest {

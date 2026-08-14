@@ -19,6 +19,9 @@ const DEFAULT_DETECTORS: Detector[] = [
   new PostalAddressDetector(),
 ];
 
+const EXPLICIT_UNDEFINED_SESSION_MAP_WARNING =
+  'sessionMap was explicitly set to undefined; scrub() will use disk-backed session storage. Omit sessionMap for disk mode or pass {} for stateless mode.';
+
 /**
  * Scrubs a single string, returning the scrubbed text.
  * All replacements are recorded in the provided SessionManager.
@@ -101,6 +104,10 @@ export function getActiveDetectors(options?: ScrubRequest['options']): Detector[
  */
 export function scrub(request: ScrubRequest): ScrubResult {
   const { content, sessionId, sessionMap, options } = request;
+
+  if (Object.hasOwn(request, 'sessionMap') && sessionMap === undefined) {
+    console.warn(EXPLICIT_UNDEFINED_SESSION_MAP_WARNING);
+  }
 
   const session = new SessionManager(sessionId, sessionMap);
   const detectors = getActiveDetectors(options);
