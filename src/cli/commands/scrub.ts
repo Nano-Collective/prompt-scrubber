@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import type { Command } from 'commander';
 import { loadConfig } from '../../core/config.js';
+import { getEncryptionKey } from '../../core/key-manager.js';
+import { isSessionEncryptedSync } from '../../session/storage.js';
 
 import { loadConfiguredRulePacks } from '../../core/rule-packs.js';
 import { scrub } from '../../core/scrub.js';
@@ -95,6 +97,20 @@ export function setupScrubCommand(program: Command) {
       if (!input) {
         process.exit(0);
         return;
+      }
+
+      const config = loadConfig();
+      if (
+        config.encryptionEnabled ||
+        (options.sessionId && isSessionEncryptedSync(options.sessionId))
+      ) {
+        try {
+          await getEncryptionKey();
+        } catch (err: any) {
+          console.error(err.message);
+          process.exit(1);
+          return;
+        }
       }
 
       const result = await handleScrub(input, options);

@@ -5,6 +5,7 @@ import * as path from 'node:path';
 export interface PromptScrubConfig {
   rulePacks?: string[];
   urlAllowlist?: string[];
+  encryptionEnabled?: boolean;
 }
 
 /**
@@ -63,6 +64,9 @@ export function loadConfig(): PromptScrubConfig {
         for (const host of globalData.urlAllowlist) {
           if (typeof host === 'string') urlAllowlist.add(host);
         }
+      }
+      if (typeof globalData?.encryptionEnabled === 'boolean') {
+        config.encryptionEnabled = globalData.encryptionEnabled;
       }
     } catch (_e) {
       // Ignore global config read/parse errors

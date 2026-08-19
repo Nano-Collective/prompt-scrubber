@@ -1,12 +1,31 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { getConfigDir } from '../core/config.js';
+import { getConfigDir, loadConfig } from '../core/config.js';
+import { decryptSession, encryptSession, isEncryptedEnvelope } from '../core/crypto.js';
+import { getCachedKey } from '../core/key-manager.js';
 import type { SessionMap } from '../types/index.js';
 /**
  * Gets the file path for a specific session ID.
  */
 export function getSessionStoragePath(sessionId: string): string {
   return path.join(getConfigDir(), 'sessions', `${sessionId}.json`);
+}
+
+/**
+ * Checks if a session map is encrypted without attempting to parse the full map.
+ */
+export function isSessionEncryptedSync(sessionId: string): boolean {
+  const filePath = getSessionStoragePath(sessionId);
+  if (!fs.existsSync(filePath)) {
+    return false;
+  }
+  try {
+    const data = fs.readFileSync(filePath, 'utf-8');
+    const parsed = JSON.parse(data);
+    return isEncryptedEnvelope(parsed);
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -20,8 +39,28 @@ export function readSessionMap(sessionId: string): SessionMap {
 
   try {
     const data = fs.readFileSync(filePath, 'utf-8');
-    return JSON.parse(data) as SessionMap;
-  } catch {
+    const parsed = JSON.parse(data);
+
+    if (isEncryptedEnvelope(parsed)) {
+      const key = getCachedKey() || process.env.PROMPT_SCRUB_KEY;
+      if (!key) {
+        throw new Error(
+          'Session is encrypted but no key is available. Please resolve the key before reading the session.',
+        );
+      }
+      return decryptSession(parsed, key) as SessionMap;
+    }
+
+    return parsed as SessionMap;
+  } catch (err: any) {
+    if (
+      err.message &&
+      (err.message.includes('Unable to decrypt session') ||
+        err.message.includes('no key is available') ||
+        err.message.includes('Unsupported encryption'))
+    ) {
+      throw err;
+    }
     if (fs.existsSync(filePath)) {
       const corruptPath = `${filePath}.corrupt-${Date.now()}`;
       try {
@@ -47,7 +86,23 @@ export function writeSessionMap(sessionId: string, map: SessionMap): void {
   }
 
   try {
-    fs.writeFileSync(tmpPath, JSON.stringify(map, null, 2), { encoding: 'utf-8', mode: 0o600 });
+    const config = loadConfig();
+    let payload: string;
+
+    if (config.encryptionEnabled) {
+      const key = getCachedKey() || process.env.PROMPT_SCRUB_KEY;
+      if (!key) {
+        throw new Error(
+          'Encryption is enabled but no key is available. Please resolve the key before writing the session.',
+        );
+      }
+      const encrypted = encryptSession(map, key);
+      payload = JSON.stringify(encrypted, null, 2);
+    } else {
+      payload = JSON.stringify(map, null, 2);
+    }
+
+    fs.writeFileSync(tmpPath, payload, { encoding: 'utf-8', mode: 0o600 });
     fs.renameSync(tmpPath, filePath);
   } catch (error) {
     if (fs.existsSync(tmpPath)) {
