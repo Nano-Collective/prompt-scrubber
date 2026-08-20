@@ -14,6 +14,7 @@ export async function handleScrub(
     strictName?: boolean;
     codeTellTerms?: string;
     urlAllowlist?: string;
+    locale?: string;
   },
 ) {
   const disabledDetectors = options.disable ? options.disable.split(',').map((s) => s.trim()) : [];
@@ -28,6 +29,7 @@ export async function handleScrub(
 
   const config = loadConfig();
   const urlAllowlist = Array.from(new Set([...(config.urlAllowlist || []), ...cliUrlAllowlist]));
+  const locale = options.locale?.trim() || config.locale;
 
   const { detectors: rulePackDetectors } = await loadConfiguredRulePacks();
 
@@ -40,6 +42,7 @@ export async function handleScrub(
       ...(options.strictName !== undefined ? { strictNameDetector: options.strictName } : {}),
       ...(codeTellTerms !== undefined ? { codeTellTerms } : {}),
       ...(urlAllowlist.length > 0 ? { urlAllowlist } : {}),
+      ...(locale ? { locale } : {}),
       customDetectors: rulePackDetectors,
     },
   });
@@ -69,6 +72,10 @@ export function setupScrubCommand(program: Command) {
     .option(
       '--url-allowlist <hosts>',
       'Comma-separated list of hostnames to pass-through in URLs (subdomains are implicitly allowed)',
+    )
+    .option(
+      '--locale <locale>',
+      'BCP-47 locale (e.g. de-DE) enabling detectors scoped to that locale',
     )
     .action(async (file, options) => {
       let input = '';

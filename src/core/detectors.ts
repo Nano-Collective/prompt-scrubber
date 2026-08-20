@@ -2,6 +2,7 @@ export interface DetectorMetadata {
   name: string;
   source: string;
   defaultState: 'on' | 'off';
+  locales?: string[];
 }
 
 const BUILT_IN_DETECTORS: DetectorMetadata[] = [
@@ -15,6 +16,8 @@ const BUILT_IN_DETECTORS: DetectorMetadata[] = [
   { name: 'CodeTellDetector', source: 'built-in', defaultState: 'off' },
 ];
 
+import { loadConfig } from './config.js';
+import { matchesLocale } from './locale.js';
 import { loadConfiguredRulePacks } from './rule-packs.js';
 
 /**
@@ -23,5 +26,11 @@ import { loadConfiguredRulePacks } from './rule-packs.js';
  */
 export async function getAvailableDetectorsAsync(): Promise<DetectorMetadata[]> {
   const { metadata } = await loadConfiguredRulePacks();
-  return [...BUILT_IN_DETECTORS, ...metadata];
+  const { locale } = loadConfig();
+
+  return [...BUILT_IN_DETECTORS, ...metadata].map((detector) =>
+    detector.locales && detector.locales.length > 0
+      ? { ...detector, defaultState: matchesLocale(detector.locales, locale) ? 'on' : 'off' }
+      : detector,
+  );
 }
