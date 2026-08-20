@@ -1,5 +1,12 @@
 import type { Command } from 'commander';
-import { deleteSessionMap, listSessions, readSessionMap } from '../../session/storage.js';
+import { loadConfig } from '../../core/config.js';
+import { getEncryptionKey } from '../../core/key-manager.js';
+import {
+  deleteSessionMap,
+  isSessionEncryptedSync,
+  listSessions,
+  readSessionMap,
+} from '../../session/storage.js';
 
 export function setupSessionsCommands(program: Command) {
   const sessionsCommand = program.command('sessions').description('Manage scrub sessions');
@@ -7,11 +14,23 @@ export function setupSessionsCommands(program: Command) {
   sessionsCommand
     .command('list')
     .description('List all saved sessions')
-    .action(() => {
+    .action(async () => {
       const sessions = listSessions();
       if (sessions.length === 0) {
         console.log('No saved sessions.');
         return;
+      }
+
+      const config = loadConfig();
+      const hasEncrypted = sessions.some((s) => isSessionEncryptedSync(s.id));
+      if (config.encryptionEnabled || hasEncrypted) {
+        try {
+          await getEncryptionKey();
+        } catch (err: any) {
+          console.error(err.message);
+          process.exit(1);
+          return;
+        }
       }
 
       console.log(`${'ID'.padEnd(40)} | ${'Created'.padEnd(25)} | Placeholders`);
@@ -31,7 +50,18 @@ export function setupSessionsCommands(program: Command) {
     .command('show')
     .description('Show the placeholder map for a session')
     .argument('<id>', 'Session ID to show')
-    .action((id) => {
+    .action(async (id) => {
+      const config = loadConfig();
+      if (config.encryptionEnabled || isSessionEncryptedSync(id)) {
+        try {
+          await getEncryptionKey();
+        } catch (err: any) {
+          console.error(err.message);
+          process.exit(1);
+          return;
+        }
+      }
+
       // listSessions to check existence (or just read and see if it's empty)
       const map = readSessionMap(id);
       if (Object.keys(map).length === 0) {

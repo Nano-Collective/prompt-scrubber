@@ -78,6 +78,19 @@ echo "My email is user@example.com" | prompt-scrub scrub
 # Output: My email is Email_1
 ```
 
+**CLI: Scrubbing text securely with Encryption**
+You can encrypt your local session files at rest to protect sensitive scrubbed data. Enable it in your `~/.config/prompt-scrub/config.json`:
+```json
+{
+  "encryptionEnabled": true
+}
+```
+Then pass your passphrase when piping via `PROMPT_SCRUB_KEY`:
+```bash
+echo "My key is sk-1234567890abcdefghij" | PROMPT_SCRUB_KEY=mysecret prompt-scrub scrub
+```
+*(If you run it without piping, it will interactively prompt you securely).*
+
 **Node.js API: Scrubbing and Rehydrating**
 ```typescript
 import { scrub, rehydrate } from '@nanocollective/prompt-scrub';

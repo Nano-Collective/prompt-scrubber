@@ -1,5 +1,7 @@
 import { readFileSync } from 'node:fs';
 import type { Command } from 'commander';
+import { getEncryptionKey } from '../../core/key-manager.js';
+import { isSessionEncryptedSync } from '../../session/storage.js';
 import { rehydrate } from '../../core/rehydrate.js';
 
 export function handleRehydrate(text: string, options: { sessionId: string }) {
@@ -16,7 +18,7 @@ export function setupRehydrateCommand(program: Command) {
     .description('Rehydrate a file using stored session')
     .argument('[file]', 'File to rehydrate. If omitted, reads from stdin.')
     .requiredOption('--session-id <id>', 'Resume or target a specific session')
-    .action((file, options) => {
+    .action(async (file, options) => {
       let input = '';
 
       if (file) {
@@ -41,6 +43,16 @@ export function setupRehydrateCommand(program: Command) {
       if (!input) {
         process.exit(0);
         return;
+      }
+
+      if (isSessionEncryptedSync(options.sessionId)) {
+        try {
+          await getEncryptionKey();
+        } catch (err: any) {
+          console.error(err.message);
+          process.exit(1);
+          return;
+        }
       }
 
       const result = handleRehydrate(input, options);

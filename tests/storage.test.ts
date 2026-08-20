@@ -271,3 +271,60 @@ test('readSessionMap fails to rename corrupt file gracefully', (t) => {
   t.deepEqual(readMap, {});
   fs.chmodSync(dirPath, 0o777); // Restore to allow cleanup
 });
+
+test('writeSessionMap encrypts when enabled and decrypts successfully', (t) => {
+  const id = 'encrypted-test-1';
+  const map = { '«Secret_1»': 'sk-1234' };
+
+  // Enable encryption and set key
+  const originalEnv = process.env.PROMPT_SCRUB_KEY;
+  process.env.PROMPT_SCRUB_KEY = 'test-key';
+
+  // Mock loadConfig to return encryptionEnabled = true
+  const globalConfigPath = path.join(tmpConfigDir, 'prompt-scrub', 'config.json');
+  fs.mkdirSync(path.dirname(globalConfigPath), { recursive: true });
+  fs.writeFileSync(globalConfigPath, JSON.stringify({ encryptionEnabled: true }));
+
+  writeSessionMap(id, map);
+
+  // Verify it's encrypted on disk
+  const rawData = fs.readFileSync(getSessionStoragePath(id), 'utf-8');
+  const parsed = JSON.parse(rawData);
+  t.true(parsed.encrypted === true);
+  t.false(Object.keys(parsed).includes('«Secret_1»')); // should not contain plaintext
+
+  // Read back
+  const readMap = readSessionMap(id);
+  t.deepEqual(readMap, map);
+
+  // Cleanup
+  process.env.PROMPT_SCRUB_KEY = originalEnv;
+  fs.rmSync(globalConfigPath);
+});
+
+test('readSessionMap fails to decrypt if key is wrong or missing', (t) => {
+  const id = 'encrypted-test-2';
+  const map = { '«Secret_1»': 'sk-1234' };
+
+  process.env.PROMPT_SCRUB_KEY = 'test-key';
+  const globalConfigPath = path.join(tmpConfigDir, 'prompt-scrub', 'config.json');
+  fs.writeFileSync(globalConfigPath, JSON.stringify({ encryptionEnabled: true }));
+
+  writeSessionMap(id, map);
+
+  // Now remove key
+  delete process.env.PROMPT_SCRUB_KEY;
+
+  t.throws(() => readSessionMap(id), {
+    message: /no key is available/,
+  });
+
+  // Try wrong key
+  process.env.PROMPT_SCRUB_KEY = 'wrong-key';
+
+  t.throws(() => readSessionMap(id), {
+    message: /Unable to decrypt session/,
+  });
+
+  fs.rmSync(globalConfigPath);
+});
