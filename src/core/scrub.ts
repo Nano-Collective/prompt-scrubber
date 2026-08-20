@@ -7,8 +7,9 @@ import { PostalAddressDetector } from '../detectors/postal-address.js';
 import { SecretDetector } from '../detectors/secret.js';
 import { UrlDetector } from '../detectors/url.js';
 import { SessionManager } from '../session/session-manager.js';
-import type { Detector, Message, ScrubRequest, ScrubResult } from '../types/index.js';
+import type { Detector, Finding, Message, ScrubRequest, ScrubResult } from '../types/index.js';
 import { resolveCollisions } from './collision-resolver.js';
+import { matchesLocale } from './locale.js';
 
 const DEFAULT_DETECTORS: Detector[] = [
   new SecretDetector(),
@@ -24,11 +25,7 @@ const DEFAULT_DETECTORS: Detector[] = [
  * All replacements are recorded in the provided SessionManager.
  */
 function scrubString(text: string, detectors: Detector[], session: SessionManager): string {
-  // Run all detectors and flatten results
-  const allFindings = detectors.flatMap((d) => d.detect(text));
-
-  // Resolve overlaps using the priority-based collision resolver
-  const findings = resolveCollisions(allFindings);
+  const findings = detectFindings(text, detectors);
 
   if (findings.length === 0) {
     return text;
@@ -42,6 +39,23 @@ function scrubString(text: string, detectors: Detector[], session: SessionManage
   }
 
   return result;
+}
+
+export function detectFindings(text: string, detectors: Detector[]): Finding[] {
+  const allFindings: Finding[] = [];
+  const localeScoped = new Set<Finding>();
+
+  for (const detector of detectors) {
+    const found = detector.detect(text);
+    if (detector.locales && detector.locales.length > 0) {
+      for (const finding of found) {
+        localeScoped.add(finding);
+      }
+    }
+    allFindings.push(...found);
+  }
+
+  return resolveCollisions(allFindings, localeScoped);
 }
 
 export function getActiveDetectors(options?: ScrubRequest['options']): Detector[] {
@@ -86,7 +100,9 @@ export function getActiveDetectors(options?: ScrubRequest['options']): Detector[
     detectors.push(...options.customDetectors);
   }
 
-  return detectors;
+  return detectors.filter(
+    (d) => !d.locales || d.locales.length === 0 || matchesLocale(d.locales, options?.locale),
+  );
 }
 
 /**

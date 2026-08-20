@@ -1,10 +1,12 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { LOCALE_PATTERN } from './locale.js';
 
 export interface PromptScrubConfig {
   rulePacks?: string[];
   urlAllowlist?: string[];
+  locale?: string;
 }
 
 export interface ConfigFileState {
@@ -18,10 +20,12 @@ export function createDefaultConfig(): Required<PromptScrubConfig> {
   return {
     rulePacks: [],
     urlAllowlist: [],
+    locale: '',
   };
 }
 
-const CONFIG_KEYS = Object.keys(createDefaultConfig());
+const CONFIG_SCHEMA = createDefaultConfig();
+const CONFIG_KEYS = Object.keys(CONFIG_SCHEMA);
 
 /**
  * Determines the base configuration directory based on the OS.
@@ -67,6 +71,12 @@ function toStringArray(value: unknown): string[] {
   return Array.from(new Set(value.filter((item): item is string => typeof item === 'string')));
 }
 
+function toLocale(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  return LOCALE_PATTERN.test(trimmed) ? trimmed : '';
+}
+
 function validateConfig(data: unknown): string[] {
   if (data === null || typeof data !== 'object' || Array.isArray(data)) {
     return [`Expected a JSON object, received ${describeType(data)}.`];
@@ -85,7 +95,17 @@ function validateConfig(data: unknown): string[] {
     const value = record[key];
     if (value === undefined) continue;
 
-    if (!Array.isArray(value)) {
+    if (!Array.isArray(CONFIG_SCHEMA[key as keyof PromptScrubConfig])) {
+      if (typeof value !== 'string') {
+        errors.push(`"${key}" must be a string, received ${describeType(value)}.`);
+      } else if (
+        key === 'locale' &&
+        value.trim().length > 0 &&
+        !LOCALE_PATTERN.test(value.trim())
+      ) {
+        errors.push(`"locale" must be a BCP-47 language tag (e.g. "de-DE"), received "${value}".`);
+      }
+    } else if (!Array.isArray(value)) {
       errors.push(`"${key}" must be an array of strings, received ${describeType(value)}.`);
     } else if (value.some((item) => typeof item !== 'string')) {
       errors.push(`"${key}" must contain only strings.`);
@@ -125,6 +145,7 @@ export function readConfigFile(): ConfigFileState {
     config: {
       rulePacks: toStringArray(record.rulePacks),
       urlAllowlist: toStringArray(record.urlAllowlist),
+      locale: toLocale(record.locale),
     },
   };
 }

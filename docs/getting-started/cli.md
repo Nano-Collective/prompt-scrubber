@@ -16,6 +16,7 @@ Reads a message from `stdin` or a file and prints the scrubbed message to `stdou
 **Options:**
 - `--session-id <id>`: Reuse an existing session map. If omitted, a new UUID is generated.
 - `--disable <detectors>`: Comma-separated list of detectors to disable (e.g. `EmailDetector,PhoneDetector`).
+- `--locale <locale>`: BCP-47 tag (e.g. `de-DE`) that activates detectors scoped to that locale. Overrides `locale` in the configuration file.
 
 ### `prompt-scrub rehydrate [file]`
 Reads a scrubbed response from `stdin` or a file and prints the rehydrated response to `stdout`.
@@ -31,6 +32,7 @@ Reads a message from `stdin` or a file and prints a human-readable diff of the t
 
 **Options:**
 - `--disable <detectors>`: Comma-separated list of detectors to disable.
+- `--locale <locale>`: BCP-47 tag that activates detectors scoped to that locale.
 - `--hash`: Print *only* the SHA-256 hash for scripting purposes.
 
 ## Session Management
@@ -59,12 +61,14 @@ The generated file documents the supported schema:
 ```json
 {
   "rulePacks": [],
-  "urlAllowlist": []
+  "urlAllowlist": [],
+  "locale": ""
 }
 ```
 
 - `rulePacks`: npm package names to load extra detectors from. See [Authoring Rule Packs](../features/authoring-rule-packs.md).
 - `urlAllowlist`: hostnames the `UrlDetector` passes through unchanged. Subdomains are implicitly allowed.
+- `locale`: BCP-47 tag (e.g. `de-DE`) enabling locale-scoped detectors. Empty means English/locale-agnostic detection only.
 
 Fails if a config file already exists.
 
@@ -83,7 +87,8 @@ Config file: /home/alice/.config/prompt-scrub/config.json
   ],
   "urlAllowlist": [
     "example.com"
-  ]
+  ],
+  "locale": "de-DE"
 }
 ```
 
@@ -92,10 +97,11 @@ Entries that do not match the schema are reported on `stderr` and the command ex
 ```bash
 $ prompt-scrub config show
 Config file: /home/alice/.config/prompt-scrub/config.json
-  error: Unknown key "rulePaks". Supported keys: rulePacks, urlAllowlist.
+  error: Unknown key "rulePaks". Supported keys: rulePacks, urlAllowlist, locale.
 {
   "rulePacks": [],
-  "urlAllowlist": []
+  "urlAllowlist": [],
+  "locale": ""
 }
 Invalid entries are ignored at runtime.
 ```

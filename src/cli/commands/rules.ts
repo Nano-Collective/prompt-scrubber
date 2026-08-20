@@ -1,5 +1,9 @@
 import type { Command } from 'commander';
-import { getAvailableDetectorsAsync } from '../../core/detectors.js';
+import { type DetectorMetadata, getAvailableDetectorsAsync } from '../../core/detectors.js';
+
+function localesOf(detector: DetectorMetadata): string {
+  return detector.locales && detector.locales.length > 0 ? detector.locales.join(', ') : '-';
+}
 
 export function setupRulesCommands(program: Command) {
   const rulesCmd = program
@@ -21,6 +25,7 @@ export function setupRulesCommands(program: Command) {
       const maxNameLen = Math.max(...detectors.map((d) => d.name.length), 'Detector'.length);
       const maxSourceLen = Math.max(...detectors.map((d) => d.source.length), 'Source'.length);
       const defaultStateLen = 'Default State'.length;
+      const showLocales = detectors.some((d) => d.locales && d.locales.length > 0);
 
       // Print header
       console.log(
@@ -28,7 +33,7 @@ export function setupRulesCommands(program: Command) {
           '   ' +
           'Source'.padEnd(maxSourceLen) +
           '   ' +
-          'Default State',
+          (showLocales ? 'Default State   Locales' : 'Default State'),
       );
 
       console.log(
@@ -36,7 +41,8 @@ export function setupRulesCommands(program: Command) {
           '   ' +
           ''.padEnd(maxSourceLen, '-') +
           '   ' +
-          ''.padEnd(defaultStateLen, '-'),
+          ''.padEnd(defaultStateLen, '-') +
+          (showLocales ? `   ${''.padEnd('Locales'.length, '-')}` : ''),
       );
 
       // Print rows
@@ -46,7 +52,9 @@ export function setupRulesCommands(program: Command) {
             '   ' +
             d.source.padEnd(maxSourceLen) +
             '   ' +
-            d.defaultState,
+            (showLocales
+              ? `${d.defaultState.padEnd(defaultStateLen)}   ${localesOf(d)}`
+              : d.defaultState),
         );
       }
     });

@@ -94,3 +94,48 @@ test('handles unknown custom detector priority', (t) => {
   t.is(result.length, 1);
   t.is(result[0]?.category, 'UnknownDetectorB');
 });
+
+test('a preferred finding wins over a longer overlapping finding of the same category', (t) => {
+  const generic = makeFinding('Address', 0, 20, '10 Downing Street xyz');
+  const preferred = makeFinding('Address', 5, 15, 'Downing St');
+
+  const result = resolveCollisions([generic, preferred], new Set([preferred]));
+
+  t.is(result.length, 1);
+  t.is(result[0]?.value, 'Downing St');
+});
+
+test('a preferred finding still loses to a higher-priority detector', (t) => {
+  const secret = makeFinding('Secret', 0, 10);
+  const preferred = makeFinding('Address', 5, 20);
+
+  const result = resolveCollisions([secret, preferred], new Set([preferred]));
+
+  t.is(result.length, 1);
+  t.is(result[0]?.category, 'Secret');
+});
+
+test('a preferred finding beats a lower-priority overlapping finding', (t) => {
+  const name = makeFinding('Name', 0, 20);
+  const preferred = makeFinding('Address', 5, 10);
+
+  const result = resolveCollisions([name, preferred], new Set([preferred]));
+
+  t.is(result.length, 1);
+  t.is(result[0]?.category, 'Address');
+});
+
+test('an empty preferred set leaves resolution unchanged', (t) => {
+  const findings = [makeFinding('Address', 0, 20, 'long'), makeFinding('Address', 5, 15, 'short')];
+
+  t.deepEqual(resolveCollisions(findings, new Set()), resolveCollisions(findings));
+});
+
+test('preferred findings that do not overlap are all kept', (t) => {
+  const a = makeFinding('Address', 0, 10);
+  const b = makeFinding('Address', 20, 30);
+
+  const result = resolveCollisions([a, b], new Set([a, b]));
+
+  t.is(result.length, 2);
+});

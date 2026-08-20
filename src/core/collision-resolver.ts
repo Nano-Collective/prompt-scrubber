@@ -12,10 +12,13 @@ const DETECTOR_PRIORITY: Record<string, number> = {
   CodeTellDetector: 8,
 };
 
-function priorityOf(finding: Finding): number {
+const LOCALE_PRECEDENCE_BOOST = 0.5;
+
+function priorityOf(finding: Finding, preferred?: ReadonlySet<Finding>): number {
   // category maps to detector name (e.g. "Email" → "EmailDetector")
   const detectorName = `${finding.category}Detector`;
-  return DETECTOR_PRIORITY[detectorName] ?? 99;
+  const base = DETECTOR_PRIORITY[detectorName] ?? 99;
+  return preferred?.has(finding) ? base - LOCALE_PRECEDENCE_BOOST : base;
 }
 
 /**
@@ -27,7 +30,10 @@ function priorityOf(finding: Finding): number {
  *
  * Returns findings sorted by start position ascending.
  */
-export function resolveCollisions(findings: Finding[]): Finding[] {
+export function resolveCollisions(
+  findings: Finding[],
+  preferred?: ReadonlySet<Finding>,
+): Finding[] {
   // Sort by start position so we process left-to-right
   const sorted = [...findings].sort((a, b) => a.span[0] - b.span[0]);
 
@@ -43,8 +49,8 @@ export function resolveCollisions(findings: Finding[]): Finding[] {
       accepted.push(candidate);
     } else {
       const existing = accepted[overlapIdx]!;
-      const candidatePriority = priorityOf(candidate);
-      const existingPriority = priorityOf(existing);
+      const candidatePriority = priorityOf(candidate, preferred);
+      const existingPriority = priorityOf(existing, preferred);
 
       if (
         candidatePriority < existingPriority ||

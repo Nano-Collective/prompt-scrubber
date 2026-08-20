@@ -31,6 +31,7 @@ export interface Finding {
 
 export interface Detector {
   name: string; // A unique name for your detector
+  locales?: string[]; // Optional BCP-47 tags this detector applies to
   detect(text: string): Finding[];
 }
 ```
@@ -94,7 +95,8 @@ Let's build a rule pack that detects "Project X" codenames.
    ```json
    {
      "rulePacks": ["prompt-scrub-projectx"],
-     "urlAllowlist": []
+     "urlAllowlist": [],
+     "locale": ""
    }
    ```
 
@@ -109,9 +111,67 @@ Let's build a rule pack that detects "Project X" codenames.
    ProjectXDetector   rule-pack: prompt-scrub-projectx     on
    ```
 
+## Locale-Scoped Rule Packs
+
+The built-in detectors are shaped around English and US/UK formats, so locale-specific PII is best distributed as its own rule pack. A detector that declares `locales` only runs when the user has that locale active, which keeps the default path free of regexes nobody in that locale needs.
+
+```javascript
+class GermanAddressDetector {
+  constructor() {
+    this.name = 'AddressDeDetector';
+    this.locales = ['de-DE'];
+    this.regex = /[A-ZÄÖÜ][a-zäöüß]+(?:straße|str\.)\s+\d{1,4}/g;
+  }
+
+  detect(text) {
+    const findings = [];
+    let match;
+    this.regex.lastIndex = 0;
+
+    while ((match = this.regex.exec(text)) !== null) {
+      findings.push({
+        category: 'Address',
+        span: [match.index, match.index + match[0].length],
+        value: match[0],
+        placeholderPrefix: 'Address',
+      });
+    }
+
+    return findings;
+  }
+}
+```
+
+Users activate it per run or per machine:
+
+```bash
+$ prompt-scrub scrub --locale de-DE prompt.txt
+```
+
+```json
+{
+  "rulePacks": ["@nanocollective/prompt-scrub-locale-de"],
+  "locale": "de-DE"
+}
+```
+
+`--locale` overrides the configured `locale`. Matching is case-insensitive and works across subtag levels: a pack declaring `de` serves `de-DE` and `de-AT`, and a pack declaring `de-DE` is activated by a `de` request. A pack declaring `de-DE` is *not* activated by `de-AT`. Detectors that omit `locales` are locale-agnostic and always run.
+
+Declared locales show up in `prompt-scrub rules list`, alongside whether the active locale switches them on:
+
+```bash
+$ prompt-scrub rules list
+Detector            Source                                              Default State   Locales
+-----------------   -------------------------------------------------   -------------   -------
+SecretDetector      built-in                                            on              -
+...
+AddressDeDetector   rule-pack: @nanocollective/prompt-scrub-locale-de   on              de-DE
+```
+
 ## Priority and Collision Resolution
 
 Your custom detectors participate in the same collision resolution process as built-in detectors. If your custom detector flags text that overlaps with another finding, the `prompt-scrubber` engine will resolve the conflict:
 
 - **Overlap**: The longer span wins.
 - **Priority**: Custom detectors resolve alongside the default fallback priority. Currently, there is no mechanism to enforce a custom detector overriding `SecretDetector`. If a secret overlaps with your custom finding, the `SecretDetector` will always win to prevent accidental secret leakage.
+- **Locale precedence**: A finding from a locale-scoped detector outranks the generic built-in of the same category, so a locale pack can replace an English-biased match rather than losing to it. It does not override higher-priority detectors such as `SecretDetector`.

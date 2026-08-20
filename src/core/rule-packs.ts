@@ -47,6 +47,9 @@ export async function loadConfiguredRulePacks(): Promise<RulePackResult> {
               name: detector.name,
               source: `rule-pack: ${packName}`,
               defaultState: 'on',
+              ...(detector.locales && detector.locales.length > 0
+                ? { locales: detector.locales }
+                : {}),
             });
           }
         }
