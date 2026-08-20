@@ -1,5 +1,11 @@
 import type { Command } from 'commander';
-import { deleteSessionMap, listSessions, readSessionMap } from '../../session/storage.js';
+import {
+  deleteSessionMap,
+  listSessions,
+  readSessionMap,
+  gcSessions,
+} from '../../session/storage.js';
+import { loadConfig } from '../../core/config.js';
 
 export function setupSessionsCommands(program: Command) {
   const sessionsCommand = program.command('sessions').description('Manage scrub sessions');
@@ -8,6 +14,15 @@ export function setupSessionsCommands(program: Command) {
     .command('list')
     .description('List all saved sessions')
     .action(() => {
+      try {
+        const config = loadConfig();
+        if (config.sessionTtlDays) {
+          gcSessions(config.sessionTtlDays);
+        }
+      } catch (e) {
+        console.error(`Warning: Failed to run session garbage collection: ${(e as Error).message}`);
+      }
+
       const sessions = listSessions();
       if (sessions.length === 0) {
         console.log('No saved sessions.');
@@ -70,6 +85,24 @@ export function setupSessionsCommands(program: Command) {
         console.log(`Session ${id} deleted.`);
       } else {
         console.error(`Session ${id} not found.`);
+        process.exit(1);
+      }
+    });
+
+  sessionsCommand
+    .command('gc')
+    .description('Garbage collect expired sessions')
+    .action(() => {
+      try {
+        const config = loadConfig();
+        if (!config.sessionTtlDays) {
+          console.log('Session TTL is disabled or invalid in configuration.');
+          return;
+        }
+        const deletedCount = gcSessions(config.sessionTtlDays);
+        console.log(`Deleted ${deletedCount} expired session(s).`);
+      } catch (e) {
+        console.error(`Error: Failed to run session garbage collection: ${(e as Error).message}`);
         process.exit(1);
       }
     });

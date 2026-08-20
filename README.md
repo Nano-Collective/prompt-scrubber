@@ -95,6 +95,24 @@ const { content } = rehydrate({
 console.log(content); // "I see your key is sk-12345"
 ```
 
+## Session Management & Garbage Collection
+
+`prompt-scrub` maps sensitive data to placeholders and stores these mappings in session files (by default in `~/.config/prompt-scrub/sessions/`).
+
+To protect your privacy and save disk space, session files have a **Time-to-Live (TTL)**. By default, sessions that are older than **7 days** are automatically deleted when you run the `scrub` or `sessions list` commands. Active sessions (ones you interact with) will naturally have their TTL reset.
+
+You can also manually prune expired sessions:
+```bash
+prompt-scrub sessions gc
+```
+
+To configure the TTL, add `sessionTtlDays` to your `~/.config/prompt-scrub/config.json`:
+```json
+{
+  "sessionTtlDays": 14
+}
+```
+
 ## Documentation
 
 Full user guides and architecture details are in the [`docs/`](docs/) directory:

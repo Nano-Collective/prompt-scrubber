@@ -4,6 +4,7 @@ import { loadConfig } from '../../core/config.js';
 
 import { loadConfiguredRulePacks } from '../../core/rule-packs.js';
 import { scrub } from '../../core/scrub.js';
+import { gcSessions } from '../../session/storage.js';
 
 export async function handleScrub(
   text: string,
@@ -71,6 +72,17 @@ export function setupScrubCommand(program: Command) {
       'Comma-separated list of hostnames to pass-through in URLs (subdomains are implicitly allowed)',
     )
     .action(async (file, options) => {
+      // Attempt session GC before starting
+      try {
+        const config = loadConfig();
+        if (config.sessionTtlDays) {
+          gcSessions(config.sessionTtlDays);
+        }
+      } catch (e) {
+        // Log a warning if GC fails, but continue with scrub
+        console.error(`Warning: Failed to run session garbage collection: ${(e as Error).message}`);
+      }
+
       let input = '';
 
       if (file) {

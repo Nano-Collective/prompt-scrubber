@@ -5,6 +5,7 @@ import * as path from 'node:path';
 export interface PromptScrubConfig {
   rulePacks?: string[];
   urlAllowlist?: string[];
+  sessionTtlDays?: number;
 }
 
 /**
@@ -44,6 +45,7 @@ export function loadConfig(): PromptScrubConfig {
   const config: PromptScrubConfig = {
     rulePacks: [],
     urlAllowlist: [],
+    sessionTtlDays: 7,
   };
 
   const rulePacks = new Set<string>();
@@ -63,6 +65,13 @@ export function loadConfig(): PromptScrubConfig {
         for (const host of globalData.urlAllowlist) {
           if (typeof host === 'string') urlAllowlist.add(host);
         }
+      }
+      if (
+        typeof globalData?.sessionTtlDays === 'number' &&
+        Number.isFinite(globalData.sessionTtlDays) &&
+        globalData.sessionTtlDays > 0
+      ) {
+        config.sessionTtlDays = globalData.sessionTtlDays;
       }
     } catch (_e) {
       // Ignore global config read/parse errors

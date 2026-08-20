@@ -99,3 +99,30 @@ export function listSessions(): Array<{ id: string; sizeBytes: number; createdAt
     .sort((a, b) => b.mtimeMs - a.mtimeMs)
     .map(({ id, sizeBytes, createdAt }) => ({ id, sizeBytes, createdAt }));
 }
+
+/**
+ * Garbage collect sessions that are older than the specified TTL days.
+ */
+export function gcSessions(ttlDays: number): number {
+  if (ttlDays <= 0) return 0;
+
+  let deletedCount = 0;
+  const sessions = listSessions();
+  const now = Date.now();
+  const ttlMs = ttlDays * 24 * 60 * 60 * 1000;
+
+  for (const session of sessions) {
+    try {
+      const ageMs = now - session.createdAt.getTime();
+      if (ageMs >= ttlMs) {
+        if (deleteSessionMap(session.id)) {
+          deletedCount++;
+        }
+      }
+    } catch {
+      // Best-effort cleanup: ignore individual failures so other sessions can still be processed.
+    }
+  }
+
+  return deletedCount;
+}
