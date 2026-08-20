@@ -1,10 +1,9 @@
 import * as crypto from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import type { Command } from 'commander';
-import { resolveCollisions } from '../../core/collision-resolver.js';
 import { loadConfig } from '../../core/config.js';
 import { loadConfiguredRulePacks } from '../../core/rule-packs.js';
-import { getActiveDetectors } from '../../core/scrub.js';
+import { detectFindings, getActiveDetectors } from '../../core/scrub.js';
 import { SessionManager } from '../../session/session-manager.js';
 import type { Finding } from '../../types/index.js';
 
@@ -16,6 +15,7 @@ export async function handleInspect(
     strictName?: boolean;
     codeTellTerms?: string;
     urlAllowlist?: string;
+    locale?: string;
   },
 ) {
   const disabledDetectors = options.disable ? options.disable.split(',').map((s) => s.trim()) : [];
@@ -30,6 +30,7 @@ export async function handleInspect(
 
   const config = loadConfig();
   const urlAllowlist = Array.from(new Set([...(config.urlAllowlist || []), ...cliUrlAllowlist]));
+  const locale = options.locale?.trim() || config.locale;
 
   const { detectors: rulePackDetectors } = await loadConfiguredRulePacks();
 
@@ -39,13 +40,11 @@ export async function handleInspect(
     ...(options.strictName !== undefined ? { strictNameDetector: options.strictName } : {}),
     ...(codeTellTerms !== undefined ? { codeTellTerms } : {}),
     ...(urlAllowlist.length > 0 ? { urlAllowlist } : {}),
+    ...(locale ? { locale } : {}),
     customDetectors: rulePackDetectors,
   });
 
-  const allFindings = detectors.flatMap((d) => d.detect(text));
-  const findings = resolveCollisions(allFindings);
-
-  return findings;
+  return detectFindings(text, detectors);
 }
 
 export function computeHash(text: string, findings: Finding[]): string {
@@ -113,6 +112,10 @@ export function setupInspectCommand(program: Command) {
     .option(
       '--url-allowlist <hosts>',
       'Comma-separated list of hostnames to pass-through in URLs (subdomains are implicitly allowed)',
+    )
+    .option(
+      '--locale <locale>',
+      'BCP-47 locale (e.g. de-DE) enabling detectors scoped to that locale',
     )
     .option('--hash', 'Print only the SHA-256 hash of the scrubbed output')
     .action(async (file, options) => {

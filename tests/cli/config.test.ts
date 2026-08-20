@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'ava';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -52,6 +52,7 @@ test('CLI: init creates a default config file and its parent directories', (t) =
     rulePacks: [],
     urlAllowlist: [],
     sessionTtlDays: 7,
+    locale: '',
   });
 });
 
@@ -78,6 +79,7 @@ test('CLI: init --force overwrites an existing config file', (t) => {
     rulePacks: [],
     urlAllowlist: [],
     sessionTtlDays: 7,
+    locale: '',
   });
 });
 
@@ -94,7 +96,12 @@ test('CLI: config show prints defaults and a hint when no config file exists', (
   const result = runCli(configDir, ['config', 'show']);
 
   t.is(result.status, 0);
-  t.deepEqual(JSON.parse(result.stdout), { rulePacks: [], urlAllowlist: [], sessionTtlDays: 7 });
+  t.deepEqual(JSON.parse(result.stdout), {
+    rulePacks: [],
+    urlAllowlist: [],
+    sessionTtlDays: 7,
+    locale: '',
+  });
   t.true(result.stderr.includes('No config file at'));
   t.true(result.stderr.includes('prompt-scrub init'));
 });
@@ -113,6 +120,7 @@ test('CLI: config show prints the active configuration and its path', (t) => {
     rulePacks: ['pack-a'],
     urlAllowlist: ['example.com'],
     sessionTtlDays: 7,
+    locale: '',
   });
   t.true(result.stderr.includes(path.join(configDir, 'config.json')));
 });
@@ -125,7 +133,12 @@ test('CLI: config show reports invalid JSON', (t) => {
 
   t.is(result.status, 1);
   t.true(result.stderr.includes('Invalid JSON'));
-  t.deepEqual(JSON.parse(result.stdout), { rulePacks: [], urlAllowlist: [], sessionTtlDays: 7 });
+  t.deepEqual(JSON.parse(result.stdout), {
+    rulePacks: [],
+    urlAllowlist: [],
+    sessionTtlDays: 7,
+    locale: '',
+  });
 });
 
 test('CLI: config show reports an empty config file', (t) => {
@@ -176,7 +189,7 @@ test('CLI: config show reports unknown keys', (t) => {
 
   t.is(result.status, 1);
   t.true(result.stderr.includes('Unknown key "rulePaks"'));
-  t.true(result.stderr.includes('rulePacks, urlAllowlist'));
+  t.true(result.stderr.includes('rulePacks, urlAllowlist, sessionTtlDays, locale'));
 });
 
 test('CLI: config show reports keys with the wrong type', (t) => {
@@ -202,6 +215,7 @@ test('CLI: config show reports non-string array members and drops them', (t) => 
     rulePacks: ['pack-a'],
     urlAllowlist: [],
     sessionTtlDays: 7,
+    locale: '',
   });
 });
 
@@ -216,6 +230,7 @@ test('CLI: config show deduplicates repeated entries', (t) => {
     rulePacks: [],
     urlAllowlist: ['example.com'],
     sessionTtlDays: 7,
+    locale: '',
   });
 });
 
@@ -225,7 +240,12 @@ test('CLI: init output round-trips through config show', (t) => {
 
   const result = runCli(configDir, ['config', 'show']);
   t.is(result.status, 0);
-  t.deepEqual(JSON.parse(result.stdout), { rulePacks: [], urlAllowlist: [], sessionTtlDays: 7 });
+  t.deepEqual(JSON.parse(result.stdout), {
+    rulePacks: [],
+    urlAllowlist: [],
+    sessionTtlDays: 7,
+    locale: '',
+  });
 });
 
 test('CLI: a configured urlAllowlist is applied when scrubbing', (t) => {
@@ -259,4 +279,172 @@ test('CLI: help lists the init and config commands', (t) => {
   t.is(result.status, 0);
   t.true(result.stdout.includes('init'));
   t.true(result.stdout.includes('config'));
+});
+
+const CPF = '123.456.789-09';
+
+function writeLocalePack(configDir: string, detect: string): string {
+  fs.mkdirSync(configDir, { recursive: true });
+  const packPath = path.join(configDir, 'locale-pack.mjs');
+  fs.writeFileSync(
+    packPath,
+    `export const detectors = [{ name: "CpfDetector", locales: ["pt-BR"], detect: ${detect} }];`,
+    'utf8',
+  );
+  return pathToFileURL(packPath).href;
+}
+
+const CPF_DETECT = `(text) => {
+  const idx = text.indexOf('${CPF}');
+  return idx === -1
+    ? []
+    : [{ category: 'Cpf', span: [idx, idx + ${CPF.length}], value: '${CPF}', placeholderPrefix: 'Cpf' }];
+}`;
+
+test('CLI: config show reports a configured locale', (t) => {
+  const configDir = makeConfigDir();
+  writeRawConfig(configDir, JSON.stringify({ locale: 'de-DE' }));
+
+  const result = runCli(configDir, ['config', 'show']);
+
+  t.is(result.status, 0);
+  t.deepEqual(JSON.parse(result.stdout), {
+    rulePacks: [],
+    urlAllowlist: [],
+    sessionTtlDays: 7,
+    locale: 'de-DE',
+  });
+});
+
+test('CLI: config show rejects a malformed locale and ignores it at runtime', (t) => {
+  const configDir = makeConfigDir();
+  writeRawConfig(configDir, JSON.stringify({ locale: 'German!' }));
+
+  const result = runCli(configDir, ['config', 'show']);
+
+  t.is(result.status, 1);
+  t.true(result.stderr.includes('"locale" must be a BCP-47 language tag'));
+  t.deepEqual(JSON.parse(result.stdout), {
+    rulePacks: [],
+    urlAllowlist: [],
+    sessionTtlDays: 7,
+    locale: '',
+  });
+});
+
+test('CLI: config show rejects a non-string locale', (t) => {
+  const configDir = makeConfigDir();
+  writeRawConfig(configDir, JSON.stringify({ locale: ['de-DE'] }));
+
+  const result = runCli(configDir, ['config', 'show']);
+
+  t.is(result.status, 1);
+  t.true(result.stderr.includes('"locale" must be a string, received an array'));
+});
+
+test('CLI: an empty locale is accepted without error', (t) => {
+  const configDir = makeConfigDir();
+  writeRawConfig(configDir, JSON.stringify({ locale: '' }));
+
+  const result = runCli(configDir, ['config', 'show']);
+
+  t.is(result.status, 0);
+  t.deepEqual(JSON.parse(result.stdout), {
+    rulePacks: [],
+    urlAllowlist: [],
+    sessionTtlDays: 7,
+    locale: '',
+  });
+});
+
+test('CLI: a configured locale activates a matching locale rule pack', (t) => {
+  const configDir = makeConfigDir();
+  const packUrl = writeLocalePack(configDir, CPF_DETECT);
+  writeRawConfig(configDir, JSON.stringify({ rulePacks: [packUrl], locale: 'pt-BR' }));
+
+  const result = runCli(configDir, ['scrub'], `Meu CPF e ${CPF}`);
+
+  t.is(result.status, 0);
+  t.is(result.stdout, 'Meu CPF e «Cpf_1»');
+});
+
+test('CLI: a locale rule pack stays idle when the locale does not match', (t) => {
+  const configDir = makeConfigDir();
+  const packUrl = writeLocalePack(configDir, CPF_DETECT);
+  writeRawConfig(configDir, JSON.stringify({ rulePacks: [packUrl], locale: 'de-DE' }));
+
+  const result = runCli(configDir, ['scrub'], `Meu CPF e ${CPF}`);
+
+  t.is(result.status, 0);
+  t.is(result.stdout, `Meu CPF e ${CPF}`);
+});
+
+test('CLI: a locale rule pack stays idle when no locale is configured', (t) => {
+  const configDir = makeConfigDir();
+  const packUrl = writeLocalePack(configDir, CPF_DETECT);
+  writeRawConfig(configDir, JSON.stringify({ rulePacks: [packUrl] }));
+
+  const result = runCli(configDir, ['scrub'], `Meu CPF e ${CPF}`);
+
+  t.is(result.status, 0);
+  t.is(result.stdout, `Meu CPF e ${CPF}`);
+});
+
+test('CLI: --locale overrides the configured locale', (t) => {
+  const configDir = makeConfigDir();
+  const packUrl = writeLocalePack(configDir, CPF_DETECT);
+  writeRawConfig(configDir, JSON.stringify({ rulePacks: [packUrl], locale: 'de-DE' }));
+
+  const result = runCli(configDir, ['scrub', '--locale', 'pt-BR'], `Meu CPF e ${CPF}`);
+
+  t.is(result.status, 0);
+  t.is(result.stdout, 'Meu CPF e «Cpf_1»');
+});
+
+test('CLI: inspect honours --locale', (t) => {
+  const configDir = makeConfigDir();
+  const packUrl = writeLocalePack(configDir, CPF_DETECT);
+  writeRawConfig(configDir, JSON.stringify({ rulePacks: [packUrl] }));
+
+  const off = runCli(configDir, ['inspect'], `Meu CPF e ${CPF}`);
+  t.true(off.stdout.includes('No sensitive entities detected'));
+
+  const on = runCli(configDir, ['inspect', '--locale', 'pt-BR'], `Meu CPF e ${CPF}`);
+  t.true(on.stdout.includes('[Cpf]'));
+  t.true(on.stdout.includes(CPF));
+});
+
+test('CLI: rules list shows the locales column and the resolved state', (t) => {
+  const configDir = makeConfigDir();
+  const packUrl = writeLocalePack(configDir, '() => []');
+  writeRawConfig(configDir, JSON.stringify({ rulePacks: [packUrl], locale: 'de-DE' }));
+
+  const idle = runCli(configDir, ['rules', 'list']);
+  t.is(idle.status, 0);
+  t.true(idle.stdout.includes('Locales'));
+  const idleRow = idle.stdout.split('\n').find((line) => line.includes('CpfDetector'));
+  t.true(idleRow?.includes('off'));
+  t.true(idleRow?.includes('pt-BR'));
+
+  writeRawConfig(configDir, JSON.stringify({ rulePacks: [packUrl], locale: 'pt-BR' }));
+
+  const active = runCli(configDir, ['rules', 'list']);
+  const activeRow = active.stdout.split('\n').find((line) => line.includes('CpfDetector'));
+  t.true(activeRow?.includes('on'));
+});
+
+test('CLI: rules list omits the locales column when no locale detectors are loaded', (t) => {
+  const configDir = makeConfigDir();
+  const result = runCli(configDir, ['rules', 'list']);
+
+  t.is(result.status, 0);
+  t.false(result.stdout.includes('Locales'));
+});
+
+test('CLI: scrub help documents the locale flag', (t) => {
+  const configDir = makeConfigDir();
+  const result = runCli(configDir, ['scrub', '--help']);
+
+  t.is(result.status, 0);
+  t.true(result.stdout.includes('--locale'));
 });

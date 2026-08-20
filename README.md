@@ -113,7 +113,7 @@ console.log(content); // "I see your key is sk-12345"
 
 ## Configuration
 
-`prompt-scrub` reads an optional config file for extra rule packs and URL allowlisting. Create one pre-filled with the default schema:
+`prompt-scrub` reads an optional config file for extra rule packs, URL allowlisting, and the active locale. Create one pre-filled with the default schema:
 
 ```bash
 prompt-scrub init
@@ -125,6 +125,8 @@ Print the configuration that is actually active — JSON on `stdout`, the path i
 ```bash
 prompt-scrub config show
 ```
+
+Set `locale` (or pass `--locale de-DE` to `scrub`/`inspect`) to activate detectors from locale-specific rule packs. Built-in detectors are English-shaped and always run.
 
 Entries that do not match the schema are reported and exit non-zero, so `config show` doubles as a config check in scripts. See the [CLI reference](docs/getting-started/cli.md#configuration) for the full schema and options.
 
