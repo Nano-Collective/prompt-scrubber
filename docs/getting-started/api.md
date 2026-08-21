@@ -6,7 +6,7 @@ sidebar_order: 1
 
 # v1 API Reference
 
-The primary interface for `prompt-scrub` is designed to be simple and stateless from the caller's perspective, delegating session persistence to the library.
+The primary interface for `prompt-scrub` supports both disk-backed sessions and caller-owned stateless sessions.
 
 ## Core Functions
 
@@ -25,6 +25,32 @@ const result = scrub({
 // result.scrubbedContent contains the text with placeholders
 // result.sessionId contains the session ID used
 ```
+
+#### Choosing a storage mode
+
+Omit `sessionMap` to use disk-backed storage. When `sessionId` is provided, that session is loaded from and saved to the filesystem; otherwise a new ID is generated.
+
+```typescript
+const result = scrub({
+  content: prompt,
+  sessionId: "abc123"
+});
+```
+
+Provide a map — including an empty object — to use stateless mode. The same object is updated and returned, and no session file is read or written.
+
+```typescript
+const sessionMap = {};
+const result = scrub({
+  content: prompt,
+  sessionId: "abc123", // Optional metadata in stateless mode
+  sessionMap
+});
+
+console.log(result.sessionMap === sessionMap); // true
+```
+
+`sessionMap: undefined` is not stateless mode: at runtime it is treated like an omitted property, selects disk-backed storage, and emits a warning. TypeScript projects with `exactOptionalPropertyTypes` enabled reject that explicit assignment; other TypeScript and JavaScript callers receive the runtime warning. Omit the property for disk mode or pass `{}` for stateless mode.
 
 ### `rehydrate`
 
@@ -58,7 +84,12 @@ export interface Message {
 export interface ScrubRequest {
   content: string | Message[];
   sessionId?: string;
+  sessionMap?: SessionMap;
   options?: ScrubOptions;
+}
+
+export interface SessionMap {
+  [placeholder: string]: string;
 }
 
 export interface ScrubOptions {
@@ -68,16 +99,18 @@ export interface ScrubOptions {
 
 export interface ScrubResult {
   scrubbedContent: string | Message[];
-  sessionId: string;
+  sessionId?: string;
+  sessionMap?: SessionMap;
 }
 
 export interface RehydrateRequest {
-  content: string;
-  sessionId: string;
+  content: string | Message[];
+  sessionId?: string;
+  sessionMap?: SessionMap;
 }
 
 export interface RehydrateResult {
-  content: string;
+  content: string | Message[];
   warnings?: string[]; // Populated if the model invents a placeholder not in the session map
 }
 ```

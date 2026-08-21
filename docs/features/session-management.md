@@ -20,6 +20,15 @@ A session map is a simple key-value dictionary where the key is the placeholder 
 }
 ```
 
+## Storage Modes
+
+The Node.js API chooses storage from the presence of `sessionMap`:
+
+- **Disk-backed:** omit `sessionMap`. A provided `sessionId` is loaded from and saved to disk; without one, `scrub()` generates a new ID.
+- **Stateless:** pass a map, including `{}`. The caller owns the map, it is mutated in place and returned, and no session file is read or written. A `sessionId` may still be supplied as metadata, but it does not enable persistence.
+
+Passing `sessionMap: undefined` is equivalent to omitting it, so it selects disk-backed storage and emits a runtime warning. Pass `{}` when stateless execution is required, especially in serverless or read-only environments.
+
 ## Storage Location
 
 Sessions are stored as JSON files on disk in the user's config directory:
