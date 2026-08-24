@@ -75,3 +75,14 @@ test('does not match mid-word capital letters', (t) => {
   const findings = laxDetector.detect('macOS or iPhone');
   t.is(findings.length, 0);
 });
+
+// --- Confidence ---
+
+test('scores names as low-confidence heuristics, with strict mode slightly higher', (t) => {
+  const lax = laxDetector.detect('Ask Alice about it');
+  t.is(lax[0]?.confidence, 0.5);
+  t.is(lax[0]?.method, 'heuristic');
+
+  const strict = strictDetector.detect('Ask Alice about it');
+  t.is(strict[0]?.confidence, 0.6);
+});

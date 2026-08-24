@@ -1,11 +1,24 @@
 import { readFileSync } from 'node:fs';
-import type { Command } from 'commander';
+import { type Command, InvalidArgumentError } from 'commander';
 import { loadConfig } from '../../core/config.js';
 
 import { loadConfiguredRulePacks } from '../../core/rule-packs.js';
 import { scrub } from '../../core/scrub.js';
 import { gcSessions } from '../../session/storage.js';
 import type { ScrubStats } from '../../types/index.js';
+
+/**
+ * Commander option parser for `--min-confidence`. Rejecting out-of-range values
+ * here means the CLI exits with a clear message instead of silently scrubbing
+ * more (or less) than the user asked for.
+ */
+export function parseConfidence(value: string): number {
+  const parsed = Number.parseFloat(value);
+  if (Number.isNaN(parsed) || parsed < 0 || parsed > 1) {
+    throw new InvalidArgumentError('Expected a number between 0 and 1.');
+  }
+  return parsed;
+}
 
 export async function handleScrub(
   text: string,
@@ -16,6 +29,7 @@ export async function handleScrub(
     strictName?: boolean;
     codeTellTerms?: string;
     urlAllowlist?: string;
+    minConfidence?: number;
   },
 ) {
   const disabledDetectors = options.disable ? options.disable.split(',').map((s) => s.trim()) : [];
@@ -37,6 +51,8 @@ export async function handleScrub(
   }
 
   const urlAllowlist = Array.from(new Set([...(config.urlAllowlist || []), ...cliUrlAllowlist]));
+  // An explicit flag overrides the configured floor; both default to 0.
+  const minConfidence = options.minConfidence ?? config.minConfidence ?? 0;
 
   const { detectors: rulePackDetectors } = await loadConfiguredRulePacks();
 
@@ -49,6 +65,7 @@ export async function handleScrub(
       ...(options.strictName !== undefined ? { strictNameDetector: options.strictName } : {}),
       ...(codeTellTerms !== undefined ? { codeTellTerms } : {}),
       ...(urlAllowlist.length > 0 ? { urlAllowlist } : {}),
+      minConfidence,
       customDetectors: rulePackDetectors,
     },
   });
@@ -98,6 +115,11 @@ export function setupScrubCommand(program: Command) {
     .option(
       '--url-allowlist <hosts>',
       'Comma-separated list of hostnames to pass-through in URLs (subdomains are implicitly allowed)',
+    )
+    .option(
+      '--min-confidence <value>',
+      'Discard findings scored below this confidence (0-1)',
+      parseConfidence,
     )
     .option('-q, --quiet', 'Suppress the scrub summary printed to stderr')
     .action(async (file, options) => {

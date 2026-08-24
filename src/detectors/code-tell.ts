@@ -4,6 +4,10 @@ function escapeRegExp(string: string): string {
   return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+// The terms are enumerated by the user, so a match is what they asked for.
+// Held just below certainty because a generic term can still fire in prose.
+const CODE_TELL_CONFIDENCE = 0.95;
+
 export class CodeTellDetector implements Detector {
   readonly name = 'CodeTellDetector';
   private regex: RegExp | null = null;
@@ -38,6 +42,8 @@ export class CodeTellDetector implements Detector {
         span: [match.index, match.index + value.length],
         value,
         placeholderPrefix: 'CodeTell',
+        confidence: CODE_TELL_CONFIDENCE,
+        method: 'user-defined',
       });
     }
 

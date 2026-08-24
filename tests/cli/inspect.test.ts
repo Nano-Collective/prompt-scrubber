@@ -99,3 +99,33 @@ test.serial('inspect command fails when no stdin is provided', async (t) => {
   t.is(exitCode, 1);
   t.true(errorOutput.includes('No input provided'));
 });
+
+test('formatInspectOutput shows the confidence and method of each entity', async (t) => {
+  const text = 'My email is test@example.com';
+  const findings = await handleInspect(text, {});
+  const output = formatInspectOutput(findings, computeHash(text, findings));
+  t.true(output.includes('confidence 0.95 exact-pattern'));
+});
+
+test('handleInspect drops findings below minConfidence', async (t) => {
+  const text = 'ask Alice about alice@example.com';
+
+  const all = await handleInspect(text, { enable: 'NameDetector' });
+  t.deepEqual(
+    all.map((f) => f.category),
+    ['Name', 'Email'],
+  );
+
+  const filtered = await handleInspect(text, { enable: 'NameDetector', minConfidence: 0.8 });
+  t.deepEqual(
+    filtered.map((f) => f.category),
+    ['Email'],
+  );
+});
+
+test('a threshold that filters everything reports nothing detected', async (t) => {
+  const text = 'My email is test@example.com';
+  const findings = await handleInspect(text, { minConfidence: 1 });
+  t.is(findings.length, 0);
+  t.true(formatInspectOutput(findings, computeHash(text, findings)).includes('No sensitive'));
+});

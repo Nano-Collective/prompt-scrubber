@@ -18,6 +18,8 @@ export interface Finding {
   span: [number, number]; // [startIndex, endIndex]
   value: string; // The original matched string
   placeholderPrefix: string; // The prefix for the placeholder (e.g., 'Email')
+  confidence?: number; // How certain this match is, 0.0-1.0
+  method?: string; // How the match was made, e.g. 'exact-pattern'
 }
 
 export interface Detector {
@@ -45,6 +47,52 @@ export interface Detector {
 - `NameDetector`: Detects proper nouns (capitalized words). Because proper-noun detection has a high risk of false positives, this detector is **disabled by default**. It can be enabled via the API or CLI. It also features a "strict mode" that leverages an allowlist to skip common countries, languages, and products to minimize false positives.
 - `CodeTellDetector`: Detects user-enumerated private identifiers and variables. It is **disabled by default** because the false-positive risk of supplying overly generic terms on code payloads is very high. It acts as a no-op unless explicitly configured with a list of terms.
 
+## Confidence & Tiered Detection
+
+Not every match is equally certain. A vendor-prefixed API key is recognised by
+an exact pattern and is as close to certain as pattern matching gets; a
+capitalised word is only a guess at a name. Every built-in finding therefore
+carries a `confidence` between 0.0 and 1.0 and a `method` naming the rule that
+produced it.
+
+| Detector | Match | Confidence | Method |
+| --- | --- | --- | --- |
+| `SecretDetector` | Vendor key prefix (`sk-`, `ghp_`, `AKIA`, ...) | 0.99 | `exact-pattern` |
+| `SecretDetector` | `Bearer` token | 0.90 | `exact-pattern` |
+| `SecretDetector` | Suggestive key name (`API_KEY=...`) | 0.70 | `key-name` |
+| `SecretDetector` | High-entropy string | 0.60 | `entropy` |
+| `EmailDetector` | Any match | 0.95 | `exact-pattern` |
+| `UrlDetector` | Scheme-qualified URL | 0.95 | `exact-pattern` |
+| `UrlDetector` | Bare `host/path` | 0.70 | `heuristic` |
+| `PathDetector` | `~/...` or `C:\...` | 0.90 | `structural` |
+| `PathDetector` | Bare absolute path | 0.80 | `structural` |
+| `PhoneDetector` | E.164 or `(555) 123-4567` | 0.90 | `structural` |
+| `PhoneDetector` | Bare `555-123-4567` | 0.80 | `structural` |
+| `AddressDetector` | Any match | 0.70 | `heuristic` |
+| `NameDetector` | Any match (0.60 in strict mode) | 0.50 | `heuristic` |
+| `CodeTellDetector` | Any match | 0.95 | `user-defined` |
+
+`confidence` and `method` are optional on the `Detector` interface so that rule
+packs written against the original interface keep working. A finding that omits
+them is scored at `DEFAULT_CONFIDENCE` (0.5) with the method `unspecified`.
+
+### Filtering by confidence
+
+Pass `minConfidence` in `ScrubOptions` (or `--min-confidence` on the CLI, or
+`minConfidence` in the config file) to discard everything scored below a
+threshold. The default is `0`, so nothing is filtered unless you opt in.
+
+```bash
+# Only scrub what the detectors are confident about
+prompt-scrub scrub --min-confidence 0.9 prompt.txt
+```
+
+Filtering happens **before** collision resolution, so a discarded low-confidence
+finding can never mask a higher-confidence one that overlaps it.
+
+Run `inspect` first: it prints the score and method of every entity, so you can
+see what a threshold would drop before you commit to it.
+
 ## Priority & Collision System
 
 When multiple detectors flag overlapping spans, a collision resolution system determines which finding wins.
@@ -69,6 +117,7 @@ By default, the core scrub function runs the built-in detectors in priority orde
 - **Enable opt-ins**: Pass `enabledDetectors` (or `--enable` via CLI) to activate off-by-default detectors like `NameDetector`.
 - **Strict Mode**: Pass `strictNameDetector: true` (or `--strict-name` via CLI) to reduce false positives for the `NameDetector`.
 - **Code Tell**: Pass `codeTellTerms` (or `--code-tell-terms` via CLI) as an array of identifiers to enable and configure the `CodeTellDetector`.
+- **Confidence floor**: Pass `minConfidence` (or `--min-confidence` via CLI) to discard findings scored below a threshold.
 
 ### Custom Detectors (Programmatic)
 
@@ -85,7 +134,8 @@ To use a rule pack:
 ```json
 {
   "rulePacks": ["some-rule-pack"],
-  "urlAllowlist": []
+  "urlAllowlist": [],
+  "minConfidence": 0
 }
 ```
 

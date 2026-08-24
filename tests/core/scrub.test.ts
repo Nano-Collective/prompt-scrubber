@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'ava';
 import { rehydrate } from '../../src/core/rehydrate.js';
-import { scrub } from '../../src/core/scrub.js';
+import { DEFAULT_CONFIDENCE, scrub } from '../../src/core/scrub.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -320,4 +320,116 @@ test('stats include categories contributed by custom detectors', (t) => {
 
   t.is(result.stats.totalEntities, 2);
   t.deepEqual(result.stats.byCategory, { Ticket: 1, Email: 1 });
+});
+
+// --- Confidence Filtering ---
+
+// 'ask' stays lowercase: NameDetector would otherwise read 'Ask Alice' as one name.
+const NAME_AND_EMAIL = 'ask Alice about alice@example.com';
+
+test('every finding is scored by default, and nothing is filtered', (t) => {
+  const result = scrub({
+    content: NAME_AND_EMAIL,
+    options: { enabledDetectors: ['NameDetector'] },
+  });
+  t.is(result.scrubbedContent, 'ask «Name_1» about «Email_1»');
+});
+
+test('minConfidence drops findings scored below the threshold', (t) => {
+  // NameDetector scores 0.5, EmailDetector 0.95.
+  const result = scrub({
+    content: NAME_AND_EMAIL,
+    options: { enabledDetectors: ['NameDetector'], minConfidence: 0.8 },
+  });
+  t.is(result.scrubbedContent, 'ask Alice about «Email_1»');
+  t.is(result.stats.totalEntities, 1);
+  t.deepEqual(result.stats.byCategory, { Email: 1 });
+});
+
+test('a threshold above every score leaves the content untouched', (t) => {
+  const result = scrub({ content: NAME_AND_EMAIL, options: { minConfidence: 1 } });
+  t.is(result.scrubbedContent, NAME_AND_EMAIL);
+  t.is(result.stats.totalEntities, 0);
+  t.deepEqual(result.sessionMap, {});
+});
+
+test('minConfidence applies to every message in a Message[] payload', (t) => {
+  const result = scrub({
+    content: [
+      { role: 'user', content: 'ask Alice' },
+      { role: 'user', content: 'mail alice@example.com' },
+    ],
+    options: { enabledDetectors: ['NameDetector'], minConfidence: 0.8 },
+  });
+  t.deepEqual(result.scrubbedContent, [
+    { role: 'user', content: 'ask Alice' },
+    { role: 'user', content: 'mail «Email_1»' },
+  ]);
+});
+
+test('a detector that reports no confidence is scored as DEFAULT_CONFIDENCE', (t) => {
+  const unscored = {
+    name: 'UnscoredDetector',
+    detect: (text: string) => {
+      const index = text.indexOf('CustomToken');
+      return index === -1
+        ? []
+        : [
+            {
+              category: 'Custom',
+              span: [index, index + 'CustomToken'.length] as [number, number],
+              value: 'CustomToken',
+              placeholderPrefix: 'Custom',
+            },
+          ];
+    },
+  };
+
+  const kept = scrub({
+    content: 'Check CustomToken.',
+    options: { customDetectors: [unscored], minConfidence: DEFAULT_CONFIDENCE },
+  });
+  t.is(kept.scrubbedContent, 'Check «Custom_1».');
+
+  const dropped = scrub({
+    content: 'Check CustomToken.',
+    options: { customDetectors: [unscored], minConfidence: DEFAULT_CONFIDENCE + 0.1 },
+  });
+  t.is(dropped.scrubbedContent, 'Check CustomToken.');
+});
+
+test('a filtered-out finding cannot suppress the overlapping finding it outranks', (t) => {
+  // Secret beats Email in collision resolution, so unfiltered this fabricated
+  // low-confidence Secret swallows the address. Filtering runs first, so once
+  // it is below the threshold the Email is detected instead of being masked.
+  const weakSecret = {
+    name: 'WeakSecretDetector',
+    detect: (text: string) => {
+      const index = text.indexOf('alice@example.com');
+      return index === -1
+        ? []
+        : [
+            {
+              category: 'Secret',
+              span: [index, index + 'alice@example.com'.length] as [number, number],
+              value: 'alice@example.com',
+              placeholderPrefix: 'Secret',
+              confidence: 0.3,
+              method: 'entropy',
+            },
+          ];
+    },
+  };
+
+  const unfiltered = scrub({
+    content: 'mail alice@example.com',
+    options: { customDetectors: [weakSecret] },
+  });
+  t.is(unfiltered.scrubbedContent, 'mail «Secret_1»');
+
+  const filtered = scrub({
+    content: 'mail alice@example.com',
+    options: { customDetectors: [weakSecret], minConfidence: 0.8 },
+  });
+  t.is(filtered.scrubbedContent, 'mail «Email_1»');
 });

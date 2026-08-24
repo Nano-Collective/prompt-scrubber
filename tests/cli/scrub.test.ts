@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'ava';
-import { formatScrubSummary, handleScrub } from '../../src/cli/commands/scrub.js';
+import { formatScrubSummary, handleScrub, parseConfidence } from '../../src/cli/commands/scrub.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -137,4 +137,24 @@ test('handleScrub returns stats alongside the scrubbed content', async (t) => {
   const result = await handleScrub('Mail alice@example.com and bob@example.com', {});
   t.is(result.stats.totalEntities, 2);
   t.deepEqual(result.stats.byCategory, { Email: 2 });
+});
+
+test('handleScrub applies minConfidence before scrubbing', async (t) => {
+  const text = 'ask Alice about alice@example.com';
+
+  const all = await handleScrub(text, { enable: 'NameDetector' });
+  t.is(all.scrubbedContent, 'ask «Name_1» about «Email_1»');
+
+  const filtered = await handleScrub(text, { enable: 'NameDetector', minConfidence: 0.8 });
+  t.is(filtered.scrubbedContent, 'ask Alice about «Email_1»');
+});
+
+test('parseConfidence accepts the 0-1 range and rejects anything else', (t) => {
+  t.is(parseConfidence('0'), 0);
+  t.is(parseConfidence('0.85'), 0.85);
+  t.is(parseConfidence('1'), 1);
+
+  for (const bad of ['-0.1', '1.1', 'high', '']) {
+    t.throws(() => parseConfidence(bad), { message: 'Expected a number between 0 and 1.' });
+  }
 });

@@ -11,13 +11,21 @@ const HOME_PATH_REGEX = /(?<![\w/])(~\/[a-zA-Z0-9_.@-][a-zA-Z0-9_.@\-/]*)(?![\w]
 // Windows absolute path: C:\Users\... or D:\Projects\...
 const WIN_PATH_REGEX = /([A-Za-z]:\\(?:[^\\/:*?"<>|\r\n]+\\)*[^\\/:*?"<>|\r\n]*)/g;
 
+// `~/` and a drive letter are unambiguous filesystem markers. A bare `/a/b`
+// is a little weaker: date-like and prose fragments share the shape.
+const PATH_PATTERNS: { regex: RegExp; confidence: number }[] = [
+  { regex: UNIX_PATH_REGEX, confidence: 0.8 },
+  { regex: HOME_PATH_REGEX, confidence: 0.9 },
+  { regex: WIN_PATH_REGEX, confidence: 0.9 },
+];
+
 export class PathDetector implements Detector {
   readonly name = 'PathDetector';
 
   detect(text: string): Finding[] {
     const raw: Finding[] = [];
 
-    for (const [regex] of [[UNIX_PATH_REGEX], [HOME_PATH_REGEX], [WIN_PATH_REGEX]] as [RegExp][]) {
+    for (const { regex, confidence } of PATH_PATTERNS) {
       regex.lastIndex = 0;
       let match: RegExpExecArray | null;
       while ((match = regex.exec(text)) !== null) {
@@ -28,6 +36,8 @@ export class PathDetector implements Detector {
           span: [start, start + value.length],
           value,
           placeholderPrefix: 'Path',
+          confidence,
+          method: 'structural',
         });
       }
     }

@@ -51,6 +51,7 @@ test('CLI: init creates a default config file and its parent directories', (t) =
   t.deepEqual(JSON.parse(fs.readFileSync(configPath, 'utf8')), {
     rulePacks: [],
     urlAllowlist: [],
+    minConfidence: 0,
     sessionTtlDays: 7,
   });
 });
@@ -77,6 +78,7 @@ test('CLI: init --force overwrites an existing config file', (t) => {
   t.deepEqual(JSON.parse(fs.readFileSync(path.join(configDir, 'config.json'), 'utf8')), {
     rulePacks: [],
     urlAllowlist: [],
+    minConfidence: 0,
     sessionTtlDays: 7,
   });
 });
@@ -94,7 +96,12 @@ test('CLI: config show prints defaults and a hint when no config file exists', (
   const result = runCli(configDir, ['config', 'show']);
 
   t.is(result.status, 0);
-  t.deepEqual(JSON.parse(result.stdout), { rulePacks: [], urlAllowlist: [], sessionTtlDays: 7 });
+  t.deepEqual(JSON.parse(result.stdout), {
+    rulePacks: [],
+    urlAllowlist: [],
+    minConfidence: 0,
+    sessionTtlDays: 7,
+  });
   t.true(result.stderr.includes('No config file at'));
   t.true(result.stderr.includes('prompt-scrub init'));
 });
@@ -112,6 +119,7 @@ test('CLI: config show prints the active configuration and its path', (t) => {
   t.deepEqual(JSON.parse(result.stdout), {
     rulePacks: ['pack-a'],
     urlAllowlist: ['example.com'],
+    minConfidence: 0,
     sessionTtlDays: 7,
   });
   t.true(result.stderr.includes(path.join(configDir, 'config.json')));
@@ -125,7 +133,12 @@ test('CLI: config show reports invalid JSON', (t) => {
 
   t.is(result.status, 1);
   t.true(result.stderr.includes('Invalid JSON'));
-  t.deepEqual(JSON.parse(result.stdout), { rulePacks: [], urlAllowlist: [], sessionTtlDays: 7 });
+  t.deepEqual(JSON.parse(result.stdout), {
+    rulePacks: [],
+    urlAllowlist: [],
+    minConfidence: 0,
+    sessionTtlDays: 7,
+  });
 });
 
 test('CLI: config show reports an empty config file', (t) => {
@@ -176,7 +189,7 @@ test('CLI: config show reports unknown keys', (t) => {
 
   t.is(result.status, 1);
   t.true(result.stderr.includes('Unknown key "rulePaks"'));
-  t.true(result.stderr.includes('rulePacks, urlAllowlist'));
+  t.true(result.stderr.includes('rulePacks, urlAllowlist, minConfidence'));
 });
 
 test('CLI: config show reports keys with the wrong type', (t) => {
@@ -201,6 +214,7 @@ test('CLI: config show reports non-string array members and drops them', (t) => 
   t.deepEqual(JSON.parse(result.stdout), {
     rulePacks: ['pack-a'],
     urlAllowlist: [],
+    minConfidence: 0,
     sessionTtlDays: 7,
   });
 });
@@ -215,6 +229,7 @@ test('CLI: config show deduplicates repeated entries', (t) => {
   t.deepEqual(JSON.parse(result.stdout), {
     rulePacks: [],
     urlAllowlist: ['example.com'],
+    minConfidence: 0,
     sessionTtlDays: 7,
   });
 });
@@ -225,7 +240,12 @@ test('CLI: init output round-trips through config show', (t) => {
 
   const result = runCli(configDir, ['config', 'show']);
   t.is(result.status, 0);
-  t.deepEqual(JSON.parse(result.stdout), { rulePacks: [], urlAllowlist: [], sessionTtlDays: 7 });
+  t.deepEqual(JSON.parse(result.stdout), {
+    rulePacks: [],
+    urlAllowlist: [],
+    minConfidence: 0,
+    sessionTtlDays: 7,
+  });
 });
 
 test('CLI: a configured urlAllowlist is applied when scrubbing', (t) => {
@@ -259,4 +279,52 @@ test('CLI: help lists the init and config commands', (t) => {
   t.is(result.status, 0);
   t.true(result.stdout.includes('init'));
   t.true(result.stdout.includes('config'));
+});
+
+test('CLI: config show reports a minConfidence outside the 0-1 range', (t) => {
+  const configDir = makeConfigDir();
+  writeRawConfig(configDir, JSON.stringify({ minConfidence: 2 }));
+
+  const result = runCli(configDir, ['config', 'show']);
+
+  t.is(result.status, 1);
+  t.true(result.stderr.includes('"minConfidence" must be a number between 0 and 1, received 2'));
+  t.is(JSON.parse(result.stdout).minConfidence, 0);
+});
+
+test('CLI: config show reports a non-numeric minConfidence', (t) => {
+  const configDir = makeConfigDir();
+  writeRawConfig(configDir, JSON.stringify({ minConfidence: '0.8' }));
+
+  const result = runCli(configDir, ['config', 'show']);
+
+  t.is(result.status, 1);
+  t.true(
+    result.stderr.includes('"minConfidence" must be a number between 0 and 1, received string'),
+  );
+});
+
+test('CLI: a configured minConfidence is applied when scrubbing', (t) => {
+  const configDir = makeConfigDir();
+  writeRawConfig(configDir, JSON.stringify({ minConfidence: 0.9 }));
+
+  // The bare 555-123-4567 shape scores 0.8; the email scores 0.95.
+  const result = runCli(configDir, ['scrub'], 'Call 555-123-4567 or mail alice@example.com');
+
+  t.is(result.status, 0);
+  t.is(result.stdout, 'Call 555-123-4567 or mail «Email_1»');
+});
+
+test('CLI: --min-confidence overrides the configured threshold', (t) => {
+  const configDir = makeConfigDir();
+  writeRawConfig(configDir, JSON.stringify({ minConfidence: 0.9 }));
+
+  const result = runCli(
+    configDir,
+    ['scrub', '--min-confidence', '0.5'],
+    'Call 555-123-4567 or mail alice@example.com',
+  );
+
+  t.is(result.status, 0);
+  t.is(result.stdout, 'Call «Phone_1» or mail «Email_1»');
 });

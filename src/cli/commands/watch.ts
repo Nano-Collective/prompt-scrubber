@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import type { Command } from 'commander';
-import { handleScrub } from './scrub.js';
+import { handleScrub, parseConfidence } from './scrub.js';
 
 /**
  * Every external process below is invoked through `spawnSync` with an argv
@@ -182,6 +182,7 @@ interface WatchStepOptions {
   strictName?: boolean;
   codeTellTerms?: string;
   urlAllowlist?: string;
+  minConfidence?: number;
   dryRun?: boolean;
   backup?: boolean;
   readClipboardFn?: () => string;
@@ -342,6 +343,11 @@ export function setupWatchCommand(program: Command) {
     .option('--strict-name', 'Enable strict allowlisting for NameDetector')
     .option('--code-tell-terms <terms>', 'Comma-separated list of private terms to detect')
     .option('--url-allowlist <hosts>', 'Comma-separated list of hostnames to pass-through')
+    .option(
+      '--min-confidence <value>',
+      'Discard findings scored below this confidence (0-1)',
+      parseConfidence,
+    )
     .action(async (options) => {
       try {
         await handleWatch(options);

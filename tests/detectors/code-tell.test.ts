@@ -54,3 +54,12 @@ test('prioritizes longer overlapping terms', (t) => {
   t.is(findings.length, 1);
   t.is(findings[0]?.value, 'foo.bar');
 });
+
+// --- Confidence ---
+
+test('scores a user-enumerated term as a user-defined match', (t) => {
+  const detector = new CodeTellDetector(['MyClass']);
+  const findings = detector.detect('MyClass is a private class.');
+  t.is(findings[0]?.confidence, 0.95);
+  t.is(findings[0]?.method, 'user-defined');
+});

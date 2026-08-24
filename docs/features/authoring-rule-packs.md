@@ -27,6 +27,8 @@ export interface Finding {
   span: [number, number]; // [startIndex, endIndex]
   value: string;
   placeholderPrefix: string;
+  confidence?: number; // Optional. How certain this match is, 0.0-1.0
+  method?: string; // Optional. How the match was made, e.g. 'exact-pattern'
 }
 
 export interface Detector {
@@ -34,6 +36,13 @@ export interface Detector {
   detect(text: string): Finding[];
 }
 ```
+
+`confidence` and `method` are optional. A finding that omits them is scored at
+`DEFAULT_CONFIDENCE` (0.5) with the method `unspecified`, so a pack written
+before these fields existed keeps working unchanged. Set them if your detector
+mixes exact patterns with weaker heuristics: users can then filter your findings
+with `--min-confidence`. See [Confidence & Tiered Detection](./detectors.md#confidence--tiered-detection)
+for the scores the built-in detectors use.
 
 > **Note to Whitepaper Readers:** 
 > The original whitepaper conceptually defines a `Finding` as `{ category, span, replacement }`. The canonical runtime interface explicitly omits `replacement` because the exact placeholder (e.g. `Email_2`) requires session state, which detectors do not have. Rule-pack authors must return `value` and `placeholderPrefix`, allowing the core engine to deterministically generate the final replacement.
@@ -70,6 +79,8 @@ Let's build a rule pack that detects "Project X" codenames.
            span: [match.index, match.index + match[0].length],
            value: match[0],
            placeholderPrefix: 'Codename',
+           confidence: 0.95, // An exact codename match; users can filter on this
+           method: 'exact-pattern',
          });
        }
 
@@ -94,7 +105,8 @@ Let's build a rule pack that detects "Project X" codenames.
    ```json
    {
      "rulePacks": ["prompt-scrub-projectx"],
-     "urlAllowlist": []
+     "urlAllowlist": [],
+     "minConfidence": 0
    }
    ```
 

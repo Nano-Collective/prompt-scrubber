@@ -58,6 +58,12 @@ const ALLOWLIST = new Set([
   'december',
 ]);
 
+// Any capitalised word matches, so roughly half of all hits are ordinary
+// sentence-initial words or product names. Strict mode removes the most common
+// of those from the allowlist, which lifts precision a little.
+const NAME_CONFIDENCE = 0.5;
+const NAME_STRICT_CONFIDENCE = 0.6;
+
 export class NameDetector implements Detector {
   readonly name = 'NameDetector';
   private strict: boolean;
@@ -88,6 +94,8 @@ export class NameDetector implements Detector {
         span: [match.index, match.index + value.length],
         value,
         placeholderPrefix: 'Name',
+        confidence: this.strict ? NAME_STRICT_CONFIDENCE : NAME_CONFIDENCE,
+        method: 'heuristic',
       });
     }
 

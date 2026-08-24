@@ -102,3 +102,42 @@ test('returns empty for clean prompt text', (t) => {
   const findings = detector.detect('Please summarize this document for me.');
   t.is(findings.length, 0);
 });
+
+// --- Confidence ---
+
+test('scores a vendor-prefixed key as all but certain', (t) => {
+  const findings = detector.detect('AWS key: AKIAIOSFODNN7EXAMPLE in config');
+  t.is(findings[0]?.confidence, 0.99);
+  t.is(findings[0]?.method, 'exact-pattern');
+});
+
+test('scores a Bearer token slightly below a vendor prefix', (t) => {
+  const findings = detector.detect(
+    'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.abc',
+  );
+  t.is(findings[0]?.confidence, 0.9);
+  t.is(findings[0]?.method, 'exact-pattern');
+});
+
+test('scores a key-name match below an exact pattern', (t) => {
+  const findings = detector.detect('API_KEY=super-secret-value-here');
+  const found = findings.find((f) => f.value === 'super-secret-value-here');
+  t.is(found?.confidence, 0.7);
+  t.is(found?.method, 'key-name');
+});
+
+test('scores a bare high-entropy string lowest', (t) => {
+  const findings = detector.detect('value = "aB3dEf7gHi9JkLm2NoPqR5sTuV8wXyZ"');
+  t.is(findings[0]?.confidence, 0.6);
+  t.is(findings[0]?.method, 'entropy');
+});
+
+test('a wider low-confidence overlap does not downgrade a vendor-prefixed key', (t) => {
+  // The key-name layer matches one character more than the AWS pattern (the
+  // trailing '.'), so it wins the span; the score must still reflect the key.
+  const findings = detector.detect('aws_access_key_id=AKIAIOSFODNN7EXAMPLE.');
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, 'AKIAIOSFODNN7EXAMPLE.');
+  t.is(findings[0]?.confidence, 0.99);
+  t.is(findings[0]?.method, 'exact-pattern');
+});

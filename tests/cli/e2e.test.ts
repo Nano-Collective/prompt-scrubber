@@ -256,3 +256,38 @@ test.serial('CLI: sessions rm fails gracefully with invalid session id', (t) => 
   t.not(result.status, 0);
   t.true(result.stderr.includes('not found'));
 });
+
+test('CLI: inspect prints the confidence and method of each entity', (t) => {
+  const result = runCli(['inspect'], 'Contact me at alice@example.com');
+  t.is(result.status, 0);
+  t.true(result.stdout.includes('confidence 0.95 exact-pattern'));
+});
+
+test('CLI: inspect --min-confidence hides findings below the threshold', (t) => {
+  const input = 'Call 555-123-4567 or mail alice@example.com';
+
+  const all = runCli(['inspect'], input);
+  t.true(all.stdout.includes('[Phone]'));
+  t.true(all.stdout.includes('[Email]'));
+
+  const filtered = runCli(['inspect', '--min-confidence', '0.9'], input);
+  t.is(filtered.status, 0);
+  t.false(filtered.stdout.includes('[Phone]'));
+  t.true(filtered.stdout.includes('[Email]'));
+});
+
+test('CLI: --min-confidence rejects a value outside the 0-1 range', (t) => {
+  const result = runCli(['scrub', '--min-confidence', '2'], 'mail alice@example.com');
+  t.is(result.status, 1);
+  t.true(result.stderr.includes('Expected a number between 0 and 1.'));
+});
+
+test('CLI: scrub --min-confidence changes the inspect hash to match', (t) => {
+  const input = 'Call 555-123-4567 or mail alice@example.com';
+  const scrubbed = runCli(['scrub', '--min-confidence', '0.9'], input);
+  const hash = runCli(['inspect', '--min-confidence', '0.9', '--hash'], input);
+
+  t.is(scrubbed.stdout, 'Call 555-123-4567 or mail «Email_1»');
+  t.is(hash.stdout.trim().length, 64);
+  t.not(hash.stdout.trim(), runCli(['inspect', '--hash'], input).stdout.trim());
+});

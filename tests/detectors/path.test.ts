@@ -72,3 +72,17 @@ test('does not match a URL as a path', (t) => {
   // URL detector handles this; PathDetector should not fire
   t.is(findings.length, 0);
 });
+
+// --- Confidence ---
+
+test('scores unambiguous filesystem markers above a bare absolute path', (t) => {
+  const unix = detector.detect('Open /var/log/system.log now');
+  t.is(unix[0]?.confidence, 0.8);
+  t.is(unix[0]?.method, 'structural');
+
+  const home = detector.detect('Open ~/.config/app.json now');
+  t.is(home[0]?.confidence, 0.9);
+
+  const win = detector.detect('Open C:\\Users\\alice now');
+  t.is(win[0]?.confidence, 0.9);
+});

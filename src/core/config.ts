@@ -5,6 +5,7 @@ import * as path from 'node:path';
 export interface PromptScrubConfig {
   rulePacks?: string[];
   urlAllowlist?: string[];
+  minConfidence?: number;
   sessionTtlDays?: number;
 }
 
@@ -19,11 +20,14 @@ export function createDefaultConfig(): Required<PromptScrubConfig> {
   return {
     rulePacks: [],
     urlAllowlist: [],
+    // 0 keeps every finding, so an existing install behaves exactly as before.
+    minConfidence: 0,
     sessionTtlDays: 7,
   };
 }
 
 const CONFIG_KEYS = Object.keys(createDefaultConfig());
+const ARRAY_KEYS = ['rulePacks', 'urlAllowlist'] as const;
 
 /**
  * Determines the base configuration directory based on the OS.
@@ -69,6 +73,10 @@ function toStringArray(value: unknown): string[] {
   return Array.from(new Set(value.filter((item): item is string => typeof item === 'string')));
 }
 
+function isConfidence(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
+}
+
 function validateConfig(data: unknown): string[] {
   if (data === null || typeof data !== 'object' || Array.isArray(data)) {
     return [`Expected a JSON object, received ${describeType(data)}.`];
@@ -83,22 +91,33 @@ function validateConfig(data: unknown): string[] {
     }
   }
 
-  for (const key of CONFIG_KEYS) {
+  for (const key of ARRAY_KEYS) {
     const value = record[key];
     if (value === undefined) continue;
-
-    if (key === 'sessionTtlDays') {
-      if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
-        errors.push(`"${key}" must be a positive number, received ${describeType(value)}.`);
-      }
-      continue;
-    }
 
     if (!Array.isArray(value)) {
       errors.push(`"${key}" must be an array of strings, received ${describeType(value)}.`);
     } else if (value.some((item) => typeof item !== 'string')) {
       errors.push(`"${key}" must contain only strings.`);
     }
+  }
+
+  const sessionTtlDays = record.sessionTtlDays;
+  if (
+    sessionTtlDays !== undefined &&
+    (typeof sessionTtlDays !== 'number' || !Number.isFinite(sessionTtlDays) || sessionTtlDays <= 0)
+  ) {
+    errors.push(
+      `"sessionTtlDays" must be a positive number, received ${describeType(sessionTtlDays)}.`,
+    );
+  }
+
+  const minConfidence = record.minConfidence;
+  if (minConfidence !== undefined && !isConfidence(minConfidence)) {
+    // Report an out-of-range number by value; anything else by its type.
+    const received =
+      typeof minConfidence === 'number' ? `${minConfidence}` : describeType(minConfidence);
+    errors.push(`"minConfidence" must be a number between 0 and 1, received ${received}.`);
   }
 
   return errors;
@@ -134,6 +153,7 @@ export function readConfigFile(): ConfigFileState {
     config: {
       rulePacks: toStringArray(record.rulePacks),
       urlAllowlist: toStringArray(record.urlAllowlist),
+      minConfidence: isConfidence(record.minConfidence) ? record.minConfidence : 0,
       sessionTtlDays:
         typeof record.sessionTtlDays === 'number' &&
         Number.isFinite(record.sessionTtlDays) &&

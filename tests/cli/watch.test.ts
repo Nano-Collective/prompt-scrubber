@@ -289,3 +289,22 @@ test('handleWatch registers a SIGINT handler that clears the timer and stops', a
     clearInterval(timer);
   }
 });
+
+test('watchClipboardStep honours minConfidence', async (t) => {
+  let written = '';
+  const clipboard = 'Call 555-123-4567 or mail alice@example.com';
+
+  // The bare 555-123-4567 shape scores 0.8; the email scores 0.95.
+  const next = await watchClipboardStep('', {
+    minConfidence: 0.9,
+    readClipboardFn: () => clipboard,
+    writeClipboardFn: (text: string) => {
+      written = text;
+    },
+    logFn: () => {},
+    notifyFn: () => {},
+  });
+
+  t.is(next, 'Call 555-123-4567 or mail «Email_1»');
+  t.is(written, next);
+});

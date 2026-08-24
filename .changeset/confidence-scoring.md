@@ -1,0 +1,5 @@
+---
+"@nanocollective/prompt-scrub": minor
+---
+
+Add confidence scoring and tiered detection. Every `Finding` now carries a `confidence` (0.0-1.0) and a `method` naming the rule that produced it, so an exact vendor key pattern (0.99, `exact-pattern`) is distinguishable from a high-entropy guess (0.6, `entropy`) or a capitalised-word name (0.5, `heuristic`). A new `--min-confidence <0-1>` flag on `scrub`, `inspect` and `watch` discards findings below a threshold; `minConfidence` does the same in `ScrubOptions` and in the config file, with the flag overriding the configured value. Filtering runs before collision resolution, so a discarded low-confidence finding can never mask a higher-confidence one that overlaps it, and `inspect` prints the score and method of every entity so a threshold can be chosen before it is applied. Defaults to `0`, meaning nothing is filtered and existing output is unchanged unless the threshold is set. `confidence`/`method` are optional on the `Detector` interface, so existing rule packs keep working and their findings are scored at `DEFAULT_CONFIDENCE` (0.5).

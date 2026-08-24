@@ -67,3 +67,11 @@ test('returns empty array for plain text', (t) => {
   const findings = detector.detect('This is just a normal sentence with no email.');
   t.is(findings.length, 0);
 });
+
+// --- Confidence ---
+
+test('scores a matched address as a high-confidence exact pattern', (t) => {
+  const findings = detector.detect('Contact user@example.com');
+  t.is(findings[0]?.confidence, 0.95);
+  t.is(findings[0]?.method, 'exact-pattern');
+});

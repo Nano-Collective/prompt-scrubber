@@ -95,3 +95,17 @@ test('span accurately reflects value slice in text', (t) => {
     t.is(text.slice(start, end), finding.value);
   }
 });
+
+// --- Confidence ---
+
+test('scores a marked phone number above a bare 3-3-4 group', (t) => {
+  const international = detector.detect('Call +44 7911 123456 today');
+  t.is(international[0]?.confidence, 0.9);
+  t.is(international[0]?.method, 'structural');
+
+  const parenthesised = detector.detect('Call (555) 123-4567 today');
+  t.is(parenthesised[0]?.confidence, 0.9);
+
+  const dashed = detector.detect('Call 555-123-4567 today');
+  t.is(dashed[0]?.confidence, 0.8);
+});

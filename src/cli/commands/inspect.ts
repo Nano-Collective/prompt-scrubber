@@ -1,12 +1,12 @@
 import * as crypto from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import type { Command } from 'commander';
-import { resolveCollisions } from '../../core/collision-resolver.js';
 import { loadConfig } from '../../core/config.js';
 import { loadConfiguredRulePacks } from '../../core/rule-packs.js';
-import { getActiveDetectors } from '../../core/scrub.js';
+import { getActiveDetectors, runDetectors } from '../../core/scrub.js';
 import { SessionManager } from '../../session/session-manager.js';
-import type { Finding } from '../../types/index.js';
+import type { Finding, ScoredFinding } from '../../types/index.js';
+import { parseConfidence } from './scrub.js';
 
 export async function handleInspect(
   text: string,
@@ -16,6 +16,7 @@ export async function handleInspect(
     strictName?: boolean;
     codeTellTerms?: string;
     urlAllowlist?: string;
+    minConfidence?: number;
   },
 ) {
   const disabledDetectors = options.disable ? options.disable.split(',').map((s) => s.trim()) : [];
@@ -30,6 +31,8 @@ export async function handleInspect(
 
   const config = loadConfig();
   const urlAllowlist = Array.from(new Set([...(config.urlAllowlist || []), ...cliUrlAllowlist]));
+  // An explicit flag overrides the configured floor; both default to 0.
+  const minConfidence = options.minConfidence ?? config.minConfidence ?? 0;
 
   const { detectors: rulePackDetectors } = await loadConfiguredRulePacks();
 
@@ -42,10 +45,7 @@ export async function handleInspect(
     customDetectors: rulePackDetectors,
   });
 
-  const allFindings = detectors.flatMap((d) => d.detect(text));
-  const findings = resolveCollisions(allFindings);
-
-  return findings;
+  return runDetectors(text, detectors, minConfidence);
 }
 
 export function computeHash(text: string, findings: Finding[]): string {
@@ -64,7 +64,7 @@ export function computeHash(text: string, findings: Finding[]): string {
   return crypto.createHash('sha256').update(scrubbedContent).digest('hex');
 }
 
-export function formatInspectOutput(findings: Finding[], hash: string): string {
+export function formatInspectOutput(findings: ScoredFinding[], hash: string): string {
   if (findings.length === 0) {
     return `No sensitive entities detected.\nNo session written.\nHash: ${hash}\n`;
   }
@@ -79,13 +79,17 @@ export function formatInspectOutput(findings: Finding[], hash: string): string {
     counters[finding.placeholderPrefix] = count;
     const placeholder = `«${finding.placeholderPrefix}_${count}»`;
 
-    // Format: [Category] value -> Placeholder (chars start-end)
+    // The score is what a `--min-confidence` threshold is compared against, so it
+    // is shown for every entity rather than only when the flag is in play.
+    const score = finding.confidence.toFixed(2);
+
+    // Format: [Category] value -> Placeholder (chars start-end, confidence method)
     const catStr = `[${finding.category}]`.padEnd(10);
     // Truncate very long values for display
     const valDisp = finding.value.length > 30 ? `${finding.value.slice(0, 27)}...` : finding.value;
     const valStr = valDisp.padEnd(32);
 
-    output += `  ${catStr} ${valStr} → ${placeholder.padEnd(10)} (chars ${finding.span[0]}-${finding.span[1]})\n`;
+    output += `  ${catStr} ${valStr} → ${placeholder.padEnd(10)} (chars ${finding.span[0]}-${finding.span[1]}, confidence ${score} ${finding.method})\n`;
   }
 
   output += `\nNo session written.\nHash: ${hash}\n`;
@@ -113,6 +117,11 @@ export function setupInspectCommand(program: Command) {
     .option(
       '--url-allowlist <hosts>',
       'Comma-separated list of hostnames to pass-through in URLs (subdomains are implicitly allowed)',
+    )
+    .option(
+      '--min-confidence <value>',
+      'Discard findings scored below this confidence (0-1)',
+      parseConfidence,
     )
     .option('--hash', 'Print only the SHA-256 hash of the scrubbed output')
     .action(async (file, options) => {

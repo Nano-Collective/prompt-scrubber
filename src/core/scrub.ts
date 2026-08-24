@@ -7,7 +7,14 @@ import { PostalAddressDetector } from '../detectors/postal-address.js';
 import { SecretDetector } from '../detectors/secret.js';
 import { UrlDetector } from '../detectors/url.js';
 import { SessionManager } from '../session/session-manager.js';
-import type { Detector, Message, ScrubRequest, ScrubResult, ScrubStats } from '../types/index.js';
+import type {
+  Detector,
+  Message,
+  ScoredFinding,
+  ScrubRequest,
+  ScrubResult,
+  ScrubStats,
+} from '../types/index.js';
 import { resolveCollisions } from './collision-resolver.js';
 
 const DEFAULT_DETECTORS: Detector[] = [
@@ -19,6 +26,37 @@ const DEFAULT_DETECTORS: Detector[] = [
   new PostalAddressDetector(),
 ];
 
+// Confidence assumed for findings from detectors that do not report one.
+export const DEFAULT_CONFIDENCE = 0.5;
+
+// Method reported for findings from detectors that do not name one.
+const DEFAULT_METHOD = 'unspecified';
+
+/**
+ * Runs every detector over `text`, drops findings scored below `minConfidence`,
+ * then resolves the remaining overlaps.
+ *
+ * Filtering happens before collision resolution so a discarded low-confidence
+ * finding can never suppress a higher-confidence one that overlaps it.
+ */
+export function runDetectors(
+  text: string,
+  detectors: Detector[],
+  minConfidence = 0,
+): ScoredFinding[] {
+  const scored: ScoredFinding[] = detectors.flatMap((d) =>
+    d.detect(text).map((finding) => ({
+      ...finding,
+      confidence: finding.confidence ?? DEFAULT_CONFIDENCE,
+      method: finding.method ?? DEFAULT_METHOD,
+    })),
+  );
+
+  const kept = minConfidence > 0 ? scored.filter((f) => f.confidence >= minConfidence) : scored;
+
+  return resolveCollisions(kept);
+}
+
 /**
  * Scrubs a single string, returning the scrubbed text.
  * All replacements are recorded in the provided SessionManager and counted into `stats`.
@@ -28,12 +66,9 @@ function scrubString(
   detectors: Detector[],
   session: SessionManager,
   stats: ScrubStats,
+  minConfidence: number,
 ): string {
-  // Run all detectors and flatten results
-  const allFindings = detectors.flatMap((d) => d.detect(text));
-
-  // Resolve overlaps using the priority-based collision resolver
-  const findings = resolveCollisions(allFindings);
+  const findings = runDetectors(text, detectors, minConfidence);
 
   if (findings.length === 0) {
     return text;
@@ -115,16 +150,17 @@ export function scrub(request: ScrubRequest): ScrubResult {
   const session = new SessionManager(sessionId, sessionMap);
   const detectors = getActiveDetectors(options);
   const stats: ScrubStats = { totalEntities: 0, byCategory: {} };
+  const minConfidence = options?.minConfidence ?? 0;
 
   let scrubbedContent: string | Message[];
 
   if (typeof content === 'string') {
-    scrubbedContent = scrubString(content, detectors, session, stats);
+    scrubbedContent = scrubString(content, detectors, session, stats, minConfidence);
   } else {
     // Message[] — scrub each message's content independently, preserve structure
     scrubbedContent = content.map((msg) => ({
       ...msg,
-      content: scrubString(msg.content, detectors, session, stats),
+      content: scrubString(msg.content, detectors, session, stats, minConfidence),
     }));
   }
 
