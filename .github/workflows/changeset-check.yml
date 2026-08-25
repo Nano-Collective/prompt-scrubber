@@ -4,6 +4,11 @@ name: Changeset Check
 # changeset, leave a single comment explaining how to add one. If a changeset is
 # later added, the comment is removed. This never fails the build - it only
 # keeps the release-notes pipeline fed.
+#
+# The PR's file list is read through the API rather than checked out. This job
+# runs as `pull_request_target`, so it carries the base repository's token and
+# secrets, and pulling fork code into that trusted context is what leads to
+# "pwn request" vulnerabilities. The check only ever needs filenames.
 
 on:
   pull_request_target:
@@ -19,35 +24,22 @@ jobs:
     runs-on: ubuntu-latest
     if: github.head_ref != 'changeset-release/main'
     steps:
-      - name: Checkout PR head
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0
-
-      - name: Detect a changeset in this PR
-        id: detect
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          ADDED=$(git diff --name-only --diff-filter=A "$BASE_SHA" "$HEAD_SHA" \
-            | { grep -E '^\.changeset/.+\.md$' || true; } \
-            | { grep -v -E '^\.changeset/README\.md$' || true; })
-          if [ -n "$ADDED" ]; then
-            echo "has-changeset=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "has-changeset=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Comment if missing (or clean up if present)
         uses: actions/github-script@v9
         with:
           script: |
             const marker = '<!-- changeset-check -->';
-            const hasChangeset = ${{ steps.detect.outputs.has-changeset }};
             const {owner, repo} = context.repo;
             const issue_number = context.issue.number;
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner, repo, pull_number: issue_number,
+            });
+            const hasChangeset = files.some(f =>
+              f.status === 'added' &&
+              /^\.changeset\/.+\.md$/.test(f.filename) &&
+              f.filename !== '.changeset/README.md'
+            );
 
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner, repo, issue_number,
