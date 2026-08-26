@@ -2,5 +2,6 @@
   "$schema": "https://unpkg.com/knip@5/schema.json",
   "ignoreDependencies": [],
   "ignoreBinaries": ["semgrep", "pbcopy", "pbpaste", "xclip", "osascript", "notify-send"],
-  "ignoreWorkspaces": ["examples/*"]
+  "ignoreWorkspaces": ["examples/*"],
+  "entry": ["src/proxy/index.ts!"]
 }

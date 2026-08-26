@@ -256,3 +256,30 @@ test.serial('CLI: sessions rm fails gracefully with invalid session id', (t) => 
   t.not(result.status, 0);
   t.true(result.stderr.includes('not found'));
 });
+
+test.serial('CLI: help lists the proxy command', (t) => {
+  const result = runCli(['--help']);
+  t.is(result.status, 0);
+  t.true(result.stdout.includes('proxy'));
+  t.true(result.stdout.includes('scrubs outgoing LLM'));
+});
+
+test.serial('CLI: proxy --help shows provider options and the session header', (t) => {
+  const result = runCli(['proxy', '--help']);
+  t.is(result.status, 0);
+  t.true(result.stdout.includes('--target'));
+  t.true(result.stdout.includes('--verbose'));
+  t.true(result.stdout.includes('--no-gc'));
+});
+
+test.serial('CLI: proxy refuses to start without --target', (t) => {
+  const result = runCli(['proxy', '--port', '0']);
+  t.not(result.status, 0);
+  t.true(result.stderr.includes('--target'));
+});
+
+test.serial('CLI: proxy refuses an invalid --target URL', (t) => {
+  const result = runCli(['proxy', '--target', 'not-a-url', '--port', '0']);
+  t.not(result.status, 0);
+  t.true(result.stderr.includes('Invalid --target URL'));
+});

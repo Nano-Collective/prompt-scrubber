@@ -90,6 +90,54 @@ Watch mode shells out to a small platform helper for clipboard access and notifi
 | macOS | `pbpaste` / `pbcopy` | `osascript` |
 | Linux | `xclip` | `notify-send` (`libnotify-bin`) |
 
+## Proxy Mode
+
+### `prompt-scrub proxy`
+
+Runs a local HTTP proxy that intercepts LLM API traffic and rewrites PII in-flight. Point any SDK at the proxy instead of the upstream API and every chat completion (streaming or otherwise) is scrubbed on the way out and rehydrated on the way back, transparently.
+
+```bash
+# Scrub + rehydrate OpenAI traffic on localhost:8080
+prompt-scrub proxy --target https://api.openai.com --port 8080 &
+
+# Now route your SDK through the proxy. Both work:
+export OPENAI_BASE_URL=http://localhost:8080/v1
+# or
+# point your HTTP client at http://localhost:8080 and add /v1 to your path
+```
+
+The proxy recognises two providers by URL shape:
+
+| Path pattern | Provider | Scrubbed fields |
+| --- | --- | --- |
+| `…/v1/chat/completions` | OpenAI | `messages[].content` (string or `text` parts) |
+| `…/v1/messages` | Anthropic | `messages[].content` (string or `text` blocks) |
+
+Anything that does not match a known shape (e.g. `GET /v1/models`, `POST /v1/embeddings`) is forwarded byte-for-byte without modification. This is the safe default: enabling a new vendor is additive.
+
+**Session continuity:** the proxy threads a session ID through every request via the `x-prompt-scrub-session` header. When the client sends the header back on a follow-up call, the same placeholder map is reused, so `«Email_1»` stays `«Email_1»` across turns. If the client does not send the header, the proxy generates a UUID and echoes it in the response so the client can pin it.
+
+**Streaming:** Server-Sent Events (SSE) are rehydrated incrementally. A placeholder may be split across chunks (`«Email_` then `1»`); the proxy buffers incomplete events so rehydration is lossless and reordering-safe. `data: [DONE]` sentinels and non-JSON payloads pass through untouched.
+
+**Headers:** the proxy strips hop-by-hop headers per RFC 7230 (`connection`, `keep-alive`, `transfer-encoding`, `upgrade`, `host`, etc.) and rewrites `host` to the upstream value. Authentication headers (`authorization`, `x-api-key`, etc.) are forwarded as-is.
+
+**Garbage collection:** on startup, expired sessions are pruned according to `sessionTtlDays`. Pass `--no-gc` to skip this.
+
+**Options:**
+- `--target <url>` (required): Upstream base URL, e.g. `https://api.openai.com` or `https://api.anthropic.com`.
+- `--port <port>`: Local port (default `8080`). Use `0` to bind a random free port.
+- `--host <host>`: Local interface to bind (default `127.0.0.1`).
+- `--disable <detectors>`, `--enable <detectors>`, `--strict-name`, `--code-tell-terms`, `--url-allowlist`: Same scrubber options as the `scrub` command.
+- `-v, --verbose`: Log a one-line summary of every proxied request to `stderr` (including the scrubbed/rehydrated counts and session ID).
+- `--no-gc`: Skip the startup session-garbage-collection pass.
+
+**Limitations:**
+
+- Request bodies larger than 10 MB are rejected with `413 Payload Too Large`. Tune with `--max-body-bytes` on the programmatic API.
+- Responses that arrive gzipped are forwarded uncompressed (we strip `accept-encoding` on the outbound hop). Upstreams that re-add gzip mid-flight are forwarded unchanged.
+- The proxy does not perform TLS termination for the inbound hop — terminate TLS at a reverse proxy if you need to expose it on a network interface. The default `127.0.0.1` binding is loopback-only.
+- The proxy is a development tool, not a hardened gateway. Run it on a trusted host.
+
 ## Session Management
 
 ### `prompt-scrub sessions list`

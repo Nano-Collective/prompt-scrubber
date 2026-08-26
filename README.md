@@ -94,6 +94,18 @@ prompt-scrub watch --file prompt.txt --dry-run --once
 
 See the [CLI Reference](docs/getting-started/cli.md#watch-mode) for all watch options and platform requirements.
 
+**CLI: Run a transparent scrubbing proxy**
+```bash
+# Point your SDK at the proxy instead of the upstream API.
+prompt-scrub proxy --target https://api.openai.com --port 8080 &
+export OPENAI_BASE_URL=http://localhost:8080/v1
+
+# Any request your app sends to OpenAI is now scrubbed on the way out and
+# rehydrated on the way back, transparently. Streaming (SSE) responses work.
+```
+
+See the [CLI Reference](docs/getting-started/cli.md#proxy-mode) for the full set of options and supported providers.
+
 **Node.js API: Scrubbing and Rehydrating**
 ```typescript
 import { scrub, rehydrate } from '@nanocollective/prompt-scrub';
