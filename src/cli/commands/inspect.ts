@@ -64,6 +64,28 @@ export function computeHash(text: string, findings: Finding[]): string {
   return crypto.createHash('sha256').update(scrubbedContent).digest('hex');
 }
 
+export function toInspectJson(findings: Finding[], hash: string) {
+  const counters: Record<string, number> = {};
+
+  const entities = findings.map((finding) => {
+    const count = (counters[finding.placeholderPrefix] ?? 0) + 1;
+    counters[finding.placeholderPrefix] = count;
+    const placeholder = `«${finding.placeholderPrefix}_${count}»`;
+
+    return {
+      category: finding.category,
+      value: finding.value,
+      placeholder,
+      span: finding.span,
+    };
+  });
+
+  return {
+    entities,
+    hash,
+  };
+}
+
 export function formatInspectOutput(findings: Finding[], hash: string): string {
   if (findings.length === 0) {
     return `No sensitive entities detected.\nNo session written.\nHash: ${hash}\n`;
@@ -115,6 +137,7 @@ export function setupInspectCommand(program: Command) {
       'Comma-separated list of hostnames to pass-through in URLs (subdomains are implicitly allowed)',
     )
     .option('--hash', 'Print only the SHA-256 hash of the scrubbed output')
+    .option('--json', 'Output a structured JSON object instead of plain text')
     .action(async (file, options) => {
       let input = '';
 
@@ -122,16 +145,25 @@ export function setupInspectCommand(program: Command) {
         try {
           input = readFileSync(file, 'utf8');
         } catch (err: unknown) {
-          console.error(`Error reading file: ${(err as Error).message}`);
+          const message = `Error reading file: ${(err as Error).message}`;
+          if (options.json) {
+            process.stdout.write(`${JSON.stringify({ error: message }, null, 2)}\n`);
+          } else {
+            console.error(message);
+          }
           process.exit(1);
           return;
         }
       } else {
-        // Read from stdin
         try {
           input = readFileSync(0, 'utf-8');
         } catch {
-          console.error('No input provided.');
+          const message = 'No input provided.';
+          if (options.json) {
+            process.stdout.write(`${JSON.stringify({ error: message }, null, 2)}\n`);
+          } else {
+            console.error(message);
+          }
           process.exit(1);
           return;
         }
@@ -145,7 +177,10 @@ export function setupInspectCommand(program: Command) {
       const findings = await handleInspect(input, options);
       const hash = computeHash(input, findings);
 
-      if (options.hash) {
+      if (options.json) {
+        const output = toInspectJson(findings, hash);
+        process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+      } else if (options.hash) {
         process.stdout.write(`${hash}\n`);
       } else {
         const output = formatInspectOutput(findings, hash);
