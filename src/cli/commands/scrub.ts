@@ -100,6 +100,7 @@ export function setupScrubCommand(program: Command) {
       'Comma-separated list of hostnames to pass-through in URLs (subdomains are implicitly allowed)',
     )
     .option('-q, --quiet', 'Suppress the scrub summary printed to stderr')
+    .option('--json', 'Output a structured JSON object instead of plain text')
     .action(async (file, options) => {
       let input = '';
 
@@ -107,7 +108,12 @@ export function setupScrubCommand(program: Command) {
         try {
           input = readFileSync(file, 'utf8');
         } catch (err: unknown) {
-          console.error(`Error reading file: ${(err as Error).message}`);
+          const message = `Error reading file: ${(err as Error).message}`;
+          if (options.json) {
+            process.stdout.write(`${JSON.stringify({ error: message }, null, 2)}\n`);
+          } else {
+            console.error(message);
+          }
           process.exit(1);
           return;
         }
@@ -116,7 +122,12 @@ export function setupScrubCommand(program: Command) {
         try {
           input = readFileSync(0, 'utf-8');
         } catch {
-          console.error('No input provided.');
+          const message = 'No input provided.';
+          if (options.json) {
+            process.stdout.write(`${JSON.stringify({ error: message }, null, 2)}\n`);
+          } else {
+            console.error(message);
+          }
           process.exit(1);
           return;
         }
@@ -128,6 +139,17 @@ export function setupScrubCommand(program: Command) {
       }
 
       const result = await handleScrub(input, options);
+
+      if (options.json) {
+        const output = {
+          scrubbedContent: result.scrubbedContent,
+          sessionId: result.sessionId,
+          sessionMap: result.sessionMap,
+          stats: result.stats,
+        };
+        process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+        return;
+      }
 
       // Print scrubbed content to stdout
       process.stdout.write(result.scrubbedContent as string);

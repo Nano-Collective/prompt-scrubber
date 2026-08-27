@@ -256,3 +256,66 @@ test.serial('CLI: sessions rm fails gracefully with invalid session id', (t) => 
   t.not(result.status, 0);
   t.true(result.stderr.includes('not found'));
 });
+
+test.serial('CLI: scrub --json returns structured output', (t) => {
+  const result = runCli(['scrub', '--json'], 'Contact alice@example.com');
+
+  t.is(result.status, 0);
+
+  const output = JSON.parse(result.stdout) as {
+    scrubbedContent: string;
+    sessionId: string;
+    sessionMap: Record<string, string>;
+    stats: { totalEntities: number };
+  };
+
+  t.is(output.scrubbedContent, 'Contact «Email_1»');
+  t.truthy(output.sessionId);
+  t.deepEqual(output.sessionMap, {
+    '«Email_1»': 'alice@example.com',
+  });
+  t.is(output.stats.totalEntities, 1);
+});
+
+test.serial('CLI: inspect --json returns entities and hash', (t) => {
+  const result = runCli(['inspect', '--json'], 'Contact alice@example.com');
+
+  t.is(result.status, 0);
+
+  const output = JSON.parse(result.stdout) as {
+    entities: Array<{
+      category: string;
+      value: string;
+      placeholder: string;
+      span: [number, number];
+    }>;
+    hash: string;
+  };
+
+  t.is(output.entities.length, 1);
+  t.is(output.entities[0]?.category, 'Email');
+  t.is(output.entities[0]?.value, 'alice@example.com');
+  t.is(output.entities[0]?.placeholder, '«Email_1»');
+  t.regex(output.hash, /^[a-f0-9]{64}$/);
+});
+
+test.serial('CLI: rehydrate --json returns restored content', (t) => {
+  const scrubResult = runCli(['scrub'], 'Contact alice@example.com');
+  const sessionId = scrubResult.stderr.match(/Session ID: (\S+)/)?.[1];
+
+  t.truthy(sessionId);
+
+  const result = runCli(['rehydrate', '--session-id', sessionId!, '--json'], 'Contact «Email_1»');
+
+  t.is(result.status, 0);
+
+  const output = JSON.parse(result.stdout) as {
+    content: string;
+    sessionId: string;
+    warnings: string[];
+  };
+
+  t.is(output.content, 'Contact alice@example.com');
+  t.is(output.sessionId, sessionId);
+  t.deepEqual(output.warnings, []);
+});
