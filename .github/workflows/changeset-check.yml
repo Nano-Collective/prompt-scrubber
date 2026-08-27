@@ -74,7 +74,7 @@ jobs:
               "pnpm changeset",
               "```",
               "",
-              "Pick a bump (patch / minor / major) and write the changelog entry in our usual voice (\"Added **X**... Closes #123.\"), then commit the generated `.changeset/*.md` file.",
+              "Pick a bump (patch / minor / major) and write the changelog entry in our usual voice (`Added **X**... Closes #<issue>.`), then commit the generated `.changeset/*.md` file.",
               "",
               "If this PR is docs-only or a chore that needs no release note, you can ignore this - or run `pnpm changeset --empty` to record that intentionally.",
             ].join("\n");
