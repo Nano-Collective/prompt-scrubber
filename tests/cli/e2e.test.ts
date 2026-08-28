@@ -245,6 +245,34 @@ test.serial('CLI: inspect fails when reading from stdin with no input provided',
   t.is(result.stdout, '');
 });
 
+test.serial('CLI: diff prints original vs scrubbed and writes no session', (t) => {
+  const sessionsDir = path.join(tmpConfigDir, 'prompt-scrub', 'sessions');
+  if (fs.existsSync(sessionsDir)) {
+    fs.rmSync(sessionsDir, { recursive: true, force: true });
+  }
+
+  const result = runCli(['diff', '--no-color'], 'Email me at alice@corp.com');
+  t.is(result.status, 0);
+  t.is(result.stdout, '- Email me at alice@corp.com\n+ Email me at «Email_1»\n');
+
+  const listRes = runCli(['sessions', 'list']);
+  t.true(listRes.stdout.includes('No saved sessions.'));
+});
+
+test.serial('CLI: diff --side-by-side uses a two-column layout', (t) => {
+  const result = runCli(['diff', '--side-by-side', '--no-color'], 'Email me at alice@corp.com');
+  t.is(result.status, 0);
+  t.true(result.stdout.includes('|'));
+  t.true(result.stdout.includes('alice@corp.com'));
+  t.true(result.stdout.includes('«Email_1»'));
+});
+
+test.serial('CLI: help lists the diff command', (t) => {
+  const result = runCli(['--help']);
+  t.is(result.status, 0);
+  t.true(result.stdout.includes('diff'));
+});
+
 test.serial('CLI: sessions rm fails when session ID is missing without --all', (t) => {
   const result = runCli(['sessions', 'rm']);
   t.not(result.status, 0);

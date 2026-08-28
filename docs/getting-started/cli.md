@@ -46,6 +46,26 @@ Reads a message from `stdin` or a file and prints a human-readable diff of the t
 - `--disable <detectors>`: Comma-separated list of detectors to disable.
 - `--hash`: Print *only* the SHA-256 hash for scripting purposes.
 
+### `prompt-scrub diff [file]`
+Reads a message from `stdin` or a file and prints a colorized line diff of the original text against what `scrub` would emit. Nothing is written to a session. Red lines are the original PII, green lines are the placeholders.
+
+```bash
+echo "Email me at alice@corp.com" | prompt-scrub diff --no-color
+```
+
+```
+- Email me at alice@corp.com
++ Email me at «Email_1»
+```
+
+Colors are on when stdout is a TTY. Pass `--no-color` to pipe the output into a file.
+
+**Options:**
+- `--side-by-side`: Two-column layout (`original | scrubbed`).
+- `--context <n>`: Unchanged lines kept around each change (default `3`).
+- `--no-color`: Disable ANSI colors.
+- `--disable <detectors>`: Comma-separated list of detectors to disable.
+
 ## Watch Mode
 
 ### `prompt-scrub watch`

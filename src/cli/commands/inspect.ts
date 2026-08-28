@@ -48,20 +48,20 @@ export async function handleInspect(
   return findings;
 }
 
-export function computeHash(text: string, findings: Finding[]): string {
-  // Use a dummy session to simulate exactly what scrub does (right-to-left replacement)
+export function simulateScrub(text: string, findings: Finding[]): string {
   const session = new SessionManager();
-  let scrubbedContent = text;
+  let scrubbed = text;
 
   for (const finding of [...findings].reverse()) {
     const placeholder = session.createPlaceholder(finding.placeholderPrefix, finding.value);
-    scrubbedContent =
-      scrubbedContent.slice(0, finding.span[0]) +
-      placeholder +
-      scrubbedContent.slice(finding.span[1]);
+    scrubbed = scrubbed.slice(0, finding.span[0]) + placeholder + scrubbed.slice(finding.span[1]);
   }
 
-  return crypto.createHash('sha256').update(scrubbedContent).digest('hex');
+  return scrubbed;
+}
+
+export function computeHash(text: string, findings: Finding[]): string {
+  return crypto.createHash('sha256').update(simulateScrub(text, findings)).digest('hex');
 }
 
 export function formatInspectOutput(findings: Finding[], hash: string): string {
