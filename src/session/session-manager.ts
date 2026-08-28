@@ -2,12 +2,19 @@ import * as crypto from 'node:crypto';
 import type { SessionMap } from '../types/index.js';
 import { deleteSessionMap, listSessions, readSessionMap, writeSessionMap } from './storage.js';
 
+/** Placeholder format: "«Category_Index»". */
+const PLACEHOLDER_TOKEN_REGEX = /«[A-Za-z]+_\d+»/g;
+
 export class SessionManager {
   private sessionId: string | undefined;
   private map: SessionMap;
   private valueToPlaceholder: Record<string, string>;
   // Keeps track of the next index to use for each category to generate placeholders like "«Email_1»"
   private categoryCounts: Record<string, number>;
+  // Placeholder names that already appear literally in the text being scrubbed.
+  // They are not ours to hand out: reusing one collapses two different values
+  // into a single token that rehydrates wrong in at least one position.
+  private reservedNames: Set<string>;
   private diskEnabled: boolean;
 
   constructor(sessionId?: string, initialMap?: SessionMap) {
@@ -27,6 +34,18 @@ export class SessionManager {
 
     this.categoryCounts = this.rebuildCategoryCounts(this.map);
     this.valueToPlaceholder = this.buildReverseLookup(this.map);
+    this.reservedNames = new Set();
+  }
+
+  /**
+   * Records every placeholder-shaped token already present in `text` so a newly
+   * minted placeholder can never reuse one the text carries literally - as when
+   * already-scrubbed output is scrubbed again.
+   */
+  public reservePlaceholdersIn(text: string): void {
+    for (const match of text.matchAll(PLACEHOLDER_TOKEN_REGEX)) {
+      this.reservedNames.add(match[0]);
+    }
   }
 
   private buildReverseLookup(map: SessionMap): Record<string, string> {
@@ -92,10 +111,14 @@ export class SessionManager {
       return existing;
     }
 
-    const count = this.categoryCounts[category] || 1;
+    let count = this.categoryCounts[category] || 1;
+    let newPlaceholder = `«${category}_${count}»`;
+    while (this.reservedNames.has(newPlaceholder) || newPlaceholder in this.map) {
+      count += 1;
+      newPlaceholder = `«${category}_${count}»`;
+    }
     this.categoryCounts[category] = count + 1;
 
-    const newPlaceholder = `«${category}_${count}»`;
     this.map[newPlaceholder] = originalValue;
     this.valueToPlaceholder[originalValue] = newPlaceholder;
 

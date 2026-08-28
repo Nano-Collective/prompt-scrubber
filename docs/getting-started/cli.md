@@ -64,6 +64,8 @@ prompt-scrub watch --file prompt.txt notes.md --interval 500
 prompt-scrub watch --file prompt.txt --dry-run --once
 ```
 
+A single session is used for the whole run, so placeholders keep counting up across ticks and two different values can never share one token. The session ID is printed on start-up (`[watch] Session ID: <id>`) - pass it to `prompt-scrub rehydrate --session-id <id>` to restore the originals. Use `--session-id` to keep watching into an existing session instead.
+
 Press `Ctrl-C` to stop watching; the poll loop is cleared and the process exits cleanly.
 
 **Options:**

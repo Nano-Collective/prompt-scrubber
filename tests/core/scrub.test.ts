@@ -321,3 +321,19 @@ test('stats include categories contributed by custom detectors', (t) => {
   t.is(result.stats.totalEntities, 2);
   t.deepEqual(result.stats.byCategory, { Ticket: 1, Email: 1 });
 });
+
+test('a placeholder already present in the text is never reissued to a new value', (t) => {
+  const sessionMap: Record<string, string> = {};
+  const result = scrub({
+    content: 'the token «Email_1» is literal, contact a@b.com',
+    sessionMap,
+  });
+
+  t.is(result.scrubbedContent, 'the token «Email_1» is literal, contact «Email_2»');
+  t.deepEqual(sessionMap, { '«Email_2»': 'a@b.com' });
+  t.is(
+    rehydrate({ content: result.scrubbedContent as string, sessionMap }).content,
+    'the token «Email_1» is literal, contact a@b.com',
+    'the literal token survives and only the real value is restored',
+  );
+});

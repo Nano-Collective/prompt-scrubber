@@ -29,6 +29,10 @@ function scrubString(
   session: SessionManager,
   stats: ScrubStats,
 ): string {
+  // Claim any placeholder the text already carries before minting new ones, so
+  // re-scrubbing scrubbed output cannot hand the same token to a second value.
+  session.reservePlaceholdersIn(text);
+
   // Run all detectors and flatten results
   const allFindings = detectors.flatMap((d) => d.detect(text));
 
