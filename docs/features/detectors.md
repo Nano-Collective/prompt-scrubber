@@ -61,6 +61,8 @@ Priority is implicitly handled by a defined order of precedence:
 
 If `SecretDetector` and `UrlDetector` match the same string (e.g., a URL with a token), `SecretDetector` wins.
 
+The losing finding is not thrown away. It is narrowed to the part of its span the winner does not cover, so an over-broad match degrades to over-redaction rather than emitting the text it over-matched in cleartext. Two exceptions: findings of the same category are rival readings of one entity, so the winner's span is taken as authoritative, and a finding whose `value` does not map 1:1 onto its `span` cannot be re-sliced and is dropped.
+
 ## Registration System
 
 By default, the core scrub function runs the built-in detectors in priority order. You can optionally configure detectors via `ScrubOptions` in the API, or through the CLI:

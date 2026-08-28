@@ -87,6 +87,47 @@ test('handles exactly abutting spans (no overlap)', (t) => {
   t.is(result.length, 2);
 });
 
+// A loser is only narrowed when its value lines up with its span, so these use
+// real text rather than the default placeholder value.
+
+test('a losing finding is narrowed to the part the winner does not cover', (t) => {
+  const text = 'C:\\app\\cfg.ini owner alice@corp.com';
+  const emailStart = text.indexOf('alice@corp.com');
+  const overBroadPath = makeFinding('Path', 0, text.length, text);
+  const email = makeFinding('Email', emailStart, text.length, text.slice(emailStart));
+
+  const result = resolveCollisions([overBroadPath, email]);
+
+  t.is(result.length, 2);
+  t.is(result[0]?.value, 'C:\\app\\cfg.ini owner');
+  t.is(result[1]?.value, 'alice@corp.com');
+});
+
+test('a winner inside the loser keeps the loser on both sides', (t) => {
+  const text = 'aaaa BBBB cccc';
+  const wide = makeFinding('Path', 0, text.length, text);
+  const inner = makeFinding('Secret', 5, 9, 'BBBB');
+
+  const result = resolveCollisions([wide, inner]);
+
+  t.deepEqual(
+    result.map((f) => f.value),
+    ['aaaa', 'BBBB', 'cccc'],
+  );
+});
+
+test('a losing finding of the same category is dropped rather than narrowed', (t) => {
+  // Rival readings of one entity — the leftover "10" must not become an Address
+  const text = '10 Downing St, London';
+  const short = makeFinding('Address', 0, 13, text.slice(0, 13));
+  const long = makeFinding('Address', 3, text.length, text.slice(3));
+
+  const result = resolveCollisions([short, long]);
+
+  t.is(result.length, 1);
+  t.is(result[0]?.value, 'Downing St, London');
+});
+
 test('handles unknown custom detector priority', (t) => {
   const unknown1 = makeFinding('UnknownDetectorA', 0, 10, 'short');
   const unknown2 = makeFinding('UnknownDetectorB', 5, 20, 'much_longer');

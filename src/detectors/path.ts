@@ -9,7 +9,12 @@ const UNIX_PATH_REGEX = /(?<!:\/)(?<![\w~])(\/((?:[a-zA-Z0-9_.@-]+\/)+[a-zA-Z0-9
 const HOME_PATH_REGEX = /(?<![\w/])(~\/[a-zA-Z0-9_.@-][a-zA-Z0-9_.@\-/]*)(?![\w])/g;
 
 // Windows absolute path: C:\Users\... or D:\Projects\...
-const WIN_PATH_REGEX = /([A-Za-z]:\\(?:[^\\/:*?"<>|\r\n]+\\)*[^\\/:*?"<>|\r\n]*)/g;
+// The final segment excludes whitespace so the match stops at the end of the
+// path instead of swallowing the rest of the line (which would otherwise make
+// the path collide with, and lose to, any email or secret that follows it).
+// Interior segments still allow spaces, so "C:\Program Files\App\app.exe" is
+// matched in full.
+const WIN_PATH_REGEX = /([A-Za-z]:\\(?:[^\\/:*?"<>|\r\n]+\\)*[^\s\\/:*?"<>|]*)/g;
 
 export class PathDetector implements Detector {
   readonly name = 'PathDetector';

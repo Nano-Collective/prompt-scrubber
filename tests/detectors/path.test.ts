@@ -36,6 +36,28 @@ test('detects Windows absolute path', (t) => {
   t.is(findings[0]?.value, 'C:\\Users\\John\\Documents\\report.docx');
 });
 
+test('Windows path stops at whitespace instead of running to the end of the line', (t) => {
+  const text = 'Config at C:\\app\\cfg.ini owner alice@corp.com';
+  const findings = detector.detect(text);
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, 'C:\\app\\cfg.ini');
+  const [start, end] = findings[0]!.span;
+  t.is(text.slice(start, end), 'C:\\app\\cfg.ini');
+});
+
+test('detects a quoted Windows path containing spaces', (t) => {
+  const findings = detector.detect('Open "C:\\Program Files\\App\\app.exe" now');
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, 'C:\\Program Files\\App\\app.exe');
+});
+
+test('detects two Windows paths on the same line', (t) => {
+  const findings = detector.detect('Copy C:\\a\\b.txt to D:\\c\\d.txt');
+  t.is(findings.length, 2);
+  t.is(findings[0]?.value, 'C:\\a\\b.txt');
+  t.is(findings[1]?.value, 'D:\\c\\d.txt');
+});
+
 test('detects multiple paths in one string', (t) => {
   const findings = detector.detect('Copy /etc/hosts to ~/Desktop/hosts.bak');
   t.is(findings.length, 2);

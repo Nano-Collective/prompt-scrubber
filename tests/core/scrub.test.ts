@@ -44,6 +44,15 @@ test('scrubs multiple finding types in one pass', (t) => {
   t.regex(scrubbed, /Url_\d/);
 });
 
+test('a Windows path is redacted even when an email follows it on the same line', (t) => {
+  const result = scrub({
+    content: 'Config at C:\\app\\cfg.ini owner alice@corp.com',
+    sessionMap: {},
+  });
+  t.is(result.scrubbedContent, 'Config at «Path_1» owner «Email_1»');
+  t.is(result.sessionMap?.['«Path_1»'], 'C:\\app\\cfg.ini');
+});
+
 test('scrubbing the same value twice generates the same placeholder', (t) => {
   const result1 = scrub({ content: 'Contact: repeat@example.com' });
   const result2 = scrub({

@@ -1,0 +1,5 @@
+---
+"@nanocollective/prompt-scrub": patch
+---
+
+Fix Windows paths leaking in cleartext when an email or secret appears later on the same line. `WIN_PATH_REGEX` allowed spaces in its final segment, so a `C:\...` path ran greedily to the end of the line; collision resolution then dropped that over-wide `Path` finding in favour of the higher-priority `Email`/`Secret` inside it, and the path itself — often carrying a username, employer or project codename — was emitted untouched next to a placeholder that made the line look scrubbed. The same over-match also swallowed trailing prose into `«Path_1»` when no other entity competed. The final segment now excludes whitespace, while interior segments still allow it so `"C:\Program Files\App\app.exe"` is matched in full. As hardening, `resolveCollisions` now narrows a losing finding to the part the winner does not cover instead of discarding it, so an over-broad detector — including one from a third-party rule pack — degrades to over-redaction rather than a silent leak. Thanks to @addyCooks. Closes #123.
