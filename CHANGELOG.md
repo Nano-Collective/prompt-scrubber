@@ -1,5 +1,11 @@
 # @nanocollective/prompt-scrub
 
+# 1.1.0
+
+- feat: implement session TTL and auto-expiry cleanup
+
+- Add a `watch` command for real-time clipboard/file monitoring with auto-scrubbing (`--clipboard`, `--file <files...>`, plus `--dry-run`, `--backup`, `--interval`, `--once`, `--session-id`, `--disable`/`--enable`, `--url-allowlist`; cross-platform Win/macOS/Linux, clean `Ctrl-C` exit, install hints for missing `xclip`/`notify-send`/`osascript`); a one-line `scrub` summary printed to stderr with a `-q`/`--quiet` flag for pipelines, also exposed to library callers as `result.stats` (`totalEntities`, `byCategory`); and `init` + `config show` commands to scaffold and inspect the global config. Fix: cross-platform build script (`rm -rf` → Node `fs.rmSync`); phone-detector span start index; common-name detection in strict mode; watch-mode review feedback. Thanks to @addyCooks and @prashantbhudwal.
+
 # 1.0.2
 
 Patch release — dev-dependency and CI maintenance only. No public-API or runtime changes.
