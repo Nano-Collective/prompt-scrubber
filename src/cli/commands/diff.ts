@@ -1,10 +1,13 @@
 import { readFileSync } from 'node:fs';
-import type { Command } from 'commander';
+import { InvalidArgumentError, type Command } from 'commander';
+import { sanitizeLine } from '../sanitize.js';
 import { handleInspect, simulateScrub } from './inspect.js';
 
 const RED = '\x1b[31m';
 const GREEN = '\x1b[32m';
 const RESET = '\x1b[0m';
+// LCS is n*m; skip the table when the trimmed middle is huge
+const LCS_CELL_BUDGET = 250_000;
 
 type DiffFormatOptions = {
   color?: boolean;
@@ -21,7 +24,22 @@ function splitLines(text: string): string[] {
   return lines;
 }
 
-function diffLines(a: string[], b: string[]): Edit[] {
+function pairIndexWise(a: string[], b: string[]): Edit[] {
+  const n = Math.min(a.length, b.length);
+  const out: Edit[] = [];
+  for (let i = 0; i < n; i++) {
+    if (a[i] === b[i]) out.push({ type: 'eq', line: a[i]! });
+    else {
+      out.push({ type: 'del', line: a[i]! });
+      out.push({ type: 'add', line: b[i]! });
+    }
+  }
+  for (let i = n; i < a.length; i++) out.push({ type: 'del', line: a[i]! });
+  for (let i = n; i < b.length; i++) out.push({ type: 'add', line: b[i]! });
+  return out;
+}
+
+function lcsDiff(a: string[], b: string[]): Edit[] {
   const n = a.length;
   const m = b.length;
   const dp: number[][] = Array.from({ length: n + 1 }, () => Array<number>(m + 1).fill(0));
@@ -56,6 +74,29 @@ function diffLines(a: string[], b: string[]): Edit[] {
     j++;
   }
   return out;
+}
+
+function diffLines(a: string[], b: string[]): Edit[] {
+  let lo = 0;
+  while (lo < a.length && lo < b.length && a[lo] === b[lo]) lo++;
+  let hiA = a.length;
+  let hiB = b.length;
+  while (hiA > lo && hiB > lo && a[hiA - 1] === b[hiB - 1]) {
+    hiA--;
+    hiB--;
+  }
+
+  const midA = a.slice(lo, hiA);
+  const midB = b.slice(lo, hiB);
+  const prefix = a.slice(0, lo).map((line) => ({ type: 'eq' as const, line }));
+  const suffix = a.slice(hiA).map((line) => ({ type: 'eq' as const, line }));
+
+  const mid =
+    midA.length === midB.length || midA.length * midB.length > LCS_CELL_BUDGET
+      ? pairIndexWise(midA, midB)
+      : lcsDiff(midA, midB);
+
+  return [...prefix, ...mid, ...suffix];
 }
 
 function changeRanges(edits: Edit[], context: number): Array<[number, number]> {
@@ -97,17 +138,41 @@ function formatUnified(edits: Edit[], ranges: Array<[number, number]>, color: bo
     const [lo, hi] = ranges[r]!;
     for (let i = lo; i <= hi; i++) {
       const e = edits[i]!;
-      if (e.type === 'eq') out += `  ${e.line}\n`;
-      else if (e.type === 'del') out += `${paint(`- ${e.line}`, color ? RED : null)}\n`;
-      else out += `${paint(`+ ${e.line}`, color ? GREEN : null)}\n`;
+      const line = sanitizeLine(e.line);
+      if (e.type === 'eq') out += `  ${line}\n`;
+      else if (e.type === 'del') out += `${paint(`- ${line}`, color ? RED : null)}\n`;
+      else out += `${paint(`+ ${line}`, color ? GREEN : null)}\n`;
     }
   }
   return out;
 }
 
-function cell(text: string, width: number, color: string | null): string {
-  const raw = text.length > width ? `${text.slice(0, Math.max(0, width - 3))}...` : text;
-  return paint(raw, color) + ' '.repeat(Math.max(0, width - raw.length));
+function wrap(text: string, width: number): string[] {
+  if (text.length === 0) return [''];
+  const parts: string[] = [];
+  for (let i = 0; i < text.length; i += width) parts.push(text.slice(i, i + width));
+  return parts;
+}
+
+function sideBySideRows(
+  left: string,
+  right: string,
+  col: number,
+  leftColor: string | null,
+  rightColor: string | null,
+): string[] {
+  const L = wrap(sanitizeLine(left), col);
+  const R = wrap(sanitizeLine(right), col);
+  const n = Math.max(L.length, R.length);
+  const rows: string[] = [];
+  for (let i = 0; i < n; i++) {
+    const l = L[i] ?? '';
+    const r = R[i] ?? '';
+    rows.push(
+      `${paint(l, leftColor)}${' '.repeat(col - l.length)} | ${paint(r, rightColor)}${' '.repeat(col - r.length)}`,
+    );
+  }
+  return rows;
 }
 
 function formatSideBySide(
@@ -120,13 +185,13 @@ function formatSideBySide(
   const rows: string[] = [];
 
   for (let r = 0; r < ranges.length; r++) {
-    if (r > 0) rows.push(`${cell('...', col, null)} | ${cell('...', col, null)}`);
+    if (r > 0) rows.push(...sideBySideRows('...', '...', col, null, null));
     const slice = edits.slice(ranges[r]![0], ranges[r]![1] + 1);
     let i = 0;
     while (i < slice.length) {
       const e = slice[i]!;
       if (e.type === 'eq') {
-        rows.push(`${cell(e.line, col, null)} | ${cell(e.line, col, null)}`);
+        rows.push(...sideBySideRows(e.line, e.line, col, null, null));
         i++;
         continue;
       }
@@ -142,7 +207,13 @@ function formatSideBySide(
         const left = dels[k];
         const right = adds[k];
         rows.push(
-          `${cell(left ?? '', col, color && left !== undefined ? RED : null)} | ${cell(right ?? '', col, color && right !== undefined ? GREEN : null)}`,
+          ...sideBySideRows(
+            left ?? '',
+            right ?? '',
+            col,
+            color && left !== undefined ? RED : null,
+            color && right !== undefined ? GREEN : null,
+          ),
         );
       }
     }
@@ -168,9 +239,11 @@ export function formatDiff(
   return formatUnified(edits, ranges, color);
 }
 
-function parseContext(value: unknown): number {
-  const n = Number.parseInt(String(value ?? '3'), 10);
-  return Number.isFinite(n) && n >= 0 ? n : 3;
+export function parseContext(value: string): number {
+  if (!/^\d+$/.test(value)) {
+    throw new InvalidArgumentError('--context must be a non-negative integer');
+  }
+  return Number.parseInt(value, 10);
 }
 
 export function setupDiffCommand(program: Command) {
@@ -196,7 +269,7 @@ export function setupDiffCommand(program: Command) {
       'Comma-separated list of hostnames to pass-through in URLs (subdomains are implicitly allowed)',
     )
     .option('--side-by-side', 'Two-column original | scrubbed layout')
-    .option('--context <n>', 'Unchanged lines around each change', '3')
+    .option('--context <n>', 'Unchanged lines around each change', parseContext, 3)
     .option('--no-color', 'Disable ANSI colors')
     .action(async (file, options) => {
       let input = '';
@@ -233,7 +306,7 @@ export function setupDiffCommand(program: Command) {
         formatDiff(input, scrubbed, {
           color: useColor,
           sideBySide: Boolean(options.sideBySide),
-          context: parseContext(options.context),
+          context: options.context,
         }),
       );
     });

@@ -68,7 +68,7 @@ No session written.
 Hash: 41beda4af0b83488fdf6eea9347775450a1c7c887a6ef377212340f36c445132
 ```
 
-Once you are satisfied with what `inspect` shows, run `diff` to see the replacements in place, then proceed with `scrub`.
+The hash is deterministic — the same prompt always produces the same hash, so you can verify cache stability across runs. Once you are satisfied with what `inspect` shows, run `diff` to see the replacements in place, then proceed with `scrub`.
 
 ```bash
 echo "My email is alice@acme.com" | prompt-scrub diff --no-color

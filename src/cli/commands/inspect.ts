@@ -7,6 +7,7 @@ import { loadConfiguredRulePacks } from '../../core/rule-packs.js';
 import { getActiveDetectors } from '../../core/scrub.js';
 import { SessionManager } from '../../session/session-manager.js';
 import type { Finding } from '../../types/index.js';
+import { sanitizeLine } from '../sanitize.js';
 
 export async function handleInspect(
   text: string,
@@ -82,7 +83,8 @@ export function formatInspectOutput(findings: Finding[], hash: string): string {
     // Format: [Category] value -> Placeholder (chars start-end)
     const catStr = `[${finding.category}]`.padEnd(10);
     // Truncate very long values for display
-    const valDisp = finding.value.length > 30 ? `${finding.value.slice(0, 27)}...` : finding.value;
+    const raw = sanitizeLine(finding.value);
+    const valDisp = raw.length > 30 ? `${raw.slice(0, 27)}...` : raw;
     const valStr = valDisp.padEnd(32);
 
     output += `  ${catStr} ${valStr} → ${placeholder.padEnd(10)} (chars ${finding.span[0]}-${finding.span[1]})\n`;

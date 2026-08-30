@@ -270,7 +270,13 @@ test.serial('CLI: diff --side-by-side uses a two-column layout', (t) => {
 test.serial('CLI: help lists the diff command', (t) => {
   const result = runCli(['--help']);
   t.is(result.status, 0);
-  t.true(result.stdout.includes('diff'));
+  t.true(result.stdout.includes('Show a visual diff of original vs scrubbed text'));
+});
+
+test.serial('CLI: diff rejects a non-integer --context', (t) => {
+  const result = runCli(['diff', '--context', 'abc'], 'Email me at alice@corp.com');
+  t.not(result.status, 0);
+  t.true(result.stderr.includes('--context must be a non-negative integer'));
 });
 
 test.serial('CLI: sessions rm fails when session ID is missing without --all', (t) => {
