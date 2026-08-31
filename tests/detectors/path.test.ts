@@ -36,7 +36,9 @@ test('detects Windows absolute path', (t) => {
   t.is(findings[0]?.value, 'C:\\Users\\John\\Documents\\report.docx');
 });
 
-test('Windows path stops at whitespace instead of running to the end of the line', (t) => {
+// --- Windows paths and spaces (#123) ---
+
+test('Windows path ends before following prose rather than running to end of line', (t) => {
   const text = 'Config at C:\\app\\cfg.ini owner alice@corp.com';
   const findings = detector.detect(text);
   t.is(findings.length, 1);
@@ -45,10 +47,67 @@ test('Windows path stops at whitespace instead of running to the end of the line
   t.is(text.slice(start, end), 'C:\\app\\cfg.ini');
 });
 
-test('detects a quoted Windows path containing spaces', (t) => {
-  const findings = detector.detect('Open "C:\\Program Files\\App\\app.exe" now');
+test('Windows path ends before a following secret', (t) => {
+  const findings = detector.detect(
+    'Deploy from C:\\srv\\app with token ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+  );
   t.is(findings.length, 1);
-  t.is(findings[0]?.value, 'C:\\Program Files\\App\\app.exe');
+  t.is(findings[0]?.value, 'C:\\srv\\app');
+});
+
+test('a later backslash does not re-open the match across intervening prose', (t) => {
+  // The greedy interior segment used to bridge "b.txt … share\" and swallow the
+  // email between them.
+  const findings = detector.detect('Log C:\\a\\b.txt mail alice@corp.com dir share\\x.txt');
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, 'C:\\a\\b.txt');
+});
+
+test('detects an unquoted path whose trailing segment contains a space', (t) => {
+  const text = 'Path is C:\\Program Files';
+  const findings = detector.detect(text);
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, 'C:\\Program Files');
+  const [start, end] = findings[0]!.span;
+  t.is(text.slice(start, end), 'C:\\Program Files');
+});
+
+test('detects an unquoted user directory whose trailing segment contains a space', (t) => {
+  const findings = detector.detect('User dir C:\\Users\\John Doe');
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, 'C:\\Users\\John Doe');
+});
+
+test('a space-bearing trailing segment still stops before an email', (t) => {
+  const findings = detector.detect('C:\\Users\\John Doe alice@corp.com');
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, 'C:\\Users\\John Doe');
+});
+
+test('a trailing segment with an extension does not absorb a capitalised sentence', (t) => {
+  const findings = detector.detect('Read C:\\logs\\out.txt Failed to start');
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, 'C:\\logs\\out.txt');
+});
+
+test('detects a path with spaces in several segments', (t) => {
+  const findings = detector.detect('In C:\\Program Files (x86)\\Common Files\\app.dll here');
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, 'C:\\Program Files (x86)\\Common Files\\app.dll');
+});
+
+test('detects a quoted Windows path whose final segment contains a space', (t) => {
+  const findings = detector.detect('Run "C:\\Users\\John Doe\\My Docs\\a b.txt" ok');
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, 'C:\\Users\\John Doe\\My Docs\\a b.txt');
+});
+
+test('returns a correct span for a quoted Windows path', (t) => {
+  const text = 'Open "C:\\Program Files\\App\\app.exe" now';
+  const findings = detector.detect(text);
+  t.is(findings.length, 1);
+  const [start, end] = findings[0]!.span;
+  t.is(text.slice(start, end), 'C:\\Program Files\\App\\app.exe');
 });
 
 test('detects two Windows paths on the same line', (t) => {
@@ -56,6 +115,18 @@ test('detects two Windows paths on the same line', (t) => {
   t.is(findings.length, 2);
   t.is(findings[0]?.value, 'C:\\a\\b.txt');
   t.is(findings[1]?.value, 'D:\\c\\d.txt');
+});
+
+test('a newline ends a Windows path match', (t) => {
+  const findings = detector.detect('Path C:\\a\\b\nalice@corp.com');
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, 'C:\\a\\b');
+});
+
+test('a tab ends a Windows path match', (t) => {
+  const findings = detector.detect('Path C:\\a\\b\tNext');
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, 'C:\\a\\b');
 });
 
 test('detects multiple paths in one string', (t) => {

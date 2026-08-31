@@ -9,12 +9,42 @@ const UNIX_PATH_REGEX = /(?<!:\/)(?<![\w~])(\/((?:[a-zA-Z0-9_.@-]+\/)+[a-zA-Z0-9
 const HOME_PATH_REGEX = /(?<![\w/])(~\/[a-zA-Z0-9_.@-][a-zA-Z0-9_.@\-/]*)(?![\w])/g;
 
 // Windows absolute path: C:\Users\... or D:\Projects\...
-// The final segment excludes whitespace so the match stops at the end of the
-// path instead of swallowing the rest of the line (which would otherwise make
-// the path collide with, and lose to, any email or secret that follows it).
-// Interior segments still allow spaces, so "C:\Program Files\App\app.exe" is
-// matched in full.
-const WIN_PATH_REGEX = /([A-Za-z]:\\(?:[^\\/:*?"<>|\r\n]+\\)*[^\s\\/:*?"<>|]*)/g;
+//
+// Spaces are the hard part: `C:\Program Files` and `C:\Users\John Doe` are real
+// paths, but `C:\app\cfg.ini owner alice@corp.com` is a path followed by prose.
+// Letting every segment run over spaces makes the match swallow the rest of the
+// line, which then loses collision resolution to the email/secret inside it and
+// leaves the path itself in cleartext. Forbidding spaces outright truncates the
+// genuine paths above and leaks their tail. So the two forms are matched
+// separately.
+
+// One character that may appear inside a path segment, excluding whitespace and
+// the characters Windows forbids in a filename.
+const WIN_SEG_CHAR = String.raw`[^\s\\/:*?"<>|]`;
+
+// A space followed by a token that still looks like part of a path — capitalised,
+// a digit, or an opening paren, as in "Program Files", "John Doe", "Studio 14.0",
+// "Program Files (x86)". Lowercase words read as prose and end the match, which
+// is what keeps "cfg.ini owner alice@corp.com" out of it.
+//
+// Blocked directly after a file extension: once a segment ends in `.ini`/`.txt`
+// the path is complete, so a capitalised word after it ("out.txt Failed to …")
+// is a sentence rather than more path. Capped at four tokens to bound how much
+// prose a pathological line can pull in.
+const WIN_SEG_CONT = String.raw`(?:(?<!\.[A-Za-z0-9]{1,8}) [A-Z0-9(]${WIN_SEG_CHAR}*){0,4}`;
+
+// A single segment: a whitespace-free run plus any continuation tokens.
+const WIN_SEG = `${WIN_SEG_CHAR}+${WIN_SEG_CONT}`;
+
+// Quoted form — inside double quotes the path is already delimited, so spaces
+// are allowed freely. The quotes are matched by lookaround rather than consumed,
+// which keeps the captured value flush with its span.
+const WIN_PATH_QUOTED = String.raw`(?<=")[A-Za-z]:\\[^"\r\n]*(?=")`;
+
+// Unquoted form — drive, then backslash-separated segments.
+const WIN_PATH_UNQUOTED = String.raw`[A-Za-z]:\\(?:${WIN_SEG}\\)*(?:${WIN_SEG})?`;
+
+const WIN_PATH_REGEX = new RegExp(`(${WIN_PATH_QUOTED}|${WIN_PATH_UNQUOTED})`, 'g');
 
 export class PathDetector implements Detector {
   readonly name = 'PathDetector';

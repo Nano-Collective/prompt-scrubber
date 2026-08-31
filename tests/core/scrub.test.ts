@@ -53,6 +53,21 @@ test('a Windows path is redacted even when an email follows it on the same line'
   t.is(result.sessionMap?.['«Path_1»'], 'C:\\app\\cfg.ini');
 });
 
+test('a Windows path ending in a space-bearing segment is redacted in full', (t) => {
+  const result = scrub({ content: 'User dir C:\\Users\\John Doe', sessionMap: {} });
+  t.is(result.scrubbedContent, 'User dir «Path_1»');
+  t.is(result.sessionMap?.['«Path_1»'], 'C:\\Users\\John Doe');
+});
+
+test('a space-bearing Windows path is redacted alongside a following email', (t) => {
+  const result = scrub({
+    content: 'Owner C:\\Users\\John Doe mailed alice@corp.com',
+    sessionMap: {},
+  });
+  t.is(result.scrubbedContent, 'Owner «Path_1» mailed «Email_1»');
+  t.is(result.sessionMap?.['«Path_1»'], 'C:\\Users\\John Doe');
+});
+
 test('scrubbing the same value twice generates the same placeholder', (t) => {
   const result1 = scrub({ content: 'Contact: repeat@example.com' });
   const result2 = scrub({

@@ -32,6 +32,11 @@ function overlaps(a: Finding, b: Finding): boolean {
  *   and the winner's span is the authoritative one; or
  * - the loser's value does not map 1:1 onto its span (e.g. a normalised value),
  *   since the text a part covers is then not recoverable here.
+ *
+ * A returned part is weaker evidence than the match it came from: it is the
+ * remainder of a span another detector has already contradicted. Should
+ * `Finding` gain a confidence or score field, attenuate it here rather than
+ * letting the spread below copy the original match's value onto the fragment.
  */
 function subtract(loser: Finding, winner: Finding): Finding[] {
   if (loser.category === winner.category || loser.value.length !== loser.span[1] - loser.span[0]) {
@@ -64,47 +69,63 @@ function subtract(loser: Finding, winner: Finding): Finding[] {
  * Equal-priority overlaps resolve in favour of the longer span. The loser is
  * kept, narrowed to the part of its span the winner does not cover.
  *
- * Returns findings sorted by start position ascending.
+ * Terminates because every overlap either removes a finding outright or
+ * replaces one with strictly shorter parts, so the total span length across
+ * queue and accepted set strictly decreases each time an overlap is resolved.
+ *
+ * Returns findings sorted by start position ascending, guaranteed pairwise
+ * non-overlapping — `scrub` relies on that when it replaces right-to-left.
  */
 export function resolveCollisions(findings: Finding[]): Finding[] {
-  // Sort by start position so we process left-to-right
-  const sorted = [...findings].sort((a, b) => a.span[0] - b.span[0]);
+  const byStart = (a: Finding, b: Finding) => a.span[0] - b.span[0];
 
+  // A work queue rather than a single pass: narrowing can produce a part that
+  // starts to the right of findings still waiting, so a candidate is no longer
+  // guaranteed to meet at most one accepted finding. Anything unsettled goes
+  // back on the queue and is re-compared until it overlaps nothing.
+  const queue = [...findings].sort(byStart);
   const accepted: Finding[] = [];
 
-  for (const candidate of sorted) {
-    const overlapIdx = accepted.findIndex((existing) => overlaps(candidate, existing));
+  while (queue.length > 0) {
+    const candidate = queue.shift()!;
 
-    if (overlapIdx === -1) {
-      // No overlap — accept immediately
-      accepted.push(candidate);
-    } else {
-      const existing = accepted[overlapIdx]!;
-      const candidatePriority = priorityOf(candidate);
-      const existingPriority = priorityOf(existing);
-
-      let winner = existing;
-      let loser = candidate;
-      if (
-        candidatePriority < existingPriority ||
-        (candidatePriority === existingPriority && candidate.value.length > existing.value.length)
-      ) {
-        // Candidate wins — replace
-        accepted[overlapIdx] = candidate;
-        winner = candidate;
-        loser = existing;
+    // Settle against the leftmost overlapping finding, so the outcome does not
+    // depend on the order findings happened to land in `accepted`.
+    let overlapIdx = -1;
+    for (let i = 0; i < accepted.length; i++) {
+      if (!overlaps(candidate, accepted[i]!)) {
+        continue;
       }
-
-      // Keep whatever the winner does not cover, so an over-broad finding is
-      // narrowed instead of leaking the text it over-matched.
-      for (const part of subtract(loser, winner)) {
-        if (!accepted.some((existingPart) => overlaps(part, existingPart))) {
-          accepted.push(part);
-        }
+      if (overlapIdx === -1 || accepted[i]!.span[0] < accepted[overlapIdx]!.span[0]) {
+        overlapIdx = i;
       }
     }
+
+    if (overlapIdx === -1) {
+      // No overlap — accept
+      accepted.push(candidate);
+      continue;
+    }
+
+    const existing = accepted[overlapIdx]!;
+    const candidatePriority = priorityOf(candidate);
+    const existingPriority = priorityOf(existing);
+    const candidateWins =
+      candidatePriority < existingPriority ||
+      (candidatePriority === existingPriority && candidate.value.length > existing.value.length);
+
+    // Keep whatever the winner does not cover, so an over-broad finding is
+    // narrowed instead of leaking the text it over-matched. Requeue rather than
+    // accept: a part may still collide with something else.
+    if (candidateWins) {
+      accepted.splice(overlapIdx, 1);
+      queue.push(candidate, ...subtract(existing, candidate));
+    } else {
+      queue.push(...subtract(candidate, existing));
+    }
+    queue.sort(byStart);
   }
 
   // Final sort by start position for deterministic output
-  return accepted.sort((a, b) => a.span[0] - b.span[0]);
+  return accepted.sort(byStart);
 }
