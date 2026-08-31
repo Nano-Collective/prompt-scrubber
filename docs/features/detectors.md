@@ -61,7 +61,7 @@ Priority is implicitly handled by a defined order of precedence:
 
 If `SecretDetector` and `UrlDetector` match the same string (e.g., a URL with a token), `SecretDetector` wins.
 
-Findings from locale-scoped detectors take precedence over the generic built-in of the same category, so a `de-DE` rule pack can override an English-shaped `AddressDetector` match on the same span. They still lose to higher-priority detectors such as `SecretDetector`.
+Findings from locale-scoped detectors take precedence over the generic built-in of the same category, so a `de-DE` rule pack can override an English-shaped `AddressDetector` match on the same span. They still lose to higher-priority detectors such as `SecretDetector`, and the precedence never applies when it would shrink the redaction: a locale finding strictly inside a built-in match loses to the wider span.
 
 ## Registration System
 
@@ -111,3 +111,5 @@ npx prompt-scrub rules list
 ```
 
 This will print a list of all available detectors, indicating their source (e.g., `built-in`) and their default state (`on` or `off`). This allows you to verify which detectors will run by default before you pass any additional flags like `--disable` or `--enable`.
+
+When any loaded detector declares `locales`, two more columns appear: `Locales` (the tags it declares) and `Locale State` (`active`/`inactive` for the resolved locale, `-` for locale-agnostic detectors). Pass `--locale <tag>` to preview what a different locale would activate.

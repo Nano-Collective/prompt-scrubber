@@ -407,32 +407,70 @@ test('an active locale does not change how English input is scrubbed', (t) => {
   t.is(withLocale.scrubbedContent, withoutLocale.scrubbedContent);
 });
 
-test('a locale finding wins over an overlapping built-in finding', (t) => {
-  const streetOnlyDetector: Detector = {
-    name: 'AddressDeShortDetector',
-    locales: ['de-DE'],
+function addressDetectorFor(match: string, locales?: string[]): Detector {
+  const detector: Detector = {
+    name: `Address-${match}-Detector`,
     detect: (text) => {
-      const idx = text.indexOf('Downing St');
+      const idx = text.indexOf(match);
       return idx === -1
         ? []
         : [
             {
               category: 'Address',
-              span: [idx, idx + 'Downing St'.length] as [number, number],
-              value: 'Downing St',
+              span: [idx, idx + match.length] as [number, number],
+              value: match,
               placeholderPrefix: 'Address',
             },
           ];
     },
   };
+  if (locales) {
+    detector.locales = locales;
+  }
+  return detector;
+}
 
+test('a locale finding replaces an overlapping built-in finding of the same span', (t) => {
   const text = 'Adresse: 10 Downing St, Berlin';
-  t.is(scrub({ content: text }).scrubbedContent, 'Adresse: «Address_1», Berlin');
-  t.is(
-    scrub({ content: text, options: { customDetectors: [streetOnlyDetector], locale: 'de-DE' } })
-      .scrubbedContent,
-    'Adresse: 10 «Address_1», Berlin',
-  );
+
+  // The built-in AddressDetector already covers "10 Downing St"; a locale pack
+  // matching the same span takes over so its own value/placeholder is used.
+  const result = scrub({
+    content: text,
+    options: { customDetectors: [addressDetectorFor('10 Downing St', ['de-DE'])], locale: 'de-DE' },
+  });
+
+  t.is(result.scrubbedContent, 'Adresse: «Address_1», Berlin');
+  t.is(Object.values(result.sessionMap ?? {})[0], '10 Downing St');
+});
+
+test('a locale finding never narrows what the built-in detector redacted', (t) => {
+  const text = 'Adresse: 10 Downing St, Berlin';
+  const withoutLocale = scrub({ content: text });
+
+  // "Downing St" sits strictly inside the built-in match. Letting the locale
+  // pack win here would leak the leading "10 ", so coverage is kept instead.
+  const withLocale = scrub({
+    content: text,
+    options: { customDetectors: [addressDetectorFor('Downing St', ['de-DE'])], locale: 'de-DE' },
+  });
+
+  t.is(withoutLocale.scrubbedContent, 'Adresse: «Address_1», Berlin');
+  t.is(withLocale.scrubbedContent, withoutLocale.scrubbedContent);
+});
+
+test('a locale finding wins when it redacts more than the built-in finding', (t) => {
+  const text = 'Adresse: 10 Downing St, Berlin';
+
+  const result = scrub({
+    content: text,
+    options: {
+      customDetectors: [addressDetectorFor('10 Downing St, Berlin', ['de-DE'])],
+      locale: 'de-DE',
+    },
+  });
+
+  t.is(result.scrubbedContent, 'Adresse: «Address_1»');
 });
 
 test('a locale finding round-trips through rehydrate', (t) => {

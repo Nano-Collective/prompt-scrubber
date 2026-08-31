@@ -28,7 +28,7 @@ The summary counts replacements, not unique values: a value that appears three t
 **Options:**
 - `--session-id <id>`: Reuse an existing session map. If omitted, a new UUID is generated.
 - `--disable <detectors>`: Comma-separated list of detectors to disable (e.g. `EmailDetector,PhoneDetector`).
-- `--locale <locale>`: BCP-47 tag (e.g. `de-DE`) that activates detectors scoped to that locale. Overrides `locale` in the configuration file.
+- `--locale <locale>`: BCP-47 tag (e.g. `de-DE`) that activates detectors scoped to that locale. Overrides `locale` in the configuration file. A malformed tag exits `1`; a well-formed tag that activates no detector warns on `stderr`, so a missing rule pack is never mistaken for a completed locale scrub.
 - `-q, --quiet`: Suppress the summary. The `Session ID:` line is still printed, since scripts need it to rehydrate.
 
 ### `prompt-scrub rehydrate [file]`
@@ -81,6 +81,7 @@ Press `Ctrl-C` to stop watching; the poll loop is cleared and the process exits 
 - `--strict-name`: Enable strict allowlisting for `NameDetector`.
 - `--code-tell-terms <terms>`: Comma-separated list of private identifiers to detect.
 - `--url-allowlist <hosts>`: Comma-separated list of hostnames to pass through.
+- `--locale <locale>`: BCP-47 tag that activates detectors scoped to that locale, for this run only. Overrides `locale` in the configuration file. Validated once before the poll loop starts.
 
 **Platform requirements:**
 

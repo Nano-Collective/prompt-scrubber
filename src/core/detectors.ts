@@ -1,8 +1,18 @@
+import { loadConfig } from './config.js';
+import { matchesLocale } from './locale.js';
+import { loadConfiguredRulePacks } from './rule-packs.js';
+
 export interface DetectorMetadata {
   name: string;
   source: string;
+  /** The detector's own default, independent of any locale. */
   defaultState: 'on' | 'off';
   locales?: string[];
+  /**
+   * Whether the resolved locale lets this detector run. Only set for
+   * locale-scoped detectors — a detector without `locales` is never gated.
+   */
+  localeActive?: boolean;
 }
 
 const BUILT_IN_DETECTORS: DetectorMetadata[] = [
@@ -16,21 +26,20 @@ const BUILT_IN_DETECTORS: DetectorMetadata[] = [
   { name: 'CodeTellDetector', source: 'built-in', defaultState: 'off' },
 ];
 
-import { loadConfig } from './config.js';
-import { matchesLocale } from './locale.js';
-import { loadConfiguredRulePacks } from './rule-packs.js';
-
 /**
  * Asynchronously loads configured rule-packs and returns the combined
  * metadata of both built-in detectors and rule-pack detectors.
+ *
+ * `locale` resolves the locale gate, so callers can preview another locale
+ * than the configured one. Omit it to fall back to the configuration.
  */
-export async function getAvailableDetectorsAsync(): Promise<DetectorMetadata[]> {
+export async function getAvailableDetectorsAsync(locale?: string): Promise<DetectorMetadata[]> {
   const { metadata } = await loadConfiguredRulePacks();
-  const { locale } = loadConfig();
+  const activeLocale = locale ?? loadConfig().locale;
 
   return [...BUILT_IN_DETECTORS, ...metadata].map((detector) =>
     detector.locales && detector.locales.length > 0
-      ? { ...detector, defaultState: matchesLocale(detector.locales, locale) ? 'on' : 'off' }
+      ? { ...detector, localeActive: matchesLocale(detector.locales, activeLocale) }
       : detector,
   );
 }

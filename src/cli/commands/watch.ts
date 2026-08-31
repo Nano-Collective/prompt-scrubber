@@ -1,6 +1,9 @@
 import { spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import type { Command } from 'commander';
+import { loadConfig } from '../../core/config.js';
+import { loadConfiguredRulePacks } from '../../core/rule-packs.js';
+import { resolveLocale, warnIfLocaleUnused } from '../locale.js';
 import { handleScrub } from './scrub.js';
 
 /**
@@ -182,6 +185,7 @@ interface WatchStepOptions {
   strictName?: boolean;
   codeTellTerms?: string;
   urlAllowlist?: string;
+  locale?: string;
   dryRun?: boolean;
   backup?: boolean;
   readClipboardFn?: () => string;
@@ -272,6 +276,14 @@ export async function handleWatch(
   const log = options.logFn ?? console.log;
   const intervalMs = Number.parseInt(options.interval || '1000', 10) || 1000;
 
+  // Resolved up front: a watch that only reports a bad locale once the first
+  // change lands would run for minutes looking like it was working.
+  const locale = resolveLocale(options.locale, loadConfig().locale);
+  if (locale) {
+    const { detectors } = await loadConfiguredRulePacks();
+    warnIfLocaleUnused(locale, detectors);
+  }
+
   // Only preflight the real clipboard path; injected mocks need no external tool.
   if (options.clipboard && !options.readClipboardFn) {
     assertClipboardSupport();
@@ -342,6 +354,10 @@ export function setupWatchCommand(program: Command) {
     .option('--strict-name', 'Enable strict allowlisting for NameDetector')
     .option('--code-tell-terms <terms>', 'Comma-separated list of private terms to detect')
     .option('--url-allowlist <hosts>', 'Comma-separated list of hostnames to pass-through')
+    .option(
+      '--locale <locale>',
+      'BCP-47 locale (e.g. de-DE) enabling detectors scoped to that locale',
+    )
     .action(async (options) => {
       try {
         await handleWatch(options);

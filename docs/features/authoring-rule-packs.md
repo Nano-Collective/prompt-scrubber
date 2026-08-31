@@ -157,16 +157,21 @@ $ prompt-scrub scrub --locale de-DE prompt.txt
 
 `--locale` overrides the configured `locale`. Matching is case-insensitive and works across subtag levels: a pack declaring `de` serves `de-DE` and `de-AT`, and a pack declaring `de-DE` is activated by a `de` request. A pack declaring `de-DE` is *not* activated by `de-AT`. Detectors that omit `locales` are locale-agnostic and always run.
 
-Declared locales show up in `prompt-scrub rules list`, alongside whether the active locale switches them on:
+`locales` must be an array of strings. A malformed value (a bare `'de-DE'`, say) is dropped by the loader and the detector is registered as locale-agnostic, so a bad pack degrades rather than breaking the CLI.
+
+Declared locales show up in `prompt-scrub rules list`, alongside whether the active locale switches them on. `Default State` stays the detector's own default; `Locale State` is the separate question of whether the active locale lets it run:
 
 ```bash
-$ prompt-scrub rules list
-Detector            Source                                              Default State   Locales
------------------   -------------------------------------------------   -------------   -------
-SecretDetector      built-in                                            on              -
+$ prompt-scrub rules list --locale de-DE
+Active locale: de-DE
+Detector            Source                                              Default State   Locales   Locale State
+-----------------   -------------------------------------------------   -------------   -------   ------------
+SecretDetector      built-in                                            on              -         -
 ...
-AddressDeDetector   rule-pack: @nanocollective/prompt-scrub-locale-de   on              de-DE
+AddressDeDetector   rule-pack: @nanocollective/prompt-scrub-locale-de   on              de-DE     active
 ```
+
+`rules list --locale` only previews: it resolves the table against the tag you pass without changing the configuration.
 
 ## Priority and Collision Resolution
 
@@ -174,4 +179,4 @@ Your custom detectors participate in the same collision resolution process as bu
 
 - **Overlap**: The longer span wins.
 - **Priority**: Custom detectors resolve alongside the default fallback priority. Currently, there is no mechanism to enforce a custom detector overriding `SecretDetector`. If a secret overlaps with your custom finding, the `SecretDetector` will always win to prevent accidental secret leakage.
-- **Locale precedence**: A finding from a locale-scoped detector outranks the generic built-in of the same category, so a locale pack can replace an English-biased match rather than losing to it. It does not override higher-priority detectors such as `SecretDetector`.
+- **Locale precedence**: A finding from a locale-scoped detector outranks the generic built-in of the same category, so a locale pack can replace an English-biased match rather than losing to it. It does not override higher-priority detectors such as `SecretDetector`, and it never wins when doing so would redact *less* text: if your finding sits strictly inside the built-in's span, the wider span is kept so nothing that was covered before is left in the clear.

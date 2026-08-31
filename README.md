@@ -126,7 +126,7 @@ Print the configuration that is actually active — JSON on `stdout`, the path i
 prompt-scrub config show
 ```
 
-Set `locale` (or pass `--locale de-DE` to `scrub`/`inspect`) to activate detectors from locale-specific rule packs. Built-in detectors are English-shaped and always run.
+Set `locale` (or pass `--locale de-DE` to `scrub`, `inspect`, or `watch`) to activate detectors from locale-specific rule packs. Built-in detectors are English-shaped and always run. A locale that activates no detector warns on `stderr` rather than silently scrubbing with English rules only.
 
 Entries that do not match the schema are reported and exit non-zero, so `config show` doubles as a config check in scripts. See the [CLI reference](docs/getting-started/cli.md#configuration) for the full schema and options.
 

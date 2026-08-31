@@ -6,6 +6,7 @@ import { loadConfiguredRulePacks } from '../../core/rule-packs.js';
 import { detectFindings, getActiveDetectors } from '../../core/scrub.js';
 import { SessionManager } from '../../session/session-manager.js';
 import type { Finding } from '../../types/index.js';
+import { resolveLocale, warnIfLocaleUnused } from '../locale.js';
 
 export async function handleInspect(
   text: string,
@@ -30,9 +31,11 @@ export async function handleInspect(
 
   const config = loadConfig();
   const urlAllowlist = Array.from(new Set([...(config.urlAllowlist || []), ...cliUrlAllowlist]));
-  const locale = options.locale?.trim() || config.locale;
+  const locale = resolveLocale(options.locale, config.locale);
 
   const { detectors: rulePackDetectors } = await loadConfiguredRulePacks();
+
+  warnIfLocaleUnused(locale, rulePackDetectors);
 
   const detectors = getActiveDetectors({
     disabledDetectors,
@@ -145,7 +148,15 @@ export function setupInspectCommand(program: Command) {
         return;
       }
 
-      const findings = await handleInspect(input, options);
+      let findings: Finding[];
+      try {
+        findings = await handleInspect(input, options);
+      } catch (err: unknown) {
+        console.error((err as Error).message);
+        process.exit(1);
+        return;
+      }
+
       const hash = computeHash(input, findings);
 
       if (options.hash) {

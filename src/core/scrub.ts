@@ -15,7 +15,7 @@ import type {
   ScrubResult,
   ScrubStats,
 } from '../types/index.js';
-import { resolveCollisions } from './collision-resolver.js';
+import { type ResolvableFinding, resolveCollisions } from './collision-resolver.js';
 import { matchesLocale } from './locale.js';
 
 const DEFAULT_DETECTORS: Detector[] = [
@@ -59,20 +59,17 @@ function scrubString(
 }
 
 export function detectFindings(text: string, detectors: Detector[]): Finding[] {
-  const allFindings: Finding[] = [];
-  const localeScoped = new Set<Finding>();
+  const allFindings: ResolvableFinding[] = [];
 
   for (const detector of detectors) {
-    const found = detector.detect(text);
-    if (detector.locales && detector.locales.length > 0) {
-      for (const finding of found) {
-        localeScoped.add(finding);
-      }
+    const localeScoped = Boolean(detector.locales && detector.locales.length > 0);
+    for (const finding of detector.detect(text)) {
+      // Tagged on a copy so a rule pack's own finding objects are never mutated.
+      allFindings.push(localeScoped ? { ...finding, localeScoped } : finding);
     }
-    allFindings.push(...found);
   }
 
-  return resolveCollisions(allFindings, localeScoped);
+  return resolveCollisions(allFindings);
 }
 
 export function getActiveDetectors(options?: ScrubRequest['options']): Detector[] {

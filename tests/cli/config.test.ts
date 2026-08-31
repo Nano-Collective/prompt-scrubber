@@ -414,31 +414,191 @@ test('CLI: inspect honours --locale', (t) => {
   t.true(on.stdout.includes(CPF));
 });
 
-test('CLI: rules list shows the locales column and the resolved state', (t) => {
+/** Splits a rules-list row into its padded columns. */
+function columnsOf(output: string, detector: string): string[] {
+  const row = output.split('\n').find((line) => line.startsWith(detector));
+  return row ? row.split(/\s{3,}/) : [];
+}
+
+test('CLI: rules list keeps the detector default and the locale state in separate columns', (t) => {
   const configDir = makeConfigDir();
   const packUrl = writeLocalePack(configDir, '() => []');
   writeRawConfig(configDir, JSON.stringify({ rulePacks: [packUrl], locale: 'de-DE' }));
 
-  const idle = runCli(configDir, ['rules', 'list']);
-  t.is(idle.status, 0);
-  t.true(idle.stdout.includes('Locales'));
-  const idleRow = idle.stdout.split('\n').find((line) => line.includes('CpfDetector'));
-  t.true(idleRow?.includes('off'));
-  t.true(idleRow?.includes('pt-BR'));
+  const result = runCli(configDir, ['rules', 'list']);
 
-  writeRawConfig(configDir, JSON.stringify({ rulePacks: [packUrl], locale: 'pt-BR' }));
+  t.is(result.status, 0);
+  t.true(result.stdout.includes('Default State'));
+  t.true(result.stdout.includes('Locales'));
+  t.true(result.stdout.includes('Locale State'));
+  t.true(result.stderr.includes('Active locale: de-DE'));
 
-  const active = runCli(configDir, ['rules', 'list']);
-  const activeRow = active.stdout.split('\n').find((line) => line.includes('CpfDetector'));
-  t.true(activeRow?.includes('on'));
+  // The pack is on by default and gated off by the locale — two facts, two columns.
+  const [, , defaultState, locales, localeState] = columnsOf(result.stdout, 'CpfDetector');
+  t.is(defaultState, 'on');
+  t.is(locales, 'pt-BR');
+  t.is(localeState, 'inactive');
+
+  // A locale-agnostic built-in is never gated.
+  const builtIn = columnsOf(result.stdout, 'SecretDetector');
+  t.is(builtIn[2], 'on');
+  t.is(builtIn[3], '-');
+  t.is(builtIn[4], '-');
 });
 
-test('CLI: rules list omits the locales column when no locale detectors are loaded', (t) => {
+test('CLI: rules list reports a locale-scoped detector as active when it matches', (t) => {
+  const configDir = makeConfigDir();
+  const packUrl = writeLocalePack(configDir, '() => []');
+  writeRawConfig(configDir, JSON.stringify({ rulePacks: [packUrl], locale: 'pt-BR' }));
+
+  const result = runCli(configDir, ['rules', 'list']);
+
+  t.is(columnsOf(result.stdout, 'CpfDetector')[4], 'active');
+});
+
+test('CLI: rules list --locale previews another locale without touching the config', (t) => {
+  const configDir = makeConfigDir();
+  const packUrl = writeLocalePack(configDir, '() => []');
+  writeRawConfig(configDir, JSON.stringify({ rulePacks: [packUrl], locale: 'de-DE' }));
+
+  const preview = runCli(configDir, ['rules', 'list', '--locale', 'pt-BR']);
+
+  t.is(preview.status, 0);
+  t.true(preview.stderr.includes('Active locale: pt-BR'));
+  t.is(columnsOf(preview.stdout, 'CpfDetector')[4], 'active');
+
+  // The config file is unchanged, so a plain listing still resolves against it.
+  const configured = runCli(configDir, ['rules', 'list']);
+  t.is(columnsOf(configured.stdout, 'CpfDetector')[4], 'inactive');
+});
+
+test('CLI: rules list reports no active locale when none is configured', (t) => {
+  const configDir = makeConfigDir();
+  const packUrl = writeLocalePack(configDir, '() => []');
+  writeRawConfig(configDir, JSON.stringify({ rulePacks: [packUrl] }));
+
+  const result = runCli(configDir, ['rules', 'list']);
+
+  t.is(result.status, 0);
+  t.true(result.stderr.includes('Active locale: (none)'));
+  t.is(columnsOf(result.stdout, 'CpfDetector')[4], 'inactive');
+});
+
+test('CLI: rules list rejects a malformed --locale', (t) => {
+  const configDir = makeConfigDir();
+
+  const result = runCli(configDir, ['rules', 'list', '--locale', 'German!']);
+
+  t.is(result.status, 1);
+  t.true(result.stderr.includes('Invalid --locale "German!"'));
+});
+
+test('CLI: rules list omits the locale columns when no locale detectors are loaded', (t) => {
   const configDir = makeConfigDir();
   const result = runCli(configDir, ['rules', 'list']);
 
   t.is(result.status, 0);
   t.false(result.stdout.includes('Locales'));
+  t.false(result.stdout.includes('Locale State'));
+  t.false(result.stderr.includes('Active locale'));
+});
+
+test('CLI: scrub rejects a malformed --locale instead of scrubbing without it', (t) => {
+  const configDir = makeConfigDir();
+
+  const result = runCli(configDir, ['scrub', '--locale', 'German!'], `Meu CPF e ${CPF}`);
+
+  t.is(result.status, 1);
+  t.true(result.stderr.includes('Invalid --locale "German!"'));
+  t.true(result.stderr.includes('BCP-47'));
+  t.is(result.stdout, '');
+});
+
+test('CLI: inspect rejects a malformed --locale', (t) => {
+  const configDir = makeConfigDir();
+
+  const result = runCli(configDir, ['inspect', '--locale', 'de-'], 'nothing to see');
+
+  t.is(result.status, 1);
+  t.true(result.stderr.includes('Invalid --locale "de-"'));
+});
+
+test('CLI: scrub warns when an active locale activates no detector', (t) => {
+  const configDir = makeConfigDir();
+  const packUrl = writeLocalePack(configDir, CPF_DETECT);
+  writeRawConfig(configDir, JSON.stringify({ rulePacks: [packUrl] }));
+
+  const result = runCli(configDir, ['scrub', '--locale', 'de-DE'], `Meu CPF e ${CPF}`);
+
+  t.is(result.status, 0);
+  t.true(result.stderr.includes('locale "de-DE" activated no detectors'));
+  // The scrub still runs, with the locale-agnostic detectors only.
+  t.is(result.stdout, `Meu CPF e ${CPF}`);
+});
+
+test('CLI: a configured locale with no matching pack warns too', (t) => {
+  const configDir = makeConfigDir();
+  const packUrl = writeLocalePack(configDir, CPF_DETECT);
+  writeRawConfig(configDir, JSON.stringify({ rulePacks: [packUrl], locale: 'ja-JP' }));
+
+  const result = runCli(configDir, ['scrub'], `Meu CPF e ${CPF}`);
+
+  t.is(result.status, 0);
+  t.true(result.stderr.includes('locale "ja-JP" activated no detectors'));
+});
+
+test('CLI: a matching locale scrubs without warning', (t) => {
+  const configDir = makeConfigDir();
+  const packUrl = writeLocalePack(configDir, CPF_DETECT);
+  writeRawConfig(configDir, JSON.stringify({ rulePacks: [packUrl], locale: 'pt-BR' }));
+
+  const result = runCli(configDir, ['scrub'], `Meu CPF e ${CPF}`);
+
+  t.is(result.status, 0);
+  t.false(result.stderr.includes('activated no detectors'));
+  t.is(result.stdout, 'Meu CPF e «Cpf_1»');
+});
+
+test('CLI: inspect warns when an active locale activates no detector', (t) => {
+  const configDir = makeConfigDir();
+
+  const result = runCli(configDir, ['inspect', '--locale', 'de-DE'], 'nothing to see');
+
+  t.is(result.status, 0);
+  t.true(result.stderr.includes('locale "de-DE" activated no detectors'));
+});
+
+test('CLI: no locale means no warning', (t) => {
+  const configDir = makeConfigDir();
+
+  const result = runCli(configDir, ['scrub'], 'hello world');
+
+  t.is(result.status, 0);
+  t.false(result.stderr.includes('activated no detectors'));
+});
+
+test('CLI: a rule pack shipping a malformed locales field does not crash the CLI', (t) => {
+  const configDir = makeConfigDir();
+  fs.mkdirSync(configDir, { recursive: true });
+  const packPath = path.join(configDir, 'bad-locale-pack.mjs');
+  fs.writeFileSync(
+    packPath,
+    `export const detectors = [{ name: "BadLocaleDetector", locales: "pt-BR", detect: ${CPF_DETECT} }];`,
+    'utf8',
+  );
+  writeRawConfig(
+    configDir,
+    JSON.stringify({ rulePacks: [pathToFileURL(packPath).href], locale: 'pt-BR' }),
+  );
+
+  const scrubbed = runCli(configDir, ['scrub'], `Meu CPF e ${CPF}`);
+  t.is(scrubbed.status, 0);
+  // `locales` was dropped, so the detector is locale-agnostic and simply runs.
+  t.is(scrubbed.stdout, 'Meu CPF e «Cpf_1»');
+
+  const listed = runCli(configDir, ['rules', 'list']);
+  t.is(listed.status, 0);
+  t.true(listed.stdout.includes('BadLocaleDetector'));
 });
 
 test('CLI: scrub help documents the locale flag', (t) => {
