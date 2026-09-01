@@ -77,9 +77,23 @@ test('does not match out-of-bounds IPv4 octets (>255)', (t) => {
   t.is(findings.length, 0);
 });
 
-test('does not match semantic version numbers', (t) => {
+// A 4-component version like 1.2.3.4 is also a syntactically valid IPv4 address, so
+// it is deliberately still matched. Only the shapes below are distinguishable by regex:
+// 5+ segments, and a version prefixed with a letter.
+test('does not match 5-segment versions or letter-prefixed versions', (t) => {
   const findings = detector.detect('Release version 1.2.3.4.5 and v2.0.0.1');
   t.is(findings.length, 0);
+});
+
+test('absorbs a CIDR suffix instead of leaving a dangling mask', (t) => {
+  const findings = detector.detect('Subnet 192.168.1.0/24 routed');
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, '192.168.1.0/24');
+});
+
+test('does not match a bare double colon in prose', (t) => {
+  t.is(detector.detect('Compare a :: b in the spec').length, 0);
+  t.is(detector.detect('Use std::vector for this').length, 0);
 });
 
 test('does not match plain numbers or dates', (t) => {

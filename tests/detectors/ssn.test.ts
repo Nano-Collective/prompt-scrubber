@@ -70,6 +70,24 @@ test('rejects SSN with invalid Serial 0000', (t) => {
   t.is(findings.length, 0);
 });
 
+test('rejects bare 9-digit runs without an SSN label', (t) => {
+  t.is(detector.detect('Order number 123456789 shipped.').length, 0);
+  t.is(detector.detect('Error code 402551234 returned.').length, 0);
+  t.is(detector.detect('Invoice 987654321 is overdue').length, 0);
+});
+
+test('rejects space-separated digit groups without an SSN label', (t) => {
+  t.is(detector.detect('qty 100 20 3000 units').length, 0);
+});
+
+test('span excludes the label on a contextual match', (t) => {
+  const text = 'Social security number 219456789 on file';
+  const findings = detector.detect(text);
+  t.is(findings.length, 1);
+  const [start, end] = findings[0]!.span;
+  t.is(text.slice(start, end), '219456789');
+});
+
 test('rejects dates and phone numbers', (t) => {
   const findings = detector.detect('Date 2026-08-30 or phone 555-123-4567');
   t.is(findings.length, 0);

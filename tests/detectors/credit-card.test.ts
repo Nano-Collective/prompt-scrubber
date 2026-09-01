@@ -61,3 +61,8 @@ test('rejects phone numbers and short numbers', (t) => {
   const findings = detector.detect('Call +1 555 123 4567 or zip 90210');
   t.is(findings.length, 0);
 });
+
+test('does not match a Luhn-valid digit run embedded in an identifier', (t) => {
+  t.is(detector.detect('Release 10.15.7 build 4532015000000007x').length, 0);
+  t.is(detector.detect('ref a4532015000000007').length, 0);
+});

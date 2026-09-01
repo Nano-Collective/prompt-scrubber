@@ -1,11 +1,13 @@
 import type { Detector, Finding } from '../types/index.js';
 
-// Regex patterns for candidate credit card numbers
+// Regex patterns for candidate credit card numbers.
+// Boundaries reject adjacent alphanumerics so build IDs and hashes containing a
+// Luhn-valid digit run (e.g. 4532015000000007x) do not match.
 const CARD_PATTERNS: RegExp[] = [
   // 16-digit cards (Visa, Mastercard, Discover): 4-4-4-4 format with spaces, hyphens, or continuous
-  /(?<!\d)(?:4[0-9]{3}|5[1-5][0-9]{2}|222[1-9]|22[3-9][0-9]|2[3-6][0-9]{2}|27[01][0-9]|2720|6011|65[0-9]{2}|64[4-9][0-9])[\s-]?[0-9]{4}[\s-]?[0-9]{4}[\s-]?[0-9]{4}(?!\d)/g,
+  /(?<![0-9A-Za-z])(?:4[0-9]{3}|5[1-5][0-9]{2}|222[1-9]|22[3-9][0-9]|2[3-6][0-9]{2}|27[01][0-9]|2720|6011|65[0-9]{2}|64[4-9][0-9])[\s-]?[0-9]{4}[\s-]?[0-9]{4}[\s-]?[0-9]{4}(?![0-9A-Za-z])/g,
   // 15-digit American Express: 4-6-5 format with spaces, hyphens, or continuous
-  /(?<!\d)(?:34|37)[0-9]{2}[\s-]?[0-9]{6}[\s-]?[0-9]{5}(?!\d)/g,
+  /(?<![0-9A-Za-z])(?:34|37)[0-9]{2}[\s-]?[0-9]{6}[\s-]?[0-9]{5}(?![0-9A-Za-z])/g,
 ];
 
 /**
@@ -66,4 +68,3 @@ export class CreditCardDetector implements Detector {
     return raw.sort((a, b) => a.span[0] - b.span[0]);
   }
 }
-

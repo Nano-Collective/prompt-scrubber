@@ -61,3 +61,14 @@ test('returns empty for clean text', (t) => {
   const findings = detector.detect('No bank accounts mentioned.');
   t.is(findings.length, 0);
 });
+
+test('rejects tokens whose country code does not issue IBANs', (t) => {
+  // MOD-97 alone accepts a slice of random uppercase tokens; the country registry
+  // rejects them before the checksum is even reached.
+  t.is(detector.detect('Build tag ZZ82WEST12345698765432 here').length, 0);
+});
+
+test('rejects a valid country code at the wrong length', (t) => {
+  // GB IBANs are exactly 22 characters.
+  t.is(detector.detect('Ref GB82WEST123456987654321 today').length, 0);
+});
