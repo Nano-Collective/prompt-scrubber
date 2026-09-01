@@ -1,11 +1,11 @@
 import { readFileSync } from 'node:fs';
 import type { Command } from 'commander';
 import { loadConfig } from '../../core/config.js';
-
 import { loadConfiguredRulePacks } from '../../core/rule-packs.js';
 import { scrub } from '../../core/scrub.js';
 import { gcSessions } from '../../session/storage.js';
 import type { ScrubStats } from '../../types/index.js';
+import { resolveLocale, warnIfLocaleUnused } from '../locale.js';
 
 export async function handleScrub(
   text: string,
@@ -16,6 +16,7 @@ export async function handleScrub(
     strictName?: boolean;
     codeTellTerms?: string;
     urlAllowlist?: string;
+    locale?: string;
   },
 ) {
   const disabledDetectors = options.disable ? options.disable.split(',').map((s) => s.trim()) : [];
@@ -29,6 +30,8 @@ export async function handleScrub(
     : [];
 
   const config = loadConfig();
+  // Validated before any side effect so a typo'd flag never garbage collects.
+  const locale = resolveLocale(options.locale, config.locale);
 
   try {
     gcSessions(config.sessionTtlDays ?? 7);
@@ -40,6 +43,8 @@ export async function handleScrub(
 
   const { detectors: rulePackDetectors } = await loadConfiguredRulePacks();
 
+  warnIfLocaleUnused(locale, rulePackDetectors);
+
   const result = scrub({
     content: text,
     ...(options.sessionId ? { sessionId: options.sessionId } : {}),
@@ -49,6 +54,7 @@ export async function handleScrub(
       ...(options.strictName !== undefined ? { strictNameDetector: options.strictName } : {}),
       ...(codeTellTerms !== undefined ? { codeTellTerms } : {}),
       ...(urlAllowlist.length > 0 ? { urlAllowlist } : {}),
+      ...(locale ? { locale } : {}),
       customDetectors: rulePackDetectors,
     },
   });
@@ -99,6 +105,10 @@ export function setupScrubCommand(program: Command) {
       '--url-allowlist <hosts>',
       'Comma-separated list of hostnames to pass-through in URLs (subdomains are implicitly allowed)',
     )
+    .option(
+      '--locale <locale>',
+      'BCP-47 locale (e.g. de-DE) enabling detectors scoped to that locale',
+    )
     .option('-q, --quiet', 'Suppress the scrub summary printed to stderr')
     .action(async (file, options) => {
       let input = '';
@@ -127,7 +137,14 @@ export function setupScrubCommand(program: Command) {
         return;
       }
 
-      const result = await handleScrub(input, options);
+      let result: Awaited<ReturnType<typeof handleScrub>>;
+      try {
+        result = await handleScrub(input, options);
+      } catch (err: unknown) {
+        console.error((err as Error).message);
+        process.exit(1);
+        return;
+      }
 
       // Print scrubbed content to stdout
       process.stdout.write(result.scrubbedContent as string);

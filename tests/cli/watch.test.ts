@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'ava';
 import {
   assertClipboardSupport,
@@ -288,4 +288,72 @@ test('handleWatch registers a SIGINT handler that clears the timer and stops', a
   if (timer) {
     clearInterval(timer);
   }
+});
+
+const CPF = '123.456.789-09';
+
+/** Points the shared temp config dir at a rule pack scoped to `pt-BR`. */
+function configureCpfPack(): void {
+  const packPath = path.join(tmpDir, 'watch-locale-pack.mjs');
+  fs.writeFileSync(
+    packPath,
+    `export const detectors = [{
+       name: 'CpfDetector',
+       locales: ['pt-BR'],
+       detect: (text) => {
+         const idx = text.indexOf('${CPF}');
+         return idx === -1
+           ? []
+           : [{ category: 'Cpf', span: [idx, idx + ${CPF.length}], value: '${CPF}', placeholderPrefix: 'Cpf' }];
+       },
+     }];`,
+    'utf8',
+  );
+  fs.writeFileSync(
+    path.join(tmpDir, 'config.json'),
+    JSON.stringify({ rulePacks: [pathToFileURL(packPath).href] }),
+    'utf8',
+  );
+}
+
+function clearWatchConfig(): void {
+  fs.rmSync(path.join(tmpDir, 'config.json'), { force: true });
+}
+
+test.serial('watchFileStep honours --locale', async (t) => {
+  configureCpfPack();
+  const filePath = path.join(tmpDir, 'test-watch-locale.txt');
+  fs.writeFileSync(filePath, `Meu CPF e ${CPF}`, 'utf8');
+
+  const next = await watchFileStep(filePath, '', {
+    locale: 'pt-BR',
+    logFn: () => {},
+    notifyFn: () => {},
+  });
+
+  t.is(next, 'Meu CPF e «Cpf_1»');
+  clearWatchConfig();
+});
+
+test.serial('watchFileStep leaves a locale pack idle without --locale', async (t) => {
+  configureCpfPack();
+  const filePath = path.join(tmpDir, 'test-watch-no-locale.txt');
+  fs.writeFileSync(filePath, `Meu CPF e ${CPF}`, 'utf8');
+
+  const next = await watchFileStep(filePath, '', { logFn: () => {}, notifyFn: () => {} });
+
+  t.is(next, `Meu CPF e ${CPF}`);
+  clearWatchConfig();
+});
+
+test.serial('handleWatch rejects a malformed --locale before polling starts', async (t) => {
+  await t.throwsAsync(
+    handleWatch({
+      file: path.join(tmpDir, 'never-read.txt'),
+      once: true,
+      locale: 'German!',
+      logFn: () => {},
+    }),
+    { message: /Invalid --locale "German!"/ },
+  );
 });

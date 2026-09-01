@@ -61,6 +61,8 @@ Priority is implicitly handled by a defined order of precedence:
 
 If `SecretDetector` and `UrlDetector` match the same string (e.g., a URL with a token), `SecretDetector` wins.
 
+Findings from locale-scoped detectors take precedence over the generic built-in of the same category, so a `de-DE` rule pack can override an English-shaped `AddressDetector` match on the same span. They still lose to higher-priority detectors such as `SecretDetector`, and the precedence never applies when it would shrink the redaction: a locale finding strictly inside a built-in match loses to the wider span.
+
 ## Registration System
 
 By default, the core scrub function runs the built-in detectors in priority order. You can optionally configure detectors via `ScrubOptions` in the API, or through the CLI:
@@ -85,13 +87,18 @@ To use a rule pack:
 ```json
 {
   "rulePacks": ["some-rule-pack"],
-  "urlAllowlist": []
+  "urlAllowlist": [],
+  "locale": ""
 }
 ```
 
 Run `prompt-scrub config show` to confirm the tool picked it up.
 
 Once declared, the CLI will automatically discover, load, and merge these detectors into the active set on startup. They participate natively in collision resolution and can be inspected via `prompt-scrub rules list`.
+
+### Locale-Scoped Detectors
+
+The built-in detectors are shaped around English and US/UK formats. Locale-specific formats (German street shapes, Brazilian CPF numbers, Japanese postal codes) are distributed as rule packs that declare the locales they serve, so the core stays lean and non-English users can opt into the rules that fit them. See [Authoring Rule Packs](authoring-rule-packs.md#locale-scoped-rule-packs).
 
 For a guide on how to author your own rule pack, see [Authoring Rule Packs](./authoring-rule-packs.md).
 
@@ -104,3 +111,5 @@ npx prompt-scrub rules list
 ```
 
 This will print a list of all available detectors, indicating their source (e.g., `built-in`) and their default state (`on` or `off`). This allows you to verify which detectors will run by default before you pass any additional flags like `--disable` or `--enable`.
+
+When any loaded detector declares `locales`, two more columns appear: `Locales` (the tags it declares) and `Locale State` (`active`/`inactive` for the resolved locale, `-` for locale-agnostic detectors). Pass `--locale <tag>` to preview what a different locale would activate.

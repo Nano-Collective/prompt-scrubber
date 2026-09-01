@@ -28,6 +28,7 @@ The summary counts replacements, not unique values: a value that appears three t
 **Options:**
 - `--session-id <id>`: Reuse an existing session map. If omitted, a new UUID is generated.
 - `--disable <detectors>`: Comma-separated list of detectors to disable (e.g. `EmailDetector,PhoneDetector`).
+- `--locale <locale>`: BCP-47 tag (e.g. `de-DE`) that activates detectors scoped to that locale. Overrides `locale` in the configuration file. A malformed tag exits `1`; a well-formed tag that activates no detector warns on `stderr`, so a missing rule pack is never mistaken for a completed locale scrub.
 - `-q, --quiet`: Suppress the summary. The `Session ID:` line is still printed, since scripts need it to rehydrate.
 
 ### `prompt-scrub rehydrate [file]`
@@ -44,6 +45,7 @@ Reads a message from `stdin` or a file and prints a human-readable diff of the t
 
 **Options:**
 - `--disable <detectors>`: Comma-separated list of detectors to disable.
+- `--locale <locale>`: BCP-47 tag that activates detectors scoped to that locale.
 - `--hash`: Print *only* the SHA-256 hash for scripting purposes.
 
 ## Watch Mode
@@ -79,6 +81,7 @@ Press `Ctrl-C` to stop watching; the poll loop is cleared and the process exits 
 - `--strict-name`: Enable strict allowlisting for `NameDetector`.
 - `--code-tell-terms <terms>`: Comma-separated list of private identifiers to detect.
 - `--url-allowlist <hosts>`: Comma-separated list of hostnames to pass through.
+- `--locale <locale>`: BCP-47 tag that activates detectors scoped to that locale, for this run only. Overrides `locale` in the configuration file. Validated once before the poll loop starts.
 
 **Platform requirements:**
 
@@ -120,13 +123,15 @@ The generated file documents the supported schema:
 {
   "rulePacks": [],
   "urlAllowlist": [],
-  "sessionTtlDays": 7
+  "sessionTtlDays": 7,
+  "locale": ""
 }
 ```
 
 - `rulePacks`: npm package names to load extra detectors from. See [Authoring Rule Packs](../features/authoring-rule-packs.md).
 - `urlAllowlist`: hostnames the `UrlDetector` passes through unchanged. Subdomains are implicitly allowed.
 - `sessionTtlDays`: number of days after which inactive sessions are automatically garbage collected. Default is 7.
+- `locale`: BCP-47 tag (e.g. `de-DE`) enabling locale-scoped detectors. Empty means English/locale-agnostic detection only.
 
 Fails if a config file already exists.
 
@@ -145,7 +150,9 @@ Config file: /home/alice/.config/prompt-scrub/config.json
   ],
   "urlAllowlist": [
     "example.com"
-  ]
+  ],
+  "sessionTtlDays": 7,
+  "locale": "de-DE"
 }
 ```
 
@@ -154,10 +161,12 @@ Entries that do not match the schema are reported on `stderr` and the command ex
 ```bash
 $ prompt-scrub config show
 Config file: /home/alice/.config/prompt-scrub/config.json
-  error: Unknown key "rulePaks". Supported keys: rulePacks, urlAllowlist.
+  error: Unknown key "rulePaks". Supported keys: rulePacks, urlAllowlist, sessionTtlDays, locale.
 {
   "rulePacks": [],
-  "urlAllowlist": []
+  "urlAllowlist": [],
+  "sessionTtlDays": 7,
+  "locale": ""
 }
 Invalid entries are ignored at runtime.
 ```

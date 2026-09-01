@@ -1,12 +1,12 @@
 import * as crypto from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import type { Command } from 'commander';
-import { resolveCollisions } from '../../core/collision-resolver.js';
 import { loadConfig } from '../../core/config.js';
 import { loadConfiguredRulePacks } from '../../core/rule-packs.js';
-import { getActiveDetectors } from '../../core/scrub.js';
+import { detectFindings, getActiveDetectors } from '../../core/scrub.js';
 import { SessionManager } from '../../session/session-manager.js';
 import type { Finding } from '../../types/index.js';
+import { resolveLocale, warnIfLocaleUnused } from '../locale.js';
 
 export async function handleInspect(
   text: string,
@@ -16,6 +16,7 @@ export async function handleInspect(
     strictName?: boolean;
     codeTellTerms?: string;
     urlAllowlist?: string;
+    locale?: string;
   },
 ) {
   const disabledDetectors = options.disable ? options.disable.split(',').map((s) => s.trim()) : [];
@@ -30,8 +31,11 @@ export async function handleInspect(
 
   const config = loadConfig();
   const urlAllowlist = Array.from(new Set([...(config.urlAllowlist || []), ...cliUrlAllowlist]));
+  const locale = resolveLocale(options.locale, config.locale);
 
   const { detectors: rulePackDetectors } = await loadConfiguredRulePacks();
+
+  warnIfLocaleUnused(locale, rulePackDetectors);
 
   const detectors = getActiveDetectors({
     disabledDetectors,
@@ -39,13 +43,11 @@ export async function handleInspect(
     ...(options.strictName !== undefined ? { strictNameDetector: options.strictName } : {}),
     ...(codeTellTerms !== undefined ? { codeTellTerms } : {}),
     ...(urlAllowlist.length > 0 ? { urlAllowlist } : {}),
+    ...(locale ? { locale } : {}),
     customDetectors: rulePackDetectors,
   });
 
-  const allFindings = detectors.flatMap((d) => d.detect(text));
-  const findings = resolveCollisions(allFindings);
-
-  return findings;
+  return detectFindings(text, detectors);
 }
 
 export function computeHash(text: string, findings: Finding[]): string {
@@ -114,6 +116,10 @@ export function setupInspectCommand(program: Command) {
       '--url-allowlist <hosts>',
       'Comma-separated list of hostnames to pass-through in URLs (subdomains are implicitly allowed)',
     )
+    .option(
+      '--locale <locale>',
+      'BCP-47 locale (e.g. de-DE) enabling detectors scoped to that locale',
+    )
     .option('--hash', 'Print only the SHA-256 hash of the scrubbed output')
     .action(async (file, options) => {
       let input = '';
@@ -142,7 +148,15 @@ export function setupInspectCommand(program: Command) {
         return;
       }
 
-      const findings = await handleInspect(input, options);
+      let findings: Finding[];
+      try {
+        findings = await handleInspect(input, options);
+      } catch (err: unknown) {
+        console.error((err as Error).message);
+        process.exit(1);
+        return;
+      }
+
       const hash = computeHash(input, findings);
 
       if (options.hash) {

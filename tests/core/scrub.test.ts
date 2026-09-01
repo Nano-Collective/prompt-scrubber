@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import test from 'ava';
 import { rehydrate } from '../../src/core/rehydrate.js';
 import { scrub } from '../../src/core/scrub.js';
+import type { Detector } from '../../src/types/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -320,4 +321,167 @@ test('stats include categories contributed by custom detectors', (t) => {
 
   t.is(result.stats.totalEntities, 2);
   t.deepEqual(result.stats.byCategory, { Ticket: 1, Email: 1 });
+});
+
+const germanAddressDetector: Detector = {
+  name: 'AddressDeDetector',
+  locales: ['de-DE'],
+  detect(text) {
+    const regex = /[A-ZÄÖÜ][a-zäöüß]+(?:straße|str\.)\s+\d{1,4}/g;
+    const findings = [];
+    let match: RegExpExecArray | null;
+    regex.lastIndex = 0;
+    while ((match = regex.exec(text)) !== null) {
+      findings.push({
+        category: 'Address',
+        span: [match.index, match.index + match[0].length] as [number, number],
+        value: match[0],
+        placeholderPrefix: 'Address',
+      });
+    }
+    return findings;
+  },
+};
+
+test('a locale-scoped detector stays inactive when no locale is set', (t) => {
+  const text = 'Ich wohne in der Musterstraße 12';
+  const result = scrub({ content: text, options: { customDetectors: [germanAddressDetector] } });
+  t.is(result.scrubbedContent, text);
+});
+
+test('a locale-scoped detector runs when its locale is active', (t) => {
+  const result = scrub({
+    content: 'Ich wohne in der Musterstraße 12',
+    options: { customDetectors: [germanAddressDetector], locale: 'de-DE' },
+  });
+  t.is(result.scrubbedContent, 'Ich wohne in der «Address_1»');
+});
+
+test('a locale-scoped detector runs for a language-level locale', (t) => {
+  const result = scrub({
+    content: 'Ich wohne in der Musterstraße 12',
+    options: { customDetectors: [germanAddressDetector], locale: 'de' },
+  });
+  t.is(result.scrubbedContent, 'Ich wohne in der «Address_1»');
+});
+
+test('a locale-scoped detector stays inactive for a different locale', (t) => {
+  const text = 'Ich wohne in der Musterstraße 12';
+  const result = scrub({
+    content: text,
+    options: { customDetectors: [germanAddressDetector], locale: 'fr-FR' },
+  });
+  t.is(result.scrubbedContent, text);
+});
+
+test('locale-agnostic custom detectors are unaffected by the active locale', (t) => {
+  const codenameDetector: Detector = {
+    name: 'CodenameDetector',
+    detect: (text) =>
+      text.includes('Apollo')
+        ? [
+            {
+              category: 'Codename',
+              span: [text.indexOf('Apollo'), text.indexOf('Apollo') + 6] as [number, number],
+              value: 'Apollo',
+              placeholderPrefix: 'Codename',
+            },
+          ]
+        : [],
+  };
+
+  const result = scrub({
+    content: 'Project Apollo',
+    options: { customDetectors: [codenameDetector], locale: 'ja-JP' },
+  });
+  t.is(result.scrubbedContent, 'Project «Codename_1»');
+});
+
+test('an active locale does not change how English input is scrubbed', (t) => {
+  const text = 'Write to alice@example.com or visit 123 Main Street.';
+  const withLocale = scrub({
+    content: text,
+    options: { customDetectors: [germanAddressDetector], locale: 'de-DE' },
+  });
+  const withoutLocale = scrub({ content: text });
+  t.is(withLocale.scrubbedContent, withoutLocale.scrubbedContent);
+});
+
+function addressDetectorFor(match: string, locales?: string[]): Detector {
+  const detector: Detector = {
+    name: `Address-${match}-Detector`,
+    detect: (text) => {
+      const idx = text.indexOf(match);
+      return idx === -1
+        ? []
+        : [
+            {
+              category: 'Address',
+              span: [idx, idx + match.length] as [number, number],
+              value: match,
+              placeholderPrefix: 'Address',
+            },
+          ];
+    },
+  };
+  if (locales) {
+    detector.locales = locales;
+  }
+  return detector;
+}
+
+test('a locale finding replaces an overlapping built-in finding of the same span', (t) => {
+  const text = 'Adresse: 10 Downing St, Berlin';
+
+  // The built-in AddressDetector already covers "10 Downing St"; a locale pack
+  // matching the same span takes over so its own value/placeholder is used.
+  const result = scrub({
+    content: text,
+    options: { customDetectors: [addressDetectorFor('10 Downing St', ['de-DE'])], locale: 'de-DE' },
+  });
+
+  t.is(result.scrubbedContent, 'Adresse: «Address_1», Berlin');
+  t.is(Object.values(result.sessionMap ?? {})[0], '10 Downing St');
+});
+
+test('a locale finding never narrows what the built-in detector redacted', (t) => {
+  const text = 'Adresse: 10 Downing St, Berlin';
+  const withoutLocale = scrub({ content: text });
+
+  // "Downing St" sits strictly inside the built-in match. Letting the locale
+  // pack win here would leak the leading "10 ", so coverage is kept instead.
+  const withLocale = scrub({
+    content: text,
+    options: { customDetectors: [addressDetectorFor('Downing St', ['de-DE'])], locale: 'de-DE' },
+  });
+
+  t.is(withoutLocale.scrubbedContent, 'Adresse: «Address_1», Berlin');
+  t.is(withLocale.scrubbedContent, withoutLocale.scrubbedContent);
+});
+
+test('a locale finding wins when it redacts more than the built-in finding', (t) => {
+  const text = 'Adresse: 10 Downing St, Berlin';
+
+  const result = scrub({
+    content: text,
+    options: {
+      customDetectors: [addressDetectorFor('10 Downing St, Berlin', ['de-DE'])],
+      locale: 'de-DE',
+    },
+  });
+
+  t.is(result.scrubbedContent, 'Adresse: «Address_1»');
+});
+
+test('a locale finding round-trips through rehydrate', (t) => {
+  const text = 'Meine Adresse ist Musterstraße 12';
+  const scrubbed = scrub({
+    content: text,
+    options: { customDetectors: [germanAddressDetector], locale: 'de-DE' },
+  });
+  const restored = rehydrate({
+    content: scrubbed.scrubbedContent as string,
+    sessionId: scrubbed.sessionId,
+  });
+  t.is(restored.content, text);
 });
