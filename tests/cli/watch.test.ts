@@ -14,6 +14,7 @@ import {
   watchClipboardStep,
   watchFileStep,
 } from '../../src/cli/commands/watch.js';
+import { rehydrate } from '../../src/core/rehydrate.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -35,11 +36,8 @@ test.after.always(() => {
 test('formatNotificationMessage correctly formats single and plural categories', (t) => {
   t.is(formatNotificationMessage(undefined), 'Scrubbed 0 items');
   t.is(formatNotificationMessage({}), 'Scrubbed 0 items');
-  t.is(formatNotificationMessage({ Secret_1: 'val1', Secret_2: 'val2' }), 'Scrubbed 2 secrets');
-  t.is(
-    formatNotificationMessage({ Secret_1: 'val1', Email_1: 'val2' }),
-    'Scrubbed 1 secret, 1 email',
-  );
+  t.is(formatNotificationMessage({ Secret: 2 }), 'Scrubbed 2 secrets');
+  t.is(formatNotificationMessage({ Secret: 1, Email: 1 }), 'Scrubbed 1 secret, 1 email');
 });
 
 test('watchClipboardStep scrubs sensitive data, logs, and triggers notification', async (t) => {
@@ -121,9 +119,9 @@ test('handleWatch supports watching multiple files', async (t) => {
   fs.writeFileSync(file1, 'Email: alice@example.com', 'utf8');
   fs.writeFileSync(file2, 'Key: sk-1234567890abcdef1234567890abcdef', 'utf8');
 
-  let logCount = 0;
-  const mockLog = () => {
-    logCount++;
+  const logs: string[] = [];
+  const mockLog = (msg: string) => {
+    logs.push(msg);
   };
 
   await handleWatch({
@@ -134,7 +132,82 @@ test('handleWatch supports watching multiple files', async (t) => {
 
   t.is(fs.readFileSync(file1, 'utf8'), 'Email: «Email_1»');
   t.is(fs.readFileSync(file2, 'utf8'), 'Key: «Secret_1»');
-  t.is(logCount, 2);
+  t.is(logs.filter((l) => l.startsWith('[watch] Scrubbed')).length, 2);
+});
+
+test('handleWatch shares one session so distinct values never collide', async (t) => {
+  const file1 = path.join(tmpDir, 'shared-1.txt');
+  const file2 = path.join(tmpDir, 'shared-2.txt');
+  fs.writeFileSync(file1, 'me: alice@example.com', 'utf8');
+  fs.writeFileSync(file2, 'them: bob@example.com', 'utf8');
+
+  const logs: string[] = [];
+
+  await handleWatch({
+    file: [file1, file2],
+    once: true,
+    logFn: (msg) => {
+      logs.push(msg);
+    },
+  });
+
+  t.is(fs.readFileSync(file1, 'utf8'), 'me: «Email_1»');
+  t.is(fs.readFileSync(file2, 'utf8'), 'them: «Email_2»', 'a second value must not reuse Email_1');
+
+  const idLine = logs.find((l) => l.startsWith('[watch] Session ID: '));
+  t.truthy(idLine, 'the session ID must be printed so the files can be rehydrated');
+  const sessionId = idLine!.replace('[watch] Session ID: ', '');
+
+  t.is(
+    rehydrate({ content: 'me: «Email_1» / them: «Email_2»', sessionId }).content,
+    'me: alice@example.com / them: bob@example.com',
+    'one session round-trips both values',
+  );
+});
+
+test('a later tick reports only what it scrubbed, not the running session total', async (t) => {
+  const filePath = path.join(tmpDir, 'per-tick.txt');
+  fs.writeFileSync(filePath, 'me: alice@example.com', 'utf8');
+
+  const logs: string[] = [];
+  const opts = {
+    sessionId: 'watch-per-tick',
+    logFn: (msg: string) => {
+      logs.push(msg);
+    },
+    notifyFn: () => {},
+  };
+
+  const first = await watchFileStep(filePath, '', opts);
+  fs.appendFileSync(filePath, ' / them: bob@example.com', 'utf8');
+  await watchFileStep(filePath, first, opts);
+
+  t.is(fs.readFileSync(filePath, 'utf8'), 'me: «Email_1» / them: «Email_2»');
+  t.true(logs[0]?.startsWith('[watch] Scrubbed 1 email in'));
+  t.true(logs[1]?.startsWith('[watch] Scrubbed 1 email in'), 'second tick must not say 2 emails');
+});
+
+test('handleWatch reuses an explicit --session-id instead of minting one', async (t) => {
+  const filePath = path.join(tmpDir, 'explicit-session.txt');
+  fs.writeFileSync(filePath, 'Contact carol@example.com', 'utf8');
+
+  const logs: string[] = [];
+
+  await handleWatch({
+    file: filePath,
+    sessionId: 'watch-explicit-session',
+    once: true,
+    logFn: (msg) => {
+      logs.push(msg);
+    },
+  });
+
+  t.true(logs.includes('[watch] Session ID: watch-explicit-session'));
+  t.is(
+    rehydrate({ content: fs.readFileSync(filePath, 'utf8'), sessionId: 'watch-explicit-session' })
+      .content,
+    'Contact carol@example.com',
+  );
 });
 
 test('handleWatch throws when neither --clipboard nor --file is provided', async (t) => {
@@ -288,4 +361,24 @@ test('handleWatch registers a SIGINT handler that clears the timer and stops', a
   if (timer) {
     clearInterval(timer);
   }
+});
+
+test('a repeated value is counted once per replacement, not once per placeholder', async (t) => {
+  // Documented behaviour change. The tick summary is now driven by that
+  // scrub's stats, which count findings, rather than by the session map, which
+  // deduplicates by value. Two occurrences of one address therefore report 2
+  // where the old map-driven message said 1. Pinned so the swap is a decision
+  // rather than a surprise.
+  const logs: string[] = [];
+  await watchClipboardStep('', {
+    readClipboardFn: () => 'a@b.com and again a@b.com',
+    writeClipboardFn: () => {},
+    logFn: (msg: string) => logs.push(msg),
+    notifyFn: () => {},
+  });
+
+  t.true(
+    logs.some((l) => l.includes('Scrubbed 2 emails')),
+    `expected a per-replacement count, got: ${logs.join(' | ')}`,
+  );
 });

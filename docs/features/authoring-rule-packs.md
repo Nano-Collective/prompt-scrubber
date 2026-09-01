@@ -35,6 +35,8 @@ export interface Detector {
 }
 ```
 
+`placeholderPrefix` may be any string that does not contain `«` or `»` — digits and underscores are fine, so `Ticket2` and `Jira_Issue` both work. The engine mints `«<prefix>_<n>»`, recognises that shape when reserving tokens already present in the text, and matches it again on rehydration, so a prefix outside that rule would produce a placeholder that never round-trips.
+
 > **Note to Whitepaper Readers:** 
 > The original whitepaper conceptually defines a `Finding` as `{ category, span, replacement }`. The canonical runtime interface explicitly omits `replacement` because the exact placeholder (e.g. `Email_2`) requires session state, which detectors do not have. Rule-pack authors must return `value` and `placeholderPrefix`, allowing the core engine to deterministically generate the final replacement.
 

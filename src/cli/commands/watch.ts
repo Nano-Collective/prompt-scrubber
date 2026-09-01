@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import type { Command } from 'commander';
 import { handleScrub } from './scrub.js';
@@ -154,22 +155,18 @@ export function sendNotification(
   spawnSync('notify-send', ['--', title, message], { stdio: 'ignore' });
 }
 
-export function formatNotificationMessage(sessionMap?: Record<string, string>): string {
-  if (!sessionMap) return 'Scrubbed 0 items';
-  const keys = Object.keys(sessionMap);
-  if (keys.length === 0) return 'Scrubbed 0 items';
+/**
+ * Summarises what a single scrub replaced. Driven by this call's stats rather
+ * than the session map, which spans the whole run and would make every tick
+ * report the running total.
+ */
+export function formatNotificationMessage(byCategory?: Record<string, number>): string {
+  const entries = Object.entries(byCategory ?? {});
+  if (entries.length === 0) return 'Scrubbed 0 items';
 
-  const counts: Record<string, number> = {};
-  for (const key of keys) {
-    const cleanKey = key.replace(/[«»]/g, '');
-    const prefix = cleanKey.split('_')[0] || 'item';
-    const category = prefix.toLowerCase();
-    counts[category] = (counts[category] || 0) + 1;
-  }
-
-  const parts = Object.entries(counts).map(([cat, cnt]) => {
-    const name = cnt === 1 ? cat : `${cat}s`;
-    return `${cnt} ${name}`;
+  const parts = entries.map(([category, count]) => {
+    const name = category.toLowerCase();
+    return `${count} ${count === 1 ? name : `${name}s`}`;
   });
 
   return `Scrubbed ${parts.join(', ')}`;
@@ -205,7 +202,7 @@ export async function watchClipboardStep(
     // Watch mode only handles string content
     const scrubbed = typeof result.scrubbedContent === 'string' ? result.scrubbedContent : current;
     if (scrubbed !== current) {
-      const msg = formatNotificationMessage(result.sessionMap);
+      const msg = formatNotificationMessage(result.stats.byCategory);
       if (options.dryRun) {
         log(`[watch] (dry-run) Would have ${msg.toLowerCase()} from clipboard.`);
         return current;
@@ -236,7 +233,7 @@ export async function watchFileStep(
     // Watch mode only handles string content
     const scrubbed = typeof result.scrubbedContent === 'string' ? result.scrubbedContent : current;
     if (scrubbed !== current) {
-      const msg = formatNotificationMessage(result.sessionMap);
+      const msg = formatNotificationMessage(result.stats.byCategory);
       if (options.dryRun) {
         log(`[watch] (dry-run) Would have ${msg.toLowerCase()} in ${filePath}.`);
         return current;
@@ -277,6 +274,14 @@ export async function handleWatch(
     assertClipboardSupport();
   }
 
+  // One session for the whole run. Without this each tick would mint a fresh
+  // session starting from an empty map, so the per-category counter would reset
+  // and a later tick would reissue «Email_1» for a different value - silently
+  // overwriting the first one in the file that is the only copy of it.
+  const sessionId = options.sessionId ?? randomUUID();
+  const stepOptions: WatchStepOptions = { ...options, sessionId };
+  log(`[watch] Session ID: ${sessionId}`);
+
   const readFn = options.readClipboardFn ?? readClipboard;
   let lastClip = options.clipboard ? readFn() : '';
 
@@ -290,10 +295,10 @@ export async function handleWatch(
 
   const tick = async () => {
     if (options.clipboard) {
-      lastClip = await watchClipboardStep(lastClip, options);
+      lastClip = await watchClipboardStep(lastClip, stepOptions);
     }
     for (const f of files) {
-      lastFileContents[f] = await watchFileStep(f, lastFileContents[f] ?? '', options);
+      lastFileContents[f] = await watchFileStep(f, lastFileContents[f] ?? '', stepOptions);
     }
   };
 

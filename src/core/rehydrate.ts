@@ -1,7 +1,11 @@
 import { readSessionMap } from '../session/storage.js';
 import type { RehydrateRequest, RehydrateResult } from '../types/index.js';
 
-const PLACEHOLDER_REGEX = /«([A-Za-z]+_\d+)»/g;
+// Free-form prefix, matching what scrub actually mints: `placeholderPrefix`
+// is a public extension point, so a rule pack using `Ticket2` produces
+// «Ticket2_1». Restricting to [A-Za-z]+ here left every such placeholder
+// unrehydratable — scrubbed away, then never restored.
+const PLACEHOLDER_REGEX = /«([^«»]+_\d+)»/g;
 
 function rehydrateString(
   content: string,

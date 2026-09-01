@@ -321,3 +321,114 @@ test('stats include categories contributed by custom detectors', (t) => {
   t.is(result.stats.totalEntities, 2);
   t.deepEqual(result.stats.byCategory, { Ticket: 1, Email: 1 });
 });
+
+test('a placeholder already present in the text is never reissued to a new value', (t) => {
+  const sessionMap: Record<string, string> = {};
+  const result = scrub({
+    content: 'the token «Email_1» is literal, contact a@b.com',
+    sessionMap,
+  });
+
+  t.is(result.scrubbedContent, 'the token «Email_1» is literal, contact «Email_2»');
+  t.deepEqual(sessionMap, { '«Email_2»': 'a@b.com' });
+  t.is(
+    rehydrate({ content: result.scrubbedContent as string, sessionMap }).content,
+    'the token «Email_1» is literal, contact a@b.com',
+    'the literal token survives and only the real value is restored',
+  );
+});
+
+test('the placeholder guard is order-independent across a Message[] payload', (t) => {
+  // The literal token is in the LAST message. Reserving per message would only
+  // protect against literals seen at or before the message being scrubbed, so
+  // message 1 would happily mint «Email_1» for a real address and both tokens
+  // would mean two different things.
+  const sessionMap: Record<string, string> = {};
+  const result = scrub({
+    content: [
+      { role: 'user', content: 'real x@y.com' },
+      { role: 'user', content: 'literal «Email_1» here' },
+    ],
+    sessionMap,
+  });
+
+  const messages = result.scrubbedContent as Message[];
+  t.is(messages[0]?.content, 'real «Email_2»');
+  t.is(messages[1]?.content, 'literal «Email_1» here');
+  t.deepEqual(sessionMap, { '«Email_2»': 'x@y.com' });
+
+  const back = rehydrate({ content: messages, sessionMap }).content as Message[];
+  t.is(back[0]?.content, 'real x@y.com');
+  t.is(back[1]?.content, 'literal «Email_1» here', 'the literal token is left alone');
+});
+
+test('the placeholder guard covers non-alphabetic rule-pack prefixes', (t) => {
+  // `placeholderPrefix` is free-form on the public extension surface, so a pack
+  // may mint «Ticket2_1». A guard that only recognised [A-Za-z]+ prefixes would
+  // leave exactly the collision it exists to prevent reachable for rule packs.
+  const ticketDetector = {
+    name: 'TicketDetector',
+    detect: (text: string) => {
+      const index = text.indexOf('TKT-99');
+      return index === -1
+        ? []
+        : [
+            {
+              category: 'Ticket2',
+              span: [index, index + 'TKT-99'.length] as [number, number],
+              value: 'TKT-99',
+              placeholderPrefix: 'Ticket2',
+            },
+          ];
+    },
+  };
+
+  const sessionMap: Record<string, string> = {};
+  const result = scrub({
+    content: 'literal «Ticket2_1» plus TKT-99',
+    sessionMap,
+    options: { customDetectors: [ticketDetector] },
+  });
+
+  t.is(result.scrubbedContent, 'literal «Ticket2_1» plus «Ticket2_2»');
+  t.deepEqual(sessionMap, { '«Ticket2_2»': 'TKT-99' });
+  t.is(
+    rehydrate({ content: result.scrubbedContent as string, sessionMap }).content,
+    'literal «Ticket2_1» plus TKT-99',
+    'and the value round-trips — a distinct token that never rehydrates is no fix',
+  );
+});
+
+test('a non-alphabetic prefix resumes its counter across a reused session', (t) => {
+  // rebuildCategoryCounts reads the prefix back off the map. A counter that
+  // cannot parse «Ticket2_5» restarts at 1 and hands out «Ticket2_1» — a name
+  // an earlier run may well have used for something else. The gap is the point:
+  // the `newPlaceholder in this.map` guard alone would not catch this, because
+  // «Ticket2_1» is genuinely absent from the map.
+  const sessionMap: Record<string, string> = { '«Ticket2_5»': 'TKT-5' };
+  const makeDetector = (value: string) => ({
+    name: 'TicketDetector',
+    detect: (text: string) => {
+      const index = text.indexOf(value);
+      return index === -1
+        ? []
+        : [
+            {
+              category: 'Ticket2',
+              span: [index, index + value.length] as [number, number],
+              value,
+              placeholderPrefix: 'Ticket2',
+            },
+          ];
+    },
+  });
+
+  const result = scrub({
+    content: 'next is TKT-2',
+    sessionMap,
+    options: { customDetectors: [makeDetector('TKT-2')] },
+  });
+
+  t.is(result.scrubbedContent, 'next is «Ticket2_6»');
+  t.deepEqual(sessionMap, { '«Ticket2_5»': 'TKT-5', '«Ticket2_6»': 'TKT-2' });
+});
