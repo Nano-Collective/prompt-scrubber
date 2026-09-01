@@ -84,7 +84,7 @@ test('formatDiff inserts ... between non-adjacent hunks', (t) => {
   const original = 'a\nb\none@x.com\nc\nd\ne\nf\ntwo@x.com\ng';
   const scrubbed = 'a\nb\n«Email_1»\nc\nd\ne\nf\n«Email_2»\ng';
   const out = formatDiff(original, scrubbed, { color: false, context: 1 });
-  t.true(out.includes('...\n'));
+  t.true(out.includes('  ...\n'));
   t.true(out.includes('- one@x.com\n'));
   t.true(out.includes('- two@x.com\n'));
 });

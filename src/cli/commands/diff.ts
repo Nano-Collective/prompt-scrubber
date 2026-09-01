@@ -1,5 +1,5 @@
-import { readFileSync } from 'node:fs';
 import { InvalidArgumentError, type Command } from 'commander';
+import { addDetectorOptions, readInput } from '../io.js';
 import { sanitizeLine } from '../sanitize.js';
 import { handleInspect, simulateScrub } from './inspect.js';
 
@@ -91,10 +91,17 @@ function diffLines(a: string[], b: string[]): Edit[] {
   const prefix = a.slice(0, lo).map((line) => ({ type: 'eq' as const, line }));
   const suffix = a.slice(hiA).map((line) => ({ type: 'eq' as const, line }));
 
-  const mid =
-    midA.length === midB.length || midA.length * midB.length > LCS_CELL_BUDGET
-      ? pairIndexWise(midA, midB)
-      : lcsDiff(midA, midB);
+  let mid: Edit[];
+  if (midA.length === midB.length) {
+    mid = pairIndexWise(midA, midB);
+  } else if (midA.length * midB.length > LCS_CELL_BUDGET) {
+    console.error(
+      'diff: input too large for a full line comparison; showing an index-wise pairing',
+    );
+    mid = pairIndexWise(midA, midB);
+  } else {
+    mid = lcsDiff(midA, midB);
+  }
 
   return [...prefix, ...mid, ...suffix];
 }
@@ -134,7 +141,7 @@ function paint(text: string, color: string | null): string {
 function formatUnified(edits: Edit[], ranges: Array<[number, number]>, color: boolean): string {
   let out = '';
   for (let r = 0; r < ranges.length; r++) {
-    if (r > 0) out += '...\n';
+    if (r > 0) out += '  ...\n';
     const [lo, hi] = ranges[r]!;
     for (let i = lo; i <= hi; i++) {
       const e = edits[i]!;
@@ -148,9 +155,12 @@ function formatUnified(edits: Edit[], ranges: Array<[number, number]>, color: bo
 }
 
 function wrap(text: string, width: number): string[] {
-  if (text.length === 0) return [''];
+  const chars = [...text];
+  if (chars.length === 0) return [''];
   const parts: string[] = [];
-  for (let i = 0; i < text.length; i += width) parts.push(text.slice(i, i + width));
+  for (let i = 0; i < chars.length; i += width) {
+    parts.push(chars.slice(i, i + width).join(''));
+  }
   return parts;
 }
 
@@ -168,8 +178,10 @@ function sideBySideRows(
   for (let i = 0; i < n; i++) {
     const l = L[i] ?? '';
     const r = R[i] ?? '';
+    const lPad = Math.max(0, col - [...l].length);
+    const rPad = Math.max(0, col - [...r].length);
     rows.push(
-      `${paint(l, leftColor)}${' '.repeat(col - l.length)} | ${paint(r, rightColor)}${' '.repeat(col - r.length)}`,
+      `${paint(l, leftColor)}${' '.repeat(lPad)} | ${paint(r, rightColor)}${' '.repeat(rPad)}`,
     );
   }
   return rows;
@@ -247,51 +259,18 @@ export function parseContext(value: string): number {
 }
 
 export function setupDiffCommand(program: Command) {
-  program
-    .command('diff')
-    .description('Show a visual diff of original vs scrubbed text')
-    .argument('[file]', 'File to diff. If omitted, reads from stdin.')
-    .option('--disable <detectors>', 'Comma-separated list of detector names to skip')
-    .option(
-      '--enable <detectors>',
-      'Comma-separated list of off-by-default detectors to enable (e.g., NameDetector)',
-    )
-    .option(
-      '--strict-name',
-      'Enable strict allowlisting for NameDetector to reduce false positives',
-    )
-    .option(
-      '--code-tell-terms <terms>',
-      'Comma-separated list of private identifiers to detect (enables CodeTellDetector)',
-    )
-    .option(
-      '--url-allowlist <hosts>',
-      'Comma-separated list of hostnames to pass-through in URLs (subdomains are implicitly allowed)',
-    )
+  addDetectorOptions(
+    program
+      .command('diff')
+      .description('Show a visual diff of original vs scrubbed text')
+      .argument('[file]', 'File to diff. If omitted, reads from stdin.'),
+  )
     .option('--side-by-side', 'Two-column original | scrubbed layout')
     .option('--context <n>', 'Unchanged lines around each change', parseContext, 3)
     .option('--no-color', 'Disable ANSI colors')
     .action(async (file, options) => {
-      let input = '';
-
-      if (file) {
-        try {
-          input = readFileSync(file, 'utf8');
-        } catch (err: unknown) {
-          console.error(`Error reading file: ${(err as Error).message}`);
-          process.exit(1);
-          return;
-        }
-      } else {
-        try {
-          input = readFileSync(0, 'utf-8');
-        } catch {
-          console.error('No input provided.');
-          process.exit(1);
-          return;
-        }
-      }
-
+      const input = readInput(file);
+      if (input === undefined) return;
       if (!input) {
         process.exit(0);
         return;

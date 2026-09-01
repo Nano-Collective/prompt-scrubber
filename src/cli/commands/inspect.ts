@@ -1,5 +1,4 @@
 import * as crypto from 'node:crypto';
-import { readFileSync } from 'node:fs';
 import type { Command } from 'commander';
 import { resolveCollisions } from '../../core/collision-resolver.js';
 import { loadConfig } from '../../core/config.js';
@@ -7,6 +6,7 @@ import { loadConfiguredRulePacks } from '../../core/rule-packs.js';
 import { getActiveDetectors } from '../../core/scrub.js';
 import { SessionManager } from '../../session/session-manager.js';
 import type { Finding } from '../../types/index.js';
+import { addDetectorOptions, readInput } from '../io.js';
 import { sanitizeLine } from '../sanitize.js';
 
 export async function handleInspect(
@@ -72,13 +72,16 @@ export function formatInspectOutput(findings: Finding[], hash: string): string {
 
   let output = 'Detected entities:\n';
 
-  // We want to simulate the placeholder counts to show what *would* be generated
-  const counters: Record<string, number> = {};
+  const session = new SessionManager(undefined, {});
+  const placeholders = findings.map(() => '');
+  for (let i = findings.length - 1; i >= 0; i--) {
+    const finding = findings[i]!;
+    placeholders[i] = session.createPlaceholder(finding.placeholderPrefix, finding.value);
+  }
 
-  for (const finding of findings) {
-    const count = (counters[finding.placeholderPrefix] ?? 0) + 1;
-    counters[finding.placeholderPrefix] = count;
-    const placeholder = `«${finding.placeholderPrefix}_${count}»`;
+  for (let i = 0; i < findings.length; i++) {
+    const finding = findings[i]!;
+    const placeholder = placeholders[i]!;
 
     // Format: [Category] value -> Placeholder (chars start-end)
     const catStr = `[${finding.category}]`.padEnd(10);
@@ -95,50 +98,16 @@ export function formatInspectOutput(findings: Finding[], hash: string): string {
 }
 
 export function setupInspectCommand(program: Command) {
-  program
-    .command('inspect')
-    .description('Show detected entities without scrubbing')
-    .argument('[file]', 'File to inspect. If omitted, reads from stdin.')
-    .option('--disable <detectors>', 'Comma-separated list of detector names to skip')
-    .option(
-      '--enable <detectors>',
-      'Comma-separated list of off-by-default detectors to enable (e.g., NameDetector)',
-    )
-    .option(
-      '--strict-name',
-      'Enable strict allowlisting for NameDetector to reduce false positives',
-    )
-    .option(
-      '--code-tell-terms <terms>',
-      'Comma-separated list of private identifiers to detect (enables CodeTellDetector)',
-    )
-    .option(
-      '--url-allowlist <hosts>',
-      'Comma-separated list of hostnames to pass-through in URLs (subdomains are implicitly allowed)',
-    )
+  addDetectorOptions(
+    program
+      .command('inspect')
+      .description('Show detected entities without scrubbing')
+      .argument('[file]', 'File to inspect. If omitted, reads from stdin.'),
+  )
     .option('--hash', 'Print only the SHA-256 hash of the scrubbed output')
     .action(async (file, options) => {
-      let input = '';
-
-      if (file) {
-        try {
-          input = readFileSync(file, 'utf8');
-        } catch (err: unknown) {
-          console.error(`Error reading file: ${(err as Error).message}`);
-          process.exit(1);
-          return;
-        }
-      } else {
-        // Read from stdin
-        try {
-          input = readFileSync(0, 'utf-8');
-        } catch {
-          console.error('No input provided.');
-          process.exit(1);
-          return;
-        }
-      }
-
+      const input = readInput(file);
+      if (input === undefined) return;
       if (!input) {
         process.exit(0);
         return;
