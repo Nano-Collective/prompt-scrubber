@@ -2,8 +2,16 @@ import * as crypto from 'node:crypto';
 import type { SessionMap } from '../types/index.js';
 import { deleteSessionMap, listSessions, readSessionMap, writeSessionMap } from './storage.js';
 
-/** Placeholder format: "«Category_Index»". */
-const PLACEHOLDER_TOKEN_REGEX = /«[A-Za-z]+_\d+»/g;
+/**
+ * Placeholder format: "«Prefix_Index»".
+ *
+ * The prefix is `[^«»]+`, not `[A-Za-z]+`: `placeholderPrefix` is a free-form
+ * string on the public extension surface (`options.customDetectors`, and rule
+ * packs), so a pack using `Ticket2` mints `«Ticket2_1»`. A guard that only
+ * recognises alphabetic prefixes would leave exactly the collision this exists
+ * to prevent reachable for anyone using the documented extension point.
+ */
+const PLACEHOLDER_TOKEN_REGEX = /«[^«»]+_\d+»/g;
 
 export class SessionManager {
   private sessionId: string | undefined;
@@ -63,8 +71,10 @@ export class SessionManager {
     const counts: Record<string, number> = {};
 
     for (const placeholder of Object.keys(map)) {
-      // Placeholder format: "«Category_Index»"
-      const match = placeholder.match(/^«([A-Za-z]+)_(\d+)»$/);
+      // Same free-form prefix as PLACEHOLDER_TOKEN_REGEX — a counter that
+      // cannot see a rule pack's placeholders would restart at 1 and reissue
+      // one on the next call against the same session.
+      const match = placeholder.match(/^«([^«»]+)_(\d+)»$/);
       if (match && match[1] && match[2]) {
         const category = match[1];
         const index = parseInt(match[2], 10);

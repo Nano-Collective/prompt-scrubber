@@ -29,10 +29,6 @@ function scrubString(
   session: SessionManager,
   stats: ScrubStats,
 ): string {
-  // Claim any placeholder the text already carries before minting new ones, so
-  // re-scrubbing scrubbed output cannot hand the same token to a second value.
-  session.reservePlaceholdersIn(text);
-
   // Run all detectors and flatten results
   const allFindings = detectors.flatMap((d) => d.detect(text));
 
@@ -120,11 +116,23 @@ export function scrub(request: ScrubRequest): ScrubResult {
   const detectors = getActiveDetectors(options);
   const stats: ScrubStats = { totalEntities: 0, byCategory: {} };
 
+  // Claim every placeholder the request already carries BEFORE minting any, so
+  // re-scrubbing scrubbed output cannot hand the same token to a second value.
+  //
+  // Reserved over the whole request, not per message: doing this inside
+  // scrubString would only protect against literals at or before the message
+  // being scrubbed, so a literal «Email_1» in message 2 would not stop message
+  // 1 minting «Email_1» for a real address. A guard that depends on the order
+  // the caller happened to supply is not a guard.
   let scrubbedContent: string | Message[];
 
   if (typeof content === 'string') {
+    session.reservePlaceholdersIn(content);
     scrubbedContent = scrubString(content, detectors, session, stats);
   } else {
+    for (const msg of content) {
+      session.reservePlaceholdersIn(msg.content);
+    }
     // Message[] — scrub each message's content independently, preserve structure
     scrubbedContent = content.map((msg) => ({
       ...msg,

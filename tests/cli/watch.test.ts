@@ -362,3 +362,23 @@ test('handleWatch registers a SIGINT handler that clears the timer and stops', a
     clearInterval(timer);
   }
 });
+
+test('a repeated value is counted once per replacement, not once per placeholder', async (t) => {
+  // Documented behaviour change. The tick summary is now driven by that
+  // scrub's stats, which count findings, rather than by the session map, which
+  // deduplicates by value. Two occurrences of one address therefore report 2
+  // where the old map-driven message said 1. Pinned so the swap is a decision
+  // rather than a surprise.
+  const logs: string[] = [];
+  await watchClipboardStep('', {
+    readClipboardFn: () => 'a@b.com and again a@b.com',
+    writeClipboardFn: () => {},
+    logFn: (msg: string) => logs.push(msg),
+    notifyFn: () => {},
+  });
+
+  t.true(
+    logs.some((l) => l.includes('Scrubbed 2 emails')),
+    `expected a per-replacement count, got: ${logs.join(' | ')}`,
+  );
+});
