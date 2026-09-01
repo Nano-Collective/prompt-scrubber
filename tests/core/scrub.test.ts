@@ -68,6 +68,42 @@ test('a space-bearing Windows path is redacted alongside a following email', (t)
   t.is(result.sessionMap?.['«Path_1»'], 'C:\\Users\\John Doe');
 });
 
+test('an over-matched Windows path is narrowed against the email inside it', (t) => {
+  // The detector treats "alice@corp.com" as a filename and keeps going; the
+  // resolver narrows the Path back. Nothing reaches the model in cleartext.
+  const result = scrub({ content: 'C:\\Users\\John Doe alice@corp.com', sessionMap: {} });
+  t.is(result.scrubbedContent, '«Path_1» «Email_1»');
+  t.is(result.sessionMap?.['«Path_1»'], 'C:\\Users\\John Doe');
+  t.is(result.sessionMap?.['«Email_1»'], 'alice@corp.com');
+});
+
+// Lowercase space-bearing segments: these leaked a surname, employer or filename
+// in cleartext next to a placeholder before the detector was reworked.
+
+test('a Windows path with a lowercase space-bearing segment leaks nothing', (t) => {
+  const result = scrub({
+    content: 'Home C:\\Users\\john smith\\AppData\\creds.json',
+    sessionMap: {},
+  });
+  t.is(result.scrubbedContent, 'Home «Path_1»');
+  t.is(result.sessionMap?.['«Path_1»'], 'C:\\Users\\john smith\\AppData\\creds.json');
+});
+
+test('an employer name inside a Windows path is not left in cleartext', (t) => {
+  const result = scrub({ content: 'C:\\dev\\acme corp\\client list.csv', sessionMap: {} });
+  t.is(result.scrubbedContent, '«Path_1»');
+  t.is(result.sessionMap?.['«Path_1»'], 'C:\\dev\\acme corp\\client list.csv');
+});
+
+test('a project name inside a Windows path is not left in cleartext', (t) => {
+  const result = scrub({
+    content: 'Build failed in C:\\repos\\my project\\src\\config.ini',
+    sessionMap: {},
+  });
+  t.is(result.scrubbedContent, 'Build failed in «Path_1»');
+  t.is(result.sessionMap?.['«Path_1»'], 'C:\\repos\\my project\\src\\config.ini');
+});
+
 test('scrubbing the same value twice generates the same placeholder', (t) => {
   const result1 = scrub({ content: 'Contact: repeat@example.com' });
   const result2 = scrub({

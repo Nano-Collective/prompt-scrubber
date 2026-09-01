@@ -78,12 +78,6 @@ test('detects an unquoted user directory whose trailing segment contains a space
   t.is(findings[0]?.value, 'C:\\Users\\John Doe');
 });
 
-test('a space-bearing trailing segment still stops before an email', (t) => {
-  const findings = detector.detect('C:\\Users\\John Doe alice@corp.com');
-  t.is(findings.length, 1);
-  t.is(findings[0]?.value, 'C:\\Users\\John Doe');
-});
-
 test('a trailing segment with an extension does not absorb a capitalised sentence', (t) => {
   const findings = detector.detect('Read C:\\logs\\out.txt Failed to start');
   t.is(findings.length, 1);
@@ -94,6 +88,50 @@ test('detects a path with spaces in several segments', (t) => {
   const findings = detector.detect('In C:\\Program Files (x86)\\Common Files\\app.dll here');
   t.is(findings.length, 1);
   t.is(findings[0]?.value, 'C:\\Program Files (x86)\\Common Files\\app.dll');
+});
+
+// A space-bearing segment that starts lowercase is still part of the path. These
+// truncated before, leaving the tail — a surname, employer or filename — in
+// cleartext next to a placeholder, which is the #123 signature.
+
+test('a lowercase space-bearing segment does not truncate the path', (t) => {
+  const findings = detector.detect('Home C:\\Users\\john smith\\AppData\\creds.json');
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, 'C:\\Users\\john smith\\AppData\\creds.json');
+});
+
+test('continues over a space when the next token contains a backslash', (t) => {
+  const findings = detector.detect('Build failed in C:\\repos\\my project\\src\\config.ini');
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, 'C:\\repos\\my project\\src\\config.ini');
+});
+
+test('continues over a space when the next token carries a file extension', (t) => {
+  const findings = detector.detect('C:\\dev\\acme corp\\client list.csv');
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, 'C:\\dev\\acme corp\\client list.csv');
+});
+
+test('a lowercase filename with a space is matched in full', (t) => {
+  const findings = detector.detect('Report C:\\data\\quarterly report.xlsx done');
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, 'C:\\data\\quarterly report.xlsx');
+});
+
+test('a digit-led space-bearing segment does not truncate the path', (t) => {
+  const findings = detector.detect('Backup to D:\\backups\\jan 2026\\payroll.xlsx');
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, 'D:\\backups\\jan 2026\\payroll.xlsx');
+});
+
+test('a following token that reads as a filename is over-matched, not dropped', (t) => {
+  // "alice@corp.com" ends in ".com", so the detector keeps going rather than
+  // truncating. Over-matching is the safe direction — resolveCollisions narrows
+  // the Path against the Email, and the end-to-end result is asserted in
+  // tests/core/scrub.test.ts. Truncating here would leak the surname.
+  const findings = detector.detect('C:\\Users\\John Doe alice@corp.com');
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, 'C:\\Users\\John Doe alice@corp.com');
 });
 
 test('detects a quoted Windows path whose final segment contains a space', (t) => {

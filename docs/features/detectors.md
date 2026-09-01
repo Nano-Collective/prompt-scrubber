@@ -36,7 +36,7 @@ export interface Detector {
 - `EmailDetector`: Detects RFC 5322 shaped email addresses.
 - `PhoneDetector`: Detects international and US-shaped phone numbers.
 - `UrlDetector`: Detects full URLs and bare API endpoints. Can be configured to pass-through trusted hosts via `urlAllowlist` in configuration or `--url-allowlist` in the CLI. Subdomains of allowlisted hosts are implicitly trusted.
-- `PathDetector`: Detects absolute paths and home directories. Windows paths are matched in two forms: quoted (`"C:\Program Files\App\app.exe"`), where spaces are taken as part of the path, and unquoted, where a space only continues the path if the token after it still looks like a path component — so `C:\Users\John Doe` is matched in full while `C:\app\cfg.ini owner` stops at the file.
+- `PathDetector`: Detects absolute paths and home directories. Windows paths are matched in two forms: quoted (`"C:\Program Files\App\app.exe"`), where spaces are taken as part of the path, and unquoted, where a space continues the path when the next token contains a backslash, looks like a path component, or carries a file extension. So `C:\Users\john smith\creds.json` and `C:\data\quarterly report.xlsx` are matched in full, while `C:\app\cfg.ini owner` stops at the file. Where a path is genuinely ambiguous the detector errs towards matching more, since collision resolution narrows an over-broad `Path` against any email or secret inside it — over-redaction is recoverable, a dropped tail is a leak.
 - `SecretDetector`: Detects high-entropy strings, API keys, and tokens.
 - `AddressDetector`: Detects unambiguous postal addresses (e.g., street shapes).
 
@@ -61,7 +61,7 @@ Priority is implicitly handled by a defined order of precedence:
 
 If `SecretDetector` and `UrlDetector` match the same string (e.g., a URL with a token), `SecretDetector` wins.
 
-The losing finding is not thrown away. It is narrowed to the part of its span the winner does not cover, so an over-broad match degrades to over-redaction rather than emitting the text it over-matched in cleartext. Three exceptions, where the loser is dropped instead: findings of the same category are rival readings of one entity, so the winner's span is taken as authoritative; a finding whose `value` does not map 1:1 onto its `span` cannot be re-sliced; and a narrowed part that still overlaps another already-accepted finding is not narrowed a second time.
+The losing finding is not thrown away. It is narrowed to the part of its span the winner does not cover, so an over-broad match degrades to over-redaction rather than emitting the text it over-matched in cleartext. A narrowed part that still overlaps another finding is narrowed again, until nothing overlaps. Two exceptions, where the loser is dropped instead: findings of the same category are rival readings of one entity, so the winner's span is taken as authoritative; and a finding whose `value` does not map 1:1 onto its `span` cannot be re-sliced.
 
 The resolved findings are always non-overlapping and sorted by start position.
 
