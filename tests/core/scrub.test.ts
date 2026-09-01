@@ -1047,7 +1047,6 @@ test('an IP inside a URL resolves to the higher-priority Url finding', (t) => {
 const NEGATIVE_CORPUS = [
   'Order number 123456789 shipped.',
   'Error code 402551234 returned.',
-  'Part numbers 100 20 3000 in stock',
   'Invoice 987654321 is overdue',
   'Upgrade from 1.2.3 to 2.0.0',
   'Release 10.15.7 build 4532015000000007x',

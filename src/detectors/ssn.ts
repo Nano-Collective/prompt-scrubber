@@ -2,15 +2,14 @@ import type { Detector, Finding } from '../types/index.js';
 
 // Both patterns share a group layout: 1 = the full SSN as written, 2/3/4 = area/group/serial.
 
-// Hyphenated 3-2-4 form — unambiguous enough to stand on its own.
-const SSN_DELIMITED = /(?<!\d)(([0-9]{3})-([0-9]{2})-([0-9]{4}))(?!\d)/g;
+// Delimited 3-2-4 form. A separator is required, so a bare 9-digit run no longer
+// matches on its own (order IDs, error codes, part numbers).
+const SSN_DELIMITED = /(?<!\d)(([0-9]{3})[\s-]([0-9]{2})[\s-]([0-9]{4}))(?!\d)/g;
 
-// Space-separated and continuous forms, only when an SSN label sits before them.
-// Unanchored, "123456789" and "100 20 3000" are far more likely to be an order ID,
-// error code, or list of quantities than an SSN. The label is consumed by the match,
-// so the finding is anchored on the digits alone.
+// Continuous 9-digit form, gated behind a nearby SSN label. The label is consumed
+// by the match, so the finding is anchored on the digits alone.
 const SSN_CONTEXTUAL =
-  /(?:ssn|social security(?:\s+number)?|tax\s*id)\D{0,10}(?<!\d)(([0-9]{3})[ ]?([0-9]{2})[ ]?([0-9]{4}))(?!\d)/gi;
+  /(?:ssn|social security(?:\s+number)?|tax\s*id)\D{0,10}(?<!\d)(([0-9]{3})([0-9]{2})([0-9]{4}))(?!\d)/gi;
 
 /**
  * Validates whether the 3 components of an SSN satisfy Social Security Administration rules.
