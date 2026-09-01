@@ -13,8 +13,14 @@ import type { ScrubStats } from '../../types/index.js';
  * more (or less) than the user asked for.
  */
 export function parseConfidence(value: string): number {
-  const parsed = Number.parseFloat(value);
-  if (Number.isNaN(parsed) || parsed < 0 || parsed > 1) {
+  // Number(), not Number.parseFloat(): parseFloat stops at the first invalid
+  // character, so `0.9zzz` would quietly become 0.9 — exactly the silent
+  // reinterpretation this function exists to prevent. Number() rejects the
+  // whole string outright, and still accepts `0`, `1`, `.85` and `9e-1`.
+  // Number('') is 0, so an empty value is rejected explicitly.
+  const trimmed = value.trim();
+  const parsed = Number(trimmed);
+  if (trimmed === '' || Number.isNaN(parsed) || parsed < 0 || parsed > 1) {
     throw new InvalidArgumentError('Expected a number between 0 and 1.');
   }
   return parsed;
@@ -65,12 +71,14 @@ export async function handleScrub(
       ...(options.strictName !== undefined ? { strictNameDetector: options.strictName } : {}),
       ...(codeTellTerms !== undefined ? { codeTellTerms } : {}),
       ...(urlAllowlist.length > 0 ? { urlAllowlist } : {}),
-      minConfidence,
+      ...(minConfidence > 0 ? { minConfidence } : {}),
       customDetectors: rulePackDetectors,
     },
   });
 
-  return result;
+  // The caller needs the *effective* threshold (flag, else config, else 0) to
+  // report what it suppressed; only this function knows how it was resolved.
+  return { ...result, minConfidence };
 }
 
 function pluralize(word: string, count: number): string {
@@ -80,17 +88,40 @@ function pluralize(word: string, count: number): string {
   return `${word}s`;
 }
 
-export function formatScrubSummary(stats: ScrubStats): string {
-  const noun = stats.totalEntities === 1 ? 'entity' : 'entities';
-  if (stats.totalEntities === 0) {
-    return `Scrubbed: 0 ${noun}`;
-  }
-
-  const breakdown = Object.entries(stats.byCategory)
+function formatBreakdown(byCategory: Record<string, number>): string {
+  return Object.entries(byCategory)
     .map(([category, count]) => `${count} ${pluralize(category, count)}`)
     .join(', ');
+}
 
-  return `Scrubbed: ${stats.totalEntities} ${noun} (${breakdown})`;
+/**
+ * The one-line stderr summary.
+ *
+ * When a threshold dropped something, say so. Without this the output of a
+ * filtered run is indistinguishable from "there was nothing there", and
+ * `--min-confidence` is aimed squarely at automated workflows where nobody
+ * runs `inspect` first — silent under-redaction is the dangerous direction.
+ */
+/**
+ * "N suppressed below --min-confidence X (breakdown)", or null when the
+ * threshold cost nothing. Shared so every surface that can filter reports it
+ * the same way.
+ */
+export function formatSuppressionNotice(stats: ScrubStats, minConfidence = 0): string | null {
+  const suppressed = stats.suppressed;
+  if (!suppressed || suppressed.total === 0) return null;
+  return `${suppressed.total} suppressed below --min-confidence ${minConfidence} (${formatBreakdown(suppressed.byCategory)})`;
+}
+
+export function formatScrubSummary(stats: ScrubStats, minConfidence = 0): string {
+  const noun = stats.totalEntities === 1 ? 'entity' : 'entities';
+  const scrubbed =
+    stats.totalEntities === 0
+      ? `Scrubbed: 0 ${noun}`
+      : `Scrubbed: ${stats.totalEntities} ${noun} (${formatBreakdown(stats.byCategory)})`;
+
+  const notice = formatSuppressionNotice(stats, minConfidence);
+  return notice ? `${scrubbed}; ${notice}` : scrubbed;
 }
 
 export function setupScrubCommand(program: Command) {
@@ -160,7 +191,7 @@ export function setupScrubCommand(program: Command) {
       }
 
       if (!options.quiet) {
-        console.error(formatScrubSummary(result.stats));
+        console.error(formatScrubSummary(result.stats, result.minConfidence));
       }
     });
 }

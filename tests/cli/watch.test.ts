@@ -308,3 +308,54 @@ test('watchClipboardStep honours minConfidence', async (t) => {
   t.is(next, 'Call 555-123-4567 or mail «Email_1»');
   t.is(written, next);
 });
+
+test('watchClipboardStep logs what the threshold left in the clipboard', async (t) => {
+  const logs: string[] = [];
+  const clipboard = 'Call 555-123-4567 or mail alice@example.com';
+
+  await watchClipboardStep('', {
+    minConfidence: 0.9,
+    readClipboardFn: () => clipboard,
+    writeClipboardFn: () => {},
+    logFn: (msg: string) => logs.push(msg),
+    notifyFn: () => {},
+  });
+
+  t.true(
+    logs.some((l) => l.includes('1 suppressed below --min-confidence 0.9 (1 Phone)')),
+    `expected a suppression notice, got: ${logs.join(' | ')}`,
+  );
+});
+
+test('watchClipboardStep says so even when the threshold drops everything', async (t) => {
+  // Nothing is written to the clipboard, so without this line the watcher is
+  // completely silent about a phone number it found and chose to leave.
+  const logs: string[] = [];
+  let written: string | null = null;
+
+  await watchClipboardStep('', {
+    minConfidence: 0.95,
+    readClipboardFn: () => 'Call 555-123-4567',
+    writeClipboardFn: (text: string) => {
+      written = text;
+    },
+    logFn: (msg: string) => logs.push(msg),
+    notifyFn: () => {},
+  });
+
+  t.is(written, null, 'the clipboard is untouched');
+  t.true(logs.some((l) => l.includes('1 suppressed below --min-confidence 0.95 (1 Phone)')));
+});
+
+test('watchClipboardStep stays quiet when no threshold is in play', async (t) => {
+  const logs: string[] = [];
+
+  await watchClipboardStep('', {
+    readClipboardFn: () => 'Call 555-123-4567 or mail alice@example.com',
+    writeClipboardFn: () => {},
+    logFn: (msg: string) => logs.push(msg),
+    notifyFn: () => {},
+  });
+
+  t.false(logs.some((l) => l.includes('suppressed')));
+});

@@ -45,7 +45,9 @@ export async function handleInspect(
     customDetectors: rulePackDetectors,
   });
 
-  return runDetectors(text, detectors, minConfidence);
+  // The effective threshold travels with the result so the caller can name it
+  // when reporting what it dropped.
+  return { ...runDetectors(text, detectors, minConfidence), minConfidence };
 }
 
 export function computeHash(text: string, findings: Finding[]): string {
@@ -64,9 +66,35 @@ export function computeHash(text: string, findings: Finding[]): string {
   return crypto.createHash('sha256').update(scrubbedContent).digest('hex');
 }
 
-export function formatInspectOutput(findings: ScoredFinding[], hash: string): string {
+/**
+ * The block listing what a `--min-confidence` threshold discarded.
+ *
+ * Shown even when nothing survived: an empty "no entities detected" report on a
+ * filtered run is exactly the message that would mislead someone into sending
+ * a prompt that still has a phone number in it.
+ */
+function formatSuppressedSection(suppressed: ScoredFinding[], minConfidence: number): string {
+  if (suppressed.length === 0) return '';
+
+  let output = `\nSuppressed below --min-confidence ${minConfidence}:\n`;
+  for (const finding of suppressed) {
+    const catStr = `[${finding.category}]`.padEnd(10);
+    const valDisp = finding.value.length > 30 ? `${finding.value.slice(0, 27)}...` : finding.value;
+    const valStr = valDisp.padEnd(32);
+    const score = finding.confidence.toFixed(2);
+    output += `  ${catStr} ${valStr}   left in the clear (chars ${finding.span[0]}-${finding.span[1]}, confidence ${score} ${finding.method})\n`;
+  }
+  return output;
+}
+
+export function formatInspectOutput(
+  findings: ScoredFinding[],
+  hash: string,
+  suppressed: ScoredFinding[] = [],
+  minConfidence = 0,
+): string {
   if (findings.length === 0) {
-    return `No sensitive entities detected.\nNo session written.\nHash: ${hash}\n`;
+    return `No sensitive entities detected.\n${formatSuppressedSection(suppressed, minConfidence)}\nNo session written.\nHash: ${hash}\n`;
   }
 
   let output = 'Detected entities:\n';
@@ -92,6 +120,7 @@ export function formatInspectOutput(findings: ScoredFinding[], hash: string): st
     output += `  ${catStr} ${valStr} → ${placeholder.padEnd(10)} (chars ${finding.span[0]}-${finding.span[1]}, confidence ${score} ${finding.method})\n`;
   }
 
+  output += formatSuppressedSection(suppressed, minConfidence);
   output += `\nNo session written.\nHash: ${hash}\n`;
   return output;
 }
@@ -151,13 +180,15 @@ export function setupInspectCommand(program: Command) {
         return;
       }
 
-      const findings = await handleInspect(input, options);
+      const { findings, suppressed, minConfidence } = await handleInspect(input, options);
       const hash = computeHash(input, findings);
 
       if (options.hash) {
+        // --hash stays the scripting-stable surface: only the scrubbed text
+        // feeds it, so the suppression report never perturbs it.
         process.stdout.write(`${hash}\n`);
       } else {
-        const output = formatInspectOutput(findings, hash);
+        const output = formatInspectOutput(findings, hash, suppressed, minConfidence);
         process.stdout.write(output);
       }
     });

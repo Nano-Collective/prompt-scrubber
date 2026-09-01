@@ -59,8 +59,9 @@ const ALLOWLIST = new Set([
 ]);
 
 // Any capitalised word matches, so roughly half of all hits are ordinary
-// sentence-initial words or product names. Strict mode removes the most common
-// of those from the allowlist, which lifts precision a little.
+// sentence-initial words, place names or product names. Strict mode discards
+// matches containing an allowlisted word, which removes the most common of
+// those and lifts precision a little — hence the slightly higher score.
 const NAME_CONFIDENCE = 0.5;
 const NAME_STRICT_CONFIDENCE = 0.6;
 

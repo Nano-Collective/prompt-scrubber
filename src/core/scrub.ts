@@ -33,17 +33,51 @@ export const DEFAULT_CONFIDENCE = 0.5;
 const DEFAULT_METHOD = 'unspecified';
 
 /**
+ * Whether `span` is entirely covered by `kept`, which resolveCollisions has
+ * already left sorted ascending and non-overlapping.
+ *
+ * A below-threshold finding whose span another finding redacts anyway is not
+ * under-redaction, so it must not be reported as suppressed — a summary that
+ * cries wolf on every overlapping detector teaches users to ignore it.
+ */
+function isCovered(span: [number, number], kept: ScoredFinding[]): boolean {
+  let cursor = span[0];
+  for (const finding of kept) {
+    if (finding.span[1] <= cursor) continue;
+    // A gap before this finding starts means part of the span survives in the clear.
+    if (finding.span[0] > cursor) return false;
+    cursor = finding.span[1];
+    if (cursor >= span[1]) return true;
+  }
+  return cursor >= span[1];
+}
+
+export interface DetectionResult {
+  /** Findings that passed the threshold, with overlaps resolved. */
+  findings: ScoredFinding[];
+  /**
+   * Findings the threshold dropped that nothing else covers. Overlaps among
+   * these are resolved too, so this counts distinct regions left in the clear
+   * rather than raw detector hits.
+   */
+  suppressed: ScoredFinding[];
+}
+
+/**
  * Runs every detector over `text`, drops findings scored below `minConfidence`,
  * then resolves the remaining overlaps.
  *
  * Filtering happens before collision resolution so a discarded low-confidence
  * finding can never suppress a higher-confidence one that overlaps it.
+ *
+ * Returns the dropped findings alongside the kept ones so callers can tell the
+ * user what a threshold cost them instead of silently under-redacting.
  */
 export function runDetectors(
   text: string,
   detectors: Detector[],
   minConfidence = 0,
-): ScoredFinding[] {
+): DetectionResult {
   const scored: ScoredFinding[] = detectors.flatMap((d) =>
     d.detect(text).map((finding) => ({
       ...finding,
@@ -52,9 +86,20 @@ export function runDetectors(
     })),
   );
 
-  const kept = minConfidence > 0 ? scored.filter((f) => f.confidence >= minConfidence) : scored;
+  if (minConfidence <= 0) {
+    return { findings: resolveCollisions(scored), suppressed: [] };
+  }
 
-  return resolveCollisions(kept);
+  const passing: ScoredFinding[] = [];
+  const below: ScoredFinding[] = [];
+  for (const finding of scored) {
+    (finding.confidence >= minConfidence ? passing : below).push(finding);
+  }
+
+  const findings = resolveCollisions(passing);
+  const suppressed = resolveCollisions(below).filter((f) => !isCovered(f.span, findings));
+
+  return { findings, suppressed };
 }
 
 /**
@@ -68,7 +113,15 @@ function scrubString(
   stats: ScrubStats,
   minConfidence: number,
 ): string {
-  const findings = runDetectors(text, detectors, minConfidence);
+  const { findings, suppressed } = runDetectors(text, detectors, minConfidence);
+
+  // Counted before the early return: a message where the threshold dropped
+  // everything still has something the caller needs to hear about.
+  for (const finding of suppressed) {
+    const bucket = (stats.suppressed ??= { total: 0, byCategory: {} });
+    bucket.total += 1;
+    bucket.byCategory[finding.category] = (bucket.byCategory[finding.category] ?? 0) + 1;
+  }
 
   if (findings.length === 0) {
     return text;

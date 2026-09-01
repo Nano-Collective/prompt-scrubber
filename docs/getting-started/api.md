@@ -93,9 +93,18 @@ export interface Finding {
   method?: string; // How the match was made, e.g. 'exact-pattern'
 }
 
+export interface SuppressedStats {
+  total: number; // Findings a minConfidence threshold dropped and left in the clear
+  byCategory: Record<string, number>;
+}
+
 export interface ScrubStats {
   totalEntities: number; // Replacements made by this call
   byCategory: Record<string, number>; // Replacements per category, keyed in order of appearance
+  // Present only when a threshold actually dropped something no surviving
+  // finding covers. Check it before treating an empty result as "nothing
+  // sensitive here" — with minConfidence set, those are different claims.
+  suppressed?: SuppressedStats;
 }
 
 export interface ScrubResult {

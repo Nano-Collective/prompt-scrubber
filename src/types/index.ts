@@ -48,9 +48,21 @@ export interface ScrubOptions {
   minConfidence?: number; // Discard findings scored below this threshold (0.0-1.0, default 0)
 }
 
+// Findings a `minConfidence` threshold discarded and which no surviving
+// finding covers — i.e. what the threshold actually left in the clear.
+export interface SuppressedStats {
+  total: number;
+  byCategory: Record<string, number>;
+}
+
 export interface ScrubStats {
   totalEntities: number;
   byCategory: Record<string, number>;
+  // Present only when a threshold actually dropped something. Reported so a
+  // caller can tell "there was no phone number" apart from "there was one and
+  // I filtered it out" — for a redaction tool, silent under-redaction is the
+  // dangerous direction.
+  suppressed?: SuppressedStats;
 }
 
 export interface ScrubResult {

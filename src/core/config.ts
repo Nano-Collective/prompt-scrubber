@@ -26,8 +26,32 @@ export function createDefaultConfig(): Required<PromptScrubConfig> {
   };
 }
 
-const CONFIG_KEYS = Object.keys(createDefaultConfig());
-const ARRAY_KEYS = ['rulePacks', 'urlAllowlist'] as const;
+type ConfigKey = keyof Required<PromptScrubConfig>;
+
+/**
+ * One validator per config key, returning an error message or null.
+ *
+ * Typed as a total `Record<ConfigKey, …>` on purpose: adding a key to
+ * `PromptScrubConfig` without deciding how it is validated becomes a type
+ * error here, rather than a key that silently accepts anything. `CONFIG_KEYS`
+ * is derived from it so the "supported keys" list cannot drift either.
+ */
+const VALIDATORS: Record<ConfigKey, (value: unknown) => string | null> = {
+  rulePacks: (value) => validateStringArray('rulePacks', value),
+  urlAllowlist: (value) => validateStringArray('urlAllowlist', value),
+  minConfidence: (value) => {
+    if (isConfidence(value)) return null;
+    // Report an out-of-range number by value; anything else by its type.
+    const received = typeof value === 'number' ? `${value}` : describeType(value);
+    return `"minConfidence" must be a number between 0 and 1, received ${received}.`;
+  },
+  sessionTtlDays: (value) =>
+    typeof value === 'number' && Number.isFinite(value) && value > 0
+      ? null
+      : `"sessionTtlDays" must be a positive number, received ${describeType(value)}.`,
+};
+
+const CONFIG_KEYS = Object.keys(VALIDATORS) as ConfigKey[];
 
 /**
  * Determines the base configuration directory based on the OS.
@@ -77,6 +101,16 @@ function isConfidence(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
 }
 
+function validateStringArray(key: string, value: unknown): string | null {
+  if (!Array.isArray(value)) {
+    return `"${key}" must be an array of strings, received ${describeType(value)}.`;
+  }
+  if (value.some((item) => typeof item !== 'string')) {
+    return `"${key}" must contain only strings.`;
+  }
+  return null;
+}
+
 function validateConfig(data: unknown): string[] {
   if (data === null || typeof data !== 'object' || Array.isArray(data)) {
     return [`Expected a JSON object, received ${describeType(data)}.`];
@@ -86,38 +120,17 @@ function validateConfig(data: unknown): string[] {
   const record = data as Record<string, unknown>;
 
   for (const key of Object.keys(record)) {
-    if (!CONFIG_KEYS.includes(key)) {
+    if (!(CONFIG_KEYS as string[]).includes(key)) {
       errors.push(`Unknown key "${key}". Supported keys: ${CONFIG_KEYS.join(', ')}.`);
     }
   }
 
-  for (const key of ARRAY_KEYS) {
+  for (const key of CONFIG_KEYS) {
     const value = record[key];
+    // An absent key falls back to its default; only a present one is checked.
     if (value === undefined) continue;
-
-    if (!Array.isArray(value)) {
-      errors.push(`"${key}" must be an array of strings, received ${describeType(value)}.`);
-    } else if (value.some((item) => typeof item !== 'string')) {
-      errors.push(`"${key}" must contain only strings.`);
-    }
-  }
-
-  const sessionTtlDays = record.sessionTtlDays;
-  if (
-    sessionTtlDays !== undefined &&
-    (typeof sessionTtlDays !== 'number' || !Number.isFinite(sessionTtlDays) || sessionTtlDays <= 0)
-  ) {
-    errors.push(
-      `"sessionTtlDays" must be a positive number, received ${describeType(sessionTtlDays)}.`,
-    );
-  }
-
-  const minConfidence = record.minConfidence;
-  if (minConfidence !== undefined && !isConfidence(minConfidence)) {
-    // Report an out-of-range number by value; anything else by its type.
-    const received =
-      typeof minConfidence === 'number' ? `${minConfidence}` : describeType(minConfidence);
-    errors.push(`"minConfidence" must be a number between 0 and 1, received ${received}.`);
+    const error = VALIDATORS[key](value);
+    if (error) errors.push(error);
   }
 
   return errors;

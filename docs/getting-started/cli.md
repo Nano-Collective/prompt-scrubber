@@ -28,7 +28,7 @@ The summary counts replacements, not unique values: a value that appears three t
 **Options:**
 - `--session-id <id>`: Reuse an existing session map. If omitted, a new UUID is generated.
 - `--disable <detectors>`: Comma-separated list of detectors to disable (e.g. `EmailDetector,PhoneDetector`).
-- `--min-confidence <value>`: Discard findings scored below this confidence (`0`-`1`). Defaults to the configured `minConfidence`, or `0` (keep everything). See [Confidence & Tiered Detection](../features/detectors.md#confidence--tiered-detection).
+- `--min-confidence <value>`: Discard findings scored below this confidence (`0`-`1`). Defaults to the configured `minConfidence`, or `0` (keep everything). Whatever the threshold discards is named in the summary, so a filtered run never quietly under-redacts. See [Confidence & Tiered Detection](../features/detectors.md#confidence--tiered-detection).
 - `-q, --quiet`: Suppress the summary. The `Session ID:` line is still printed, since scripts need it to rehydrate.
 
 ### `prompt-scrub rehydrate [file]`
@@ -56,7 +56,7 @@ Detected entities:
 
 **Options:**
 - `--disable <detectors>`: Comma-separated list of detectors to disable.
-- `--min-confidence <value>`: Hide findings scored below this confidence (`0`-`1`). The printed hash reflects the filtered output, matching what `scrub` would produce at the same threshold.
+- `--min-confidence <value>`: Hide findings scored below this confidence (`0`-`1`). Anything dropped is listed under a `Suppressed below --min-confidence <value>:` heading rather than silently disappearing. The printed hash reflects the filtered output, matching what `scrub` would produce at the same threshold.
 - `--hash`: Print *only* the SHA-256 hash for scripting purposes.
 
 ## Watch Mode
@@ -92,7 +92,7 @@ Press `Ctrl-C` to stop watching; the poll loop is cleared and the process exits 
 - `--strict-name`: Enable strict allowlisting for `NameDetector`.
 - `--code-tell-terms <terms>`: Comma-separated list of private identifiers to detect.
 - `--url-allowlist <hosts>`: Comma-separated list of hostnames to pass through.
-- `--min-confidence <value>`: Discard findings scored below this confidence (`0`-`1`).
+- `--min-confidence <value>`: Discard findings scored below this confidence (`0`-`1`). Anything dropped is logged, including when it means the clipboard or file is left untouched.
 
 **Platform requirements:**
 

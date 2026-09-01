@@ -433,3 +433,153 @@ test('a filtered-out finding cannot suppress the overlapping finding it outranks
   });
   t.is(filtered.scrubbedContent, 'mail «Email_1»');
 });
+
+// --- What a threshold suppressed -------------------------------------------
+//
+// Silent under-redaction is the dangerous direction for a redaction tool, so
+// the pipeline has to be able to say what a threshold cost the caller.
+
+test('stats.suppressed records what the threshold left in the clear', (t) => {
+  const result = scrub({
+    content: 'mail alice@example.com and call 555-123-4567',
+    options: { minConfidence: 0.9 },
+  });
+
+  t.is(result.scrubbedContent, 'mail «Email_1» and call 555-123-4567');
+  t.is(result.stats.totalEntities, 1);
+  t.deepEqual(result.stats.suppressed, { total: 1, byCategory: { Phone: 1 } });
+});
+
+test('stats.suppressed is populated even when nothing survived the threshold', (t) => {
+  // The worst case: the output is byte-identical to a prompt that never had a
+  // phone number in it, so the stats are the only thing that can say otherwise.
+  const result = scrub({ content: 'call 555-123-4567', options: { minConfidence: 0.95 } });
+
+  t.is(result.scrubbedContent, 'call 555-123-4567');
+  t.is(result.stats.totalEntities, 0);
+  t.deepEqual(result.stats.suppressed, { total: 1, byCategory: { Phone: 1 } });
+});
+
+test('stats.suppressed is absent when no threshold is set', (t) => {
+  const result = scrub({ content: 'mail alice@example.com and call 555-123-4567' });
+
+  t.is(result.stats.totalEntities, 2);
+  t.is(result.stats.suppressed, undefined);
+});
+
+test('stats.suppressed is absent when the threshold dropped nothing', (t) => {
+  const result = scrub({ content: 'mail alice@example.com', options: { minConfidence: 0.9 } });
+
+  t.is(result.stats.totalEntities, 1);
+  t.is(result.stats.suppressed, undefined);
+});
+
+test('a dropped finding that another finding still redacts is not reported', (t) => {
+  // The fabricated weak Secret covers exactly the same span as the Email that
+  // replaces it. The address is still redacted, so reporting it as suppressed
+  // would be crying wolf — and a summary that cries wolf gets ignored.
+  const weakSecret = {
+    name: 'WeakSecretDetector',
+    detect: (text: string) => {
+      const index = text.indexOf('alice@example.com');
+      return index === -1
+        ? []
+        : [
+            {
+              category: 'Secret',
+              span: [index, index + 'alice@example.com'.length] as [number, number],
+              value: 'alice@example.com',
+              placeholderPrefix: 'Secret',
+              confidence: 0.3,
+              method: 'entropy',
+            },
+          ];
+    },
+  };
+
+  const result = scrub({
+    content: 'mail alice@example.com',
+    options: { customDetectors: [weakSecret], minConfidence: 0.8 },
+  });
+
+  t.is(result.scrubbedContent, 'mail «Email_1»');
+  t.is(result.stats.suppressed, undefined);
+});
+
+test('a dropped finding only partly covered is reported', (t) => {
+  // Same shape, but the weak finding reaches past the email into text nothing
+  // else redacts. That tail really is left in the clear, so it must be named.
+  const wideWeak = {
+    name: 'WideWeakDetector',
+    detect: (text: string) => {
+      const index = text.indexOf('alice@example.com');
+      return index === -1
+        ? []
+        : [
+            {
+              category: 'Secret',
+              span: [index, text.length] as [number, number],
+              value: text.slice(index),
+              placeholderPrefix: 'Secret',
+              confidence: 0.3,
+              method: 'entropy',
+            },
+          ];
+    },
+  };
+
+  const result = scrub({
+    content: 'mail alice@example.com plus trailing text',
+    options: { customDetectors: [wideWeak], minConfidence: 0.8 },
+  });
+
+  t.is(result.scrubbedContent, 'mail «Email_1» plus trailing text');
+  t.deepEqual(result.stats.suppressed, { total: 1, byCategory: { Secret: 1 } });
+});
+
+test('suppressed counts accumulate across a Message[] payload', (t) => {
+  const result = scrub({
+    content: [
+      { role: 'user', content: 'call 555-123-4567' },
+      { role: 'assistant', content: 'or 555-987-6543' },
+      { role: 'user', content: 'mail alice@example.com' },
+    ],
+    options: { minConfidence: 0.9 },
+  });
+
+  t.is(result.stats.totalEntities, 1);
+  t.deepEqual(result.stats.suppressed, { total: 2, byCategory: { Phone: 2 } });
+});
+
+test('overlapping low-confidence findings collapse to one suppressed region', (t) => {
+  // Two weak detectors firing on the same span is one region left in the
+  // clear, not two, so the count reflects regions rather than detector hits.
+  const weakAt = (name: string, category: string) => ({
+    name,
+    detect: (text: string) => {
+      const index = text.indexOf('555-123-4567');
+      return index === -1
+        ? []
+        : [
+            {
+              category,
+              span: [index, index + '555-123-4567'.length] as [number, number],
+              value: '555-123-4567',
+              placeholderPrefix: category,
+              confidence: 0.2,
+              method: 'entropy',
+            },
+          ];
+    },
+  });
+
+  const result = scrub({
+    content: 'call 555-123-4567',
+    options: {
+      customDetectors: [weakAt('WeakA', 'Name'), weakAt('WeakB', 'CodeTell')],
+      minConfidence: 0.9,
+    },
+  });
+
+  t.is(result.stats.suppressed?.total, 1);
+});

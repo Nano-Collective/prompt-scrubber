@@ -153,8 +153,108 @@ test('parseConfidence accepts the 0-1 range and rejects anything else', (t) => {
   t.is(parseConfidence('0'), 0);
   t.is(parseConfidence('0.85'), 0.85);
   t.is(parseConfidence('1'), 1);
+  // Forms Number() handles that parseFloat also handled — no regression.
+  t.is(parseConfidence('.85'), 0.85);
+  t.is(parseConfidence('9e-1'), 0.9);
+  t.is(parseConfidence(' 0.5 '), 0.5);
 
-  for (const bad of ['-0.1', '1.1', 'high', '']) {
+  // '0.9zzz' is the important one: parseFloat stops at the first invalid
+  // character and would silently run at 0.9, which is exactly the quiet
+  // reinterpretation this parser exists to prevent.
+  for (const bad of ['-0.1', '1.1', 'high', '', '0.9zzz', '0.5 0.6', 'NaN', 'Infinity']) {
     t.throws(() => parseConfidence(bad), { message: 'Expected a number between 0 and 1.' });
   }
+});
+
+test('formatScrubSummary reports what a threshold suppressed', (t) => {
+  // The dangerous case: nothing was scrubbed, but something WAS found and
+  // dropped. Without the second clause this is indistinguishable from a clean
+  // prompt.
+  t.is(
+    formatScrubSummary(
+      { totalEntities: 0, byCategory: {}, suppressed: { total: 1, byCategory: { Phone: 1 } } },
+      0.95,
+    ),
+    'Scrubbed: 0 entities; 1 suppressed below --min-confidence 0.95 (1 Phone)',
+  );
+
+  // The example from the review, verbatim.
+  t.is(
+    formatScrubSummary(
+      {
+        totalEntities: 1,
+        byCategory: { Email: 1 },
+        suppressed: { total: 1, byCategory: { Phone: 1 } },
+      },
+      0.9,
+    ),
+    'Scrubbed: 1 entity (1 Email); 1 suppressed below --min-confidence 0.9 (1 Phone)',
+  );
+
+  // Plurals apply to the suppressed breakdown too.
+  t.is(
+    formatScrubSummary(
+      {
+        totalEntities: 1,
+        byCategory: { Email: 1 },
+        suppressed: { total: 3, byCategory: { Phone: 2, Address: 1 } },
+      },
+      0.9,
+    ),
+    'Scrubbed: 1 entity (1 Email); 3 suppressed below --min-confidence 0.9 (2 Phones, 1 Address)',
+  );
+});
+
+test('formatScrubSummary is unchanged when nothing was suppressed', (t) => {
+  // No threshold in play, and a threshold that cost nothing, both produce the
+  // exact string the tool printed before this feature existed.
+  t.is(
+    formatScrubSummary({ totalEntities: 1, byCategory: { Email: 1 } }),
+    'Scrubbed: 1 entity (1 Email)',
+  );
+  t.is(
+    formatScrubSummary({ totalEntities: 1, byCategory: { Email: 1 } }, 0.9),
+    'Scrubbed: 1 entity (1 Email)',
+  );
+  t.is(
+    formatScrubSummary(
+      { totalEntities: 1, byCategory: { Email: 1 }, suppressed: { total: 0, byCategory: {} } },
+      0.9,
+    ),
+    'Scrubbed: 1 entity (1 Email)',
+  );
+});
+
+test('handleScrub reports the phone the threshold dropped', async (t) => {
+  // The exact command from the review.
+  const result = await handleScrub('mail alice@example.com and call 555-123-4567', {
+    minConfidence: 0.9,
+  });
+
+  t.is(result.scrubbedContent, 'mail «Email_1» and call 555-123-4567');
+  t.is(result.minConfidence, 0.9);
+  t.is(
+    formatScrubSummary(result.stats, result.minConfidence),
+    'Scrubbed: 1 entity (1 Email); 1 suppressed below --min-confidence 0.9 (1 Phone)',
+  );
+});
+
+test('handleScrub reports suppression even when nothing survived', async (t) => {
+  const result = await handleScrub('call 555-123-4567', { minConfidence: 0.95 });
+
+  t.is(result.scrubbedContent, 'call 555-123-4567');
+  t.is(
+    formatScrubSummary(result.stats, result.minConfidence),
+    'Scrubbed: 0 entities; 1 suppressed below --min-confidence 0.95 (1 Phone)',
+  );
+});
+
+test('handleScrub leaves stats.suppressed absent without a threshold', async (t) => {
+  const result = await handleScrub('mail alice@example.com and call 555-123-4567', {});
+
+  t.is(result.stats.suppressed, undefined);
+  t.is(
+    formatScrubSummary(result.stats, result.minConfidence),
+    'Scrubbed: 2 entities (1 Email, 1 Phone)',
+  );
 });

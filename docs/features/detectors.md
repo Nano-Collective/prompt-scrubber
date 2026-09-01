@@ -93,6 +93,34 @@ finding can never mask a higher-confidence one that overlaps it.
 Run `inspect` first: it prints the score and method of every entity, so you can
 see what a threshold would drop before you commit to it.
 
+### A threshold always says what it dropped
+
+Under-redaction is the dangerous direction, so a filtered run never goes quiet.
+Whatever the threshold discarded is reported alongside what was scrubbed:
+
+```bash
+$ echo "mail alice@example.com and call 555-123-4567" | prompt-scrub scrub --min-confidence 0.9
+mail «Email_1» and call 555-123-4567
+Scrubbed: 1 entity (1 Email); 1 suppressed below --min-confidence 0.9 (1 Phone)
+```
+
+This is reported even when nothing survived the threshold — that is precisely
+the case where the output is byte-identical to a prompt that never contained
+anything sensitive:
+
+```bash
+$ echo "call 555-123-4567" | prompt-scrub scrub --min-confidence 0.95
+call 555-123-4567
+Scrubbed: 0 entities; 1 suppressed below --min-confidence 0.95 (1 Phone)
+```
+
+`inspect` lists the dropped entities individually, and `watch` logs the same
+notice. A dropped finding whose span some surviving finding still redacts is
+not counted: it was not left in the clear, and a notice that fires on every
+overlapping detector would quickly be ignored.
+
+Pass `-q`/`--quiet` to `scrub` to suppress the summary entirely.
+
 ## Priority & Collision System
 
 When multiple detectors flag overlapping spans, a collision resolution system determines which finding wins.

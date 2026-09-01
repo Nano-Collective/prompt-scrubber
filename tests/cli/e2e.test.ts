@@ -272,12 +272,69 @@ test('CLI: inspect --min-confidence hides findings below the threshold', (t) => 
 
   const filtered = runCli(['inspect', '--min-confidence', '0.9'], input);
   t.is(filtered.status, 0);
-  t.false(filtered.stdout.includes('[Phone]'));
-  t.true(filtered.stdout.includes('[Email]'));
+  const [detected, suppressed] = filtered.stdout.split('Suppressed below');
+  // The phone drops out of what would be scrubbed...
+  t.false(detected?.includes('[Phone]'));
+  t.true(detected?.includes('[Email]'));
+  // ...and is named as still being in the clear rather than vanishing.
+  t.true(suppressed?.includes('[Phone]'));
+});
+
+test('CLI: scrub --min-confidence says what it suppressed', (t) => {
+  // The exact command from the review.
+  const result = runCli(
+    ['scrub', '--min-confidence', '0.9'],
+    'mail alice@example.com and call 555-123-4567',
+  );
+
+  t.is(result.status, 0);
+  t.is(result.stdout, 'mail «Email_1» and call 555-123-4567');
+  t.true(
+    result.stderr.includes(
+      'Scrubbed: 1 entity (1 Email); 1 suppressed below --min-confidence 0.9 (1 Phone)',
+    ),
+  );
+});
+
+test('CLI: a run where the threshold drops everything still says so', (t) => {
+  // stdout is byte-identical to a prompt with nothing sensitive in it, so the
+  // summary is the only thing standing between the user and a silent leak.
+  const result = runCli(['scrub', '--min-confidence', '0.95'], 'call 555-123-4567');
+
+  t.is(result.status, 0);
+  t.is(result.stdout, 'call 555-123-4567');
+  t.true(
+    result.stderr.includes(
+      'Scrubbed: 0 entities; 1 suppressed below --min-confidence 0.95 (1 Phone)',
+    ),
+  );
+});
+
+test('CLI: the summary is unchanged without a threshold', (t) => {
+  const result = runCli(['scrub'], 'mail alice@example.com and call 555-123-4567');
+
+  t.is(result.status, 0);
+  t.true(result.stderr.includes('Scrubbed: 2 entities (1 Email, 1 Phone)'));
+  t.false(result.stderr.includes('suppressed'));
+});
+
+test('CLI: -q suppresses the summary, threshold or not', (t) => {
+  const result = runCli(['scrub', '-q', '--min-confidence', '0.9'], 'call 555-123-4567');
+
+  t.is(result.status, 0);
+  t.false(result.stderr.includes('suppressed'));
 });
 
 test('CLI: --min-confidence rejects a value outside the 0-1 range', (t) => {
   const result = runCli(['scrub', '--min-confidence', '2'], 'mail alice@example.com');
+  t.is(result.status, 1);
+  t.true(result.stderr.includes('Expected a number between 0 and 1.'));
+});
+
+test('CLI: --min-confidence rejects trailing garbage rather than truncating it', (t) => {
+  // parseFloat would read this as 0.9 and scrub at a threshold the user never
+  // typed. Failing loudly is the only safe reading.
+  const result = runCli(['scrub', '--min-confidence', '0.9zzz'], 'mail alice@example.com');
   t.is(result.status, 1);
   t.true(result.stderr.includes('Expected a number between 0 and 1.'));
 });

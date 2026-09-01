@@ -65,7 +65,7 @@ Detected entities:
   [Phone]    +44-7700-900999                  → «Phone_1»  (chars 76-91, confidence 0.90 structural)
 
 No session written.
-Hash: 66fcffd88e29c8f483570f44462fb87fc6f06af1406186ae2572ffc743f94a33
+Hash: 7e5eea933db987e10e10e259ebcfea9d3250d8a68925fd9360f515e3a4bfbba9
 ```
 
 Each entity carries the confidence the detector assigned it: an exact vendor key pattern scores 0.99, a capitalised-word name guess only 0.5. Pass `--min-confidence <0-1>` to `scrub` or `inspect` to drop everything below a threshold. See [Confidence & Tiered Detection](docs/features/detectors.md#confidence--tiered-detection).
