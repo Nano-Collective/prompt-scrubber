@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import type { Command } from 'commander';
 import { rehydrate } from '../../core/rehydrate.js';
+import { emitError } from '../output.js';
 
 export function handleRehydrate(text: string, options: { sessionId: string }) {
   const result = rehydrate({
@@ -25,11 +26,7 @@ export function setupRehydrateCommand(program: Command) {
           input = readFileSync(file, 'utf8');
         } catch (err: unknown) {
           const message = `Error reading file: ${(err as Error).message}`;
-          if (options.json) {
-            process.stdout.write(`${JSON.stringify({ error: message }, null, 2)}\n`);
-          } else {
-            console.error(message);
-          }
+          emitError(message, options.json);
           process.exit(1);
           return;
         }
@@ -38,17 +35,20 @@ export function setupRehydrateCommand(program: Command) {
           input = readFileSync(0, 'utf-8');
         } catch {
           const message = 'No input provided.';
-          if (options.json) {
-            process.stdout.write(`${JSON.stringify({ error: message }, null, 2)}\n`);
-          } else {
-            console.error(message);
-          }
+          emitError(message, options.json);
           process.exit(1);
           return;
         }
       }
-
       if (!input) {
+        if (options.json) {
+          const output = {
+            content: '',
+            sessionId: options.sessionId,
+            warnings: [],
+          };
+          process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+        }
         process.exit(0);
         return;
       }
