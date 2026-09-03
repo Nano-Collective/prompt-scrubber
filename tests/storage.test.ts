@@ -391,6 +391,7 @@ test.serial('readSessionMap throws SessionDecryptionError when key is wrong or m
   process.env.PROMPT_SCRUB_KEY = 'test-key';
 
   const globalConfigPath = path.join(tmpConfigDir, 'prompt-scrub', 'config.json');
+  fs.mkdirSync(path.dirname(globalConfigPath), { recursive: true });
   fs.writeFileSync(globalConfigPath, JSON.stringify({ encryptionEnabled: true }));
 
   writeSessionMap(id, map);
@@ -426,6 +427,7 @@ test.serial('disabling encryptionEnabled does NOT downgrade an already-encrypted
   setCachedEncryptionKey('persisted-key');
   process.env.PROMPT_SCRUB_KEY = 'persisted-key';
   const globalConfigPath = path.join(tmpConfigDir, 'prompt-scrub', 'config.json');
+  fs.mkdirSync(path.dirname(globalConfigPath), { recursive: true });
   fs.writeFileSync(globalConfigPath, JSON.stringify({ encryptionEnabled: true }));
 
   writeSessionMap(id, { '«Secret_1»': 'persisted-value' });
@@ -449,6 +451,7 @@ test.serial('isSessionEncrypted is true for envelopes and false for plaintext', 
   setCachedEncryptionKey('iso-key');
   process.env.PROMPT_SCRUB_KEY = 'iso-key';
   const globalConfigPath = path.join(tmpConfigDir, 'prompt-scrub', 'config.json');
+  fs.mkdirSync(path.dirname(globalConfigPath), { recursive: true });
   fs.writeFileSync(globalConfigPath, JSON.stringify({ encryptionEnabled: true }));
 
   writeSessionMap('iso-enc', { '«Secret_1»': 'sk-1' });

@@ -46,12 +46,12 @@ function deriveCacheKey(inputKey: string, salt: Buffer): string {
   return crypto.createHash('sha256').update(inputKey).update(salt).digest('hex');
 }
 
-export function deriveSessionKey(passphrase: string, salt: Buffer): Buffer {
-  const cacheKey = deriveCacheKey(passphrase, salt);
+export function deriveSessionKey(inputKey: string, salt: Buffer): Buffer {
+  const cacheKey = deriveCacheKey(inputKey, salt);
   const cached = derivedKeyCache.get(cacheKey);
   if (cached) return cached;
   // Recommended scrypt parameters for general-purpose AEAD use.
-  const key = crypto.scryptSync(passphrase, salt, 32, { N: 16384, r: 8, p: 1 });
+  const key = crypto.scryptSync(inputKey, salt, 32, { N: 16384, r: 8, p: 1 });
   derivedKeyCache.set(cacheKey, key);
   return key;
 }
@@ -64,10 +64,10 @@ export function clearDerivedKeyCache(): void {
   derivedKeyCache.clear();
 }
 
-export function encryptSession(data: SessionMap, passphrase: string): EncryptedEnvelope {
+export function encryptSession(data: SessionMap, inputKey: string): EncryptedEnvelope {
   const salt = crypto.randomBytes(16);
   const iv = crypto.randomBytes(12);
-  const key = deriveSessionKey(passphrase, salt);
+  const key = deriveSessionKey(inputKey, salt);
 
   const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
 
@@ -89,7 +89,7 @@ export function encryptSession(data: SessionMap, passphrase: string): EncryptedE
   };
 }
 
-export function decryptSession(envelope: EncryptedEnvelope, passphrase: string): SessionMap {
+export function decryptSession(envelope: EncryptedEnvelope, inputKey: string): SessionMap {
   if (envelope.version !== 1 || envelope.algorithm !== 'aes-256-gcm' || envelope.kdf !== 'scrypt') {
     throw new SessionDecryptionError(
       'Unsupported encryption version or algorithm in session envelope.',
@@ -99,7 +99,7 @@ export function decryptSession(envelope: EncryptedEnvelope, passphrase: string):
   const salt = Buffer.from(envelope.salt, 'hex');
   const iv = Buffer.from(envelope.iv, 'hex');
   const authTag = Buffer.from(envelope.authTag, 'hex');
-  const key = deriveSessionKey(passphrase, salt);
+  const key = deriveSessionKey(inputKey, salt);
 
   try {
     const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv, { authTagLength: 16 });
