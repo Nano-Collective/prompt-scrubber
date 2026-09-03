@@ -139,7 +139,9 @@ test.serial('CLI: sessions encrypt migrates plaintext sessions to encrypted', (t
   t.is(parsed.encrypted, true);
 
   // Now run encrypt again to cover the "already encrypted" (skipped) branch
-  const migrateAgain = runCli(['sessions', 'encrypt'], undefined, { PROMPT_SCRUB_KEY: 'migrate-key' });
+  const migrateAgain = runCli(['sessions', 'encrypt'], undefined, {
+    PROMPT_SCRUB_KEY: 'migrate-key',
+  });
   t.is(migrateAgain.status, 0);
   t.true(migrateAgain.stdout.includes('0 session(s), 1 already encrypted'));
 });
