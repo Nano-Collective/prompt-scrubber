@@ -1,5 +1,10 @@
 import test from 'ava';
-import { computeHash, formatInspectOutput, handleInspect } from '../../src/cli/commands/inspect.js';
+import {
+  computeHash,
+  formatInspectOutput,
+  handleInspect,
+  simulateScrub,
+} from '../../src/cli/commands/inspect.js';
 
 test('handleInspect finds entities without side effects', async (t) => {
   const findings = await handleInspect('My email is test@example.com', {});
@@ -14,6 +19,17 @@ test('formatInspectOutput formats findings and includes hash', async (t) => {
   t.true(output.includes('test@example.com'));
   t.true(output.includes('«Email_1»'));
   t.true(output.includes(`Hash: ${hash}`));
+});
+
+test('formatInspectOutput uses the same placeholder numbers as scrub', async (t) => {
+  const text = 'Mail alice@corp.com then bob@corp.com';
+  const findings = await handleInspect(text, {});
+  const output = formatInspectOutput(findings, 'deadbeef');
+  const aliceLine = output.split('\n').find((line) => line.includes('alice@corp.com'));
+  const bobLine = output.split('\n').find((line) => line.includes('bob@corp.com'));
+  t.true(aliceLine?.includes('«Email_2»'));
+  t.true(bobLine?.includes('«Email_1»'));
+  t.is(simulateScrub(text, findings), 'Mail «Email_2» then «Email_1»');
 });
 
 test('formatInspectOutput handles empty findings and includes hash', (t) => {

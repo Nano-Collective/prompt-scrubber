@@ -22,7 +22,7 @@ It maps sensitive data (emails, secrets, paths, URLs, phone numbers) to stable p
 **What it does:**
 - Detects and replaces common identifying content (emails, paths, phone numbers, secrets, URLs) before your prompt leaves your machine.
 - Maps each value to a stable placeholder so the model's response can be rehydrated locally.
-- Gives you an `inspect` command so you can see exactly what was detected and what was missed before you commit to sending.
+- Gives you `inspect` and `diff` so you can see what was detected, and the exact before/after in context, before you send anything.
 
 **What it does not do:**
 - It does not make you anonymous. A semantically identifying question (a niche bug only you have, your private codebase, your financial situation) remains identifying after scrubbing.
@@ -68,7 +68,16 @@ No session written.
 Hash: 41beda4af0b83488fdf6eea9347775450a1c7c887a6ef377212340f36c445132
 ```
 
-The hash is deterministic — the same prompt always produces the same hash, so you can verify cache stability across runs. Once you are satisfied with what `inspect` shows, proceed with `scrub`.
+The hash is deterministic — the same prompt always produces the same hash, so you can verify cache stability across runs. Once you are satisfied with what `inspect` shows, run `diff` to see the replacements in place, then proceed with `scrub`.
+
+```bash
+echo "My email is alice@acme.com" | prompt-scrub diff --no-color
+```
+
+```
+- My email is alice@acme.com
++ My email is «Email_1»
+```
 
 ## Usage Examples
 

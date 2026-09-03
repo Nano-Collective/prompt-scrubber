@@ -40,11 +40,39 @@ If the model hallucinates a placeholder that does not exist in the session map (
 - `--session-id <id>` (Required): The session ID used during the `scrub` phase to restore original values.
 
 ### `prompt-scrub inspect [file]`
-Reads a message from `stdin` or a file and prints a human-readable diff of the transformations the scrubber will apply. Also prints a SHA-256 hash of the final byte-stable output for verifying prompt cache deterministic prefix stability.
+Reads a message from `stdin` or a file and prints a table of detected entities (category, value, placeholder, span). Also prints a SHA-256 hash of the final byte-stable output for verifying prompt cache deterministic prefix stability.
 
 **Options:**
 - `--disable <detectors>`: Comma-separated list of detectors to disable.
+- `--enable <detectors>`: Comma-separated list of off-by-default detectors to enable (e.g. `NameDetector`).
+- `--strict-name`: Enable strict allowlisting for `NameDetector`.
+- `--code-tell-terms <terms>`: Comma-separated list of private identifiers to detect.
+- `--url-allowlist <hosts>`: Comma-separated list of hostnames to pass through.
 - `--hash`: Print *only* the SHA-256 hash for scripting purposes.
+
+### `prompt-scrub diff [file]`
+Reads a message from `stdin` or a file and prints a colorized line diff of the original text against what `scrub` would emit. Nothing is written to a session. Red lines are the original PII, green lines are the placeholders.
+
+```bash
+echo "Email me at alice@corp.com" | prompt-scrub diff --no-color
+```
+
+```
+- Email me at alice@corp.com
++ Email me at «Email_1»
+```
+
+Colors are on when stdout is a TTY. Pass `--no-color` or set `NO_COLOR` to pipe the output into a file.
+
+**Options:**
+- `--side-by-side`: Two-column layout (`original | scrubbed`). Long lines wrap; they are not truncated.
+- `--context <n>`: Unchanged lines kept around each change (default `3`). Must be a non-negative integer.
+- `--no-color`: Disable ANSI colors.
+- `--disable <detectors>`: Comma-separated list of detectors to disable.
+- `--enable <detectors>`: Comma-separated list of off-by-default detectors to enable (e.g. `NameDetector`).
+- `--strict-name`: Enable strict allowlisting for `NameDetector`.
+- `--code-tell-terms <terms>`: Comma-separated list of private identifiers to detect.
+- `--url-allowlist <hosts>`: Comma-separated list of hostnames to pass through.
 
 ## Watch Mode
 
