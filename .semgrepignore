@@ -1,0 +1,9 @@
+pnpm-workspace.yaml
+.github/dependabot.yml
+.github/workflows/update-badges.yml
+.github/workflows/pr-checks.yml
+.github/workflows/release-prepare.yml
+.github/workflows/release.yml
+.github/workflows/changeset-check.yml
+src/detectors/code-tell.ts
+tests/detectors/secret.test.ts

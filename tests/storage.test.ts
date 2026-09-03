@@ -2,13 +2,16 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'ava';
+import { SessionDecryptionError, clearDerivedKeyCache } from '../src/core/crypto.js';
+import { clearCachedEncryptionKey, setCachedEncryptionKey } from '../src/core/key-manager.js';
 import {
   deleteSessionMap,
+  gcSessions,
   getSessionStoragePath,
+  isSessionEncrypted,
   listSessions,
   readSessionMap,
   writeSessionMap,
-  gcSessions,
 } from '../src/session/storage.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -32,14 +35,18 @@ test.after.always(() => {
   if (fs.existsSync(tmpConfigDir)) {
     fs.rmSync(tmpConfigDir, { recursive: true, force: true });
   }
+  // Reset any globals tests may have set so other files run clean.
+  clearCachedEncryptionKey();
+  clearDerivedKeyCache();
+  delete process.env.PROMPT_SCRUB_KEY;
 });
 
-test('readSessionMap returns {} on missing file', (t) => {
+test.serial('readSessionMap returns {} on missing file', (t) => {
   const result = readSessionMap('non-existent-id');
   t.deepEqual(result, {});
 });
 
-test('writeSessionMap creates parent dirs and readSessionMap reads it back', (t) => {
+test.serial('writeSessionMap creates parent dirs and readSessionMap reads it back', (t) => {
   const id = 'test-write-id';
   const map = { '«Email_1»': 'test@example.com' };
 
@@ -49,38 +56,41 @@ test('writeSessionMap creates parent dirs and readSessionMap reads it back', (t)
   t.deepEqual(readMap, map);
 });
 
-test('writeSessionMap handles JSON parse errors gracefully by renaming corrupt files', (t) => {
-  const id = 'corrupt-test-id';
-  const map = { '«Secret_1»': 'sk-1234' };
+test.serial(
+  'writeSessionMap handles JSON parse errors gracefully by renaming corrupt files',
+  (t) => {
+    const id = 'corrupt-test-id';
+    const map = { '«Secret_1»': 'sk-1234' };
 
-  writeSessionMap(id, map);
+    writeSessionMap(id, map);
 
-  // Manually corrupt the file
-  const sessionsDir = path.join(tmpConfigDir, 'prompt-scrub', 'sessions');
-  const filePath = path.join(sessionsDir, `${id}.json`);
-  fs.writeFileSync(filePath, '{ corrupt_json: ]', 'utf-8');
+    // Manually corrupt the file
+    const sessionsDir = path.join(tmpConfigDir, 'prompt-scrub', 'sessions');
+    const filePath = path.join(sessionsDir, `${id}.json`);
+    fs.writeFileSync(filePath, '{ corrupt_json: ]', 'utf-8');
 
-  // Suppress the expected console.error/warn output from the corrupt-file handler
-  const originalError = console.error;
-  const originalWarn = console.warn;
-  console.error = () => {};
-  console.warn = () => {};
+    // Suppress the expected console.error/warn output from the corrupt-file handler
+    const originalError = console.error;
+    const originalWarn = console.warn;
+    console.error = () => {};
+    console.warn = () => {};
 
-  const readMap = readSessionMap(id);
+    const readMap = readSessionMap(id);
 
-  console.error = originalError;
-  console.warn = originalWarn;
+    console.error = originalError;
+    console.warn = originalWarn;
 
-  t.deepEqual(readMap, {}); // Should return empty on failure
+    t.deepEqual(readMap, {}); // Should return empty on failure
 
-  // Verify corrupt file was renamed
-  t.false(fs.existsSync(filePath), 'Original file should be renamed');
-  const files = fs.readdirSync(sessionsDir);
-  const corruptFile = files.find((f) => f.includes(`${id}.json.corrupt-`));
-  t.truthy(corruptFile, 'Corrupt file should exist with a timestamp suffix');
-});
+    // Verify corrupt file was renamed
+    t.false(fs.existsSync(filePath), 'Original file should be renamed');
+    const files = fs.readdirSync(sessionsDir);
+    const corruptFile = files.find((f) => f.includes(`${id}.json.corrupt-`));
+    t.truthy(corruptFile, 'Corrupt file should exist with a timestamp suffix');
+  },
+);
 
-test('deleteSessionMap returns true on hit and false on miss', (t) => {
+test.serial('deleteSessionMap returns true on hit and false on miss', (t) => {
   const id = 'delete-test-id';
   writeSessionMap(id, { '«Path_1»': '/var/log' });
 
@@ -91,7 +101,7 @@ test('deleteSessionMap returns true on hit and false on miss', (t) => {
   t.false(deletedMissing);
 });
 
-test('deleteSessionMap handles unlinkSync error', (t) => {
+test.serial('deleteSessionMap handles unlinkSync error', (t) => {
   const id = 'delete-fail-test-id';
   const filePath = getSessionStoragePath(id);
   const dirPath = path.dirname(filePath);
@@ -109,7 +119,7 @@ test('deleteSessionMap handles unlinkSync error', (t) => {
   fs.chmodSync(dirPath, 0o777); // restore
 });
 
-test('listSessions ignores non-.json files', (t) => {
+test.serial('listSessions ignores non-.json files', (t) => {
   const id = 'list-test-id';
   writeSessionMap(id, { '«Phone_1»': '555-1234' });
 
@@ -126,14 +136,20 @@ test('listSessions ignores non-.json files', (t) => {
   t.false(fileIds.includes(`${id}.json`)); // shouldn't match the `.tmp` extension incorrectly
 });
 
-test('listSessions returns sessions sorted by most recently modified', async (t) => {
+test.serial('listSessions returns sessions sorted by most recently modified', async (t) => {
   const id1 = 'sort-test-1';
   const id2 = 'sort-test-2';
 
   writeSessionMap(id1, { '«Email_1»': 'a@b.com' });
-  // Need a small delay so mtime is strictly greater
-  await new Promise((r) => setTimeout(r, 10));
   writeSessionMap(id2, { '«Email_1»': 'c@d.com' });
+
+  // Explicitly ensure id1 is older than id2
+  const p1 = getSessionStoragePath(id1);
+  const p2 = getSessionStoragePath(id2);
+  const now = new Date();
+  const past = new Date(now.getTime() - 10000);
+  fs.utimesSync(p1, past, past);
+  fs.utimesSync(p2, now, now);
 
   const sessions = listSessions();
   // Filter out other tests' sessions
@@ -144,7 +160,7 @@ test('listSessions returns sessions sorted by most recently modified', async (t)
   t.is(sorted[1]!.id, id1);
 });
 
-test('getSessionStoragePath returns correctly formatted path', (t) => {
+test.serial('getSessionStoragePath returns correctly formatted path', (t) => {
   const p = getSessionStoragePath('123');
   t.true(p.endsWith(path.join('prompt-scrub', 'sessions', '123.json')));
 });
@@ -230,7 +246,7 @@ test.serial('getConfigDir handles linux without XDG_CONFIG_HOME fallback to .con
   process.env.XDG_CONFIG_HOME = originalXdg;
 });
 
-test('writeSessionMap failure path handles unlinkSync error', (t) => {
+test.serial('writeSessionMap failure path handles unlinkSync error', (t) => {
   const id = 'write-fail-test';
   const filePath = getSessionStoragePath(id);
   const tmpPath = `${filePath}.tmp`;
@@ -249,7 +265,7 @@ test('writeSessionMap failure path handles unlinkSync error', (t) => {
   fs.rmSync(tmpPath, { recursive: true, force: true });
 });
 
-test('readSessionMap fails to rename corrupt file gracefully', (t) => {
+test.serial('readSessionMap fails to rename corrupt file gracefully', (t) => {
   const id = 'corrupt-rename-fail-test';
   const filePath = getSessionStoragePath(id);
   const dirPath = path.dirname(filePath);
@@ -333,4 +349,126 @@ test.serial('gcSessions ignores errors (e.g. concurrent deletion)', (t) => {
 
   // Cleanup
   fs.rmdirSync(oldPath);
+});
+
+// ---------------------------------------------------------------------------
+// Encryption-specific tests. These mutate the global config file and the
+// PROMPT_SCRUB_KEY env var, so they run as `test.serial` to keep AVA's
+// concurrent worker pool from interleaving them.
+// ---------------------------------------------------------------------------
+
+test.serial('writeSessionMap encrypts when enabled and decrypts successfully', (t) => {
+  const id = 'encrypted-test-1';
+  const map = { '«Secret_1»': 'sk-1234' };
+
+  clearCachedEncryptionKey();
+  setCachedEncryptionKey('test-key');
+  process.env.PROMPT_SCRUB_KEY = 'test-key';
+
+  // Write the global config to enable encryption
+  const globalConfigPath = path.join(tmpConfigDir, 'prompt-scrub', 'config.json');
+  fs.mkdirSync(path.dirname(globalConfigPath), { recursive: true });
+  fs.writeFileSync(globalConfigPath, JSON.stringify({ encryptionEnabled: true }));
+
+  writeSessionMap(id, map);
+
+  // Verify it's encrypted on disk — plaintext must NOT appear anywhere in the file
+  const rawData = fs.readFileSync(getSessionStoragePath(id), 'utf-8');
+  t.false(rawData.includes('sk-1234'), 'plaintext secret must not appear on disk');
+  t.false(rawData.includes('«Secret_1»'), 'plaintext placeholder must not appear on disk');
+  const parsed = JSON.parse(rawData);
+  t.is(parsed.encrypted, true);
+
+  // Read back via the same key
+  const readMap = readSessionMap(id);
+  t.deepEqual(readMap, map);
+
+  // Cleanup
+  delete process.env.PROMPT_SCRUB_KEY;
+  clearCachedEncryptionKey();
+  fs.rmSync(globalConfigPath);
+});
+
+test.serial('readSessionMap throws SessionDecryptionError when key is wrong or missing', (t) => {
+  const id = 'encrypted-test-2';
+  const map = { '«Secret_1»': 'sk-1234' };
+
+  setCachedEncryptionKey('test-key');
+  process.env.PROMPT_SCRUB_KEY = 'test-key';
+
+  const globalConfigPath = path.join(tmpConfigDir, 'prompt-scrub', 'config.json');
+  fs.mkdirSync(path.dirname(globalConfigPath), { recursive: true });
+  fs.writeFileSync(globalConfigPath, JSON.stringify({ encryptionEnabled: true }));
+
+  writeSessionMap(id, map);
+
+  // Missing key: clear both cache and env so readSessionMap must ask for one.
+  clearCachedEncryptionKey();
+  delete process.env.PROMPT_SCRUB_KEY;
+
+  t.throws(() => readSessionMap(id), {
+    instanceOf: SessionDecryptionError,
+    message: /no key is available/i,
+  });
+
+  // Wrong key: re-cache a deliberately wrong key.
+  setCachedEncryptionKey('wrong-key');
+  process.env.PROMPT_SCRUB_KEY = 'wrong-key';
+
+  t.throws(() => readSessionMap(id), {
+    instanceOf: SessionDecryptionError,
+    message: /Unable to decrypt session/i,
+  });
+
+  // Cleanup
+  clearCachedEncryptionKey();
+  delete process.env.PROMPT_SCRUB_KEY;
+  fs.rmSync(globalConfigPath);
+});
+
+test.serial('disabling encryptionEnabled does NOT downgrade an already-encrypted session', (t) => {
+  const id = 'encrypted-no-downgrade';
+
+  // First, write the session with encryption on.
+  setCachedEncryptionKey('persisted-key');
+  process.env.PROMPT_SCRUB_KEY = 'persisted-key';
+  const globalConfigPath = path.join(tmpConfigDir, 'prompt-scrub', 'config.json');
+  fs.mkdirSync(path.dirname(globalConfigPath), { recursive: true });
+  fs.writeFileSync(globalConfigPath, JSON.stringify({ encryptionEnabled: true }));
+
+  writeSessionMap(id, { '«Secret_1»': 'persisted-value' });
+
+  // Now flip the config off and overwrite the same session.
+  fs.writeFileSync(globalConfigPath, JSON.stringify({ encryptionEnabled: false }));
+  writeSessionMap(id, { '«Secret_1»': 'persisted-value' });
+
+  // The file must still be encrypted — silent downgrade would lose access for
+  // users who keep toggling the setting.
+  t.true(isSessionEncrypted(id), 'session must remain encrypted after rewrite');
+  t.true(fs.readFileSync(getSessionStoragePath(id), 'utf-8').includes('"encrypted": true'));
+
+  // Cleanup
+  clearCachedEncryptionKey();
+  delete process.env.PROMPT_SCRUB_KEY;
+  fs.rmSync(globalConfigPath);
+});
+
+test.serial('isSessionEncrypted is true for envelopes and false for plaintext', (t) => {
+  setCachedEncryptionKey('iso-key');
+  process.env.PROMPT_SCRUB_KEY = 'iso-key';
+  const globalConfigPath = path.join(tmpConfigDir, 'prompt-scrub', 'config.json');
+  fs.mkdirSync(path.dirname(globalConfigPath), { recursive: true });
+  fs.writeFileSync(globalConfigPath, JSON.stringify({ encryptionEnabled: true }));
+
+  writeSessionMap('iso-enc', { '«Secret_1»': 'sk-1' });
+  t.true(isSessionEncrypted('iso-enc'));
+
+  fs.writeFileSync(globalConfigPath, JSON.stringify({ encryptionEnabled: false }));
+  writeSessionMap('iso-plain', { '«Secret_1»': 'sk-2' });
+  t.false(isSessionEncrypted('iso-plain'));
+
+  // Cleanup
+  clearCachedEncryptionKey();
+  delete process.env.PROMPT_SCRUB_KEY;
+  fs.rmSync(globalConfigPath);
 });

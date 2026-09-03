@@ -104,6 +104,50 @@ Deletes a session map from the disk permanently. Use the `--all` option to delet
 ### `prompt-scrub sessions gc`
 Manually cleans up expired sessions based on the `sessionTtlDays` configuration. (By default, expired sessions are automatically pruned when you run `scrub` or `sessions list`.)
 
+### `prompt-scrub sessions encrypt [id]`
+Re-encrypts existing session files using the active encryption key. Pass a session ID to encrypt a single session; omit it to encrypt every session on disk. Requires `encryptionEnabled: true` in the config and `PROMPT_SCRUB_KEY` in the environment (or an interactive TTY prompt). Sessions that are already encrypted are skipped.
+
+## Encryption at Rest
+
+Session files map placeholders like `«Secret_1»` back to your real secrets. Without encryption they are plain JSON on disk, so a stolen laptop or any process running under your account can read every value you have ever scrubbed.
+
+Enable encryption in your config:
+
+```json
+// ~/.config/prompt-scrub/config.json
+{ "encryptionEnabled": true }
+```
+
+Then supply the passphrase via the `PROMPT_SCRUB_KEY` environment variable when invoking `scrub`, `rehydrate`, or `sessions`:
+
+```bash
+# Avoid inline `PROMPT_SCRUB_KEY=…` — it ends up in shell history.
+# Either set it from your secret manager or read it interactively.
+export PROMPT_SCRUB_KEY
+read -rs PROMPT_SCRUB_KEY
+echo "sk-1234567890abcdefghij" | prompt-scrub scrub
+```
+
+If `PROMPT_SCRUB_KEY` is unset and `stdin` is a TTY, `prompt-scrub` prompts for the passphrase with input muted. In non-interactive contexts (CI, scripts reading from a pipe) it fails fast with a clear error rather than blocking on stdin.
+
+The CLI also resolves the passphrase when an existing session is encrypted, even if `encryptionEnabled` was toggled off after the file was written — so a future `scrub --session-id <id>` on an encrypted session still requires the key. This prevents silent downgrades where toggling the config flag rewrote an encrypted session in plaintext.
+
+To migrate plaintext sessions that exist on disk from before you enabled encryption:
+
+```bash
+PROMPT_SCRUB_KEY=… prompt-scrub sessions encrypt
+```
+
+Library users can inject a key without going through the env var or TTY prompt:
+
+```typescript
+import { scrub, setCachedEncryptionKey } from '@nanocollective/prompt-scrub';
+setCachedEncryptionKey(process.env.MY_APP_KEY ?? '');
+const { scrubbedContent } = scrub({ content: 'My key is sk-12345' });
+```
+
+The crypto envelope is `version: 1`, `algorithm: aes-256-gcm`, `kdf: scrypt`, with a per-file random 16-byte salt and 12-byte IV. Derived keys are cached by salt within a single process so listing many encrypted sessions does not re-derive every key.
+
 ## Configuration
 
 ### `prompt-scrub init`
@@ -120,13 +164,15 @@ The generated file documents the supported schema:
 {
   "rulePacks": [],
   "urlAllowlist": [],
-  "sessionTtlDays": 7
+  "sessionTtlDays": 7,
+  "encryptionEnabled": false
 }
 ```
 
 - `rulePacks`: npm package names to load extra detectors from. See [Authoring Rule Packs](../features/authoring-rule-packs.md).
 - `urlAllowlist`: hostnames the `UrlDetector` passes through unchanged. Subdomains are implicitly allowed.
 - `sessionTtlDays`: number of days after which inactive sessions are automatically garbage collected. Default is 7.
+- `encryptionEnabled`: when `true`, every session write is encrypted with AES-256-GCM using a passphrase read from `PROMPT_SCRUB_KEY` (or an interactive TTY prompt). See [Encryption at Rest](#encryption-at-rest) above.
 
 Fails if a config file already exists.
 
@@ -145,7 +191,9 @@ Config file: /home/alice/.config/prompt-scrub/config.json
   ],
   "urlAllowlist": [
     "example.com"
-  ]
+  ],
+  "sessionTtlDays": 7,
+  "encryptionEnabled": false
 }
 ```
 
@@ -154,10 +202,12 @@ Entries that do not match the schema are reported on `stderr` and the command ex
 ```bash
 $ prompt-scrub config show
 Config file: /home/alice/.config/prompt-scrub/config.json
-  error: Unknown key "rulePaks". Supported keys: rulePacks, urlAllowlist.
+  error: Unknown key "rulePaks". Supported keys: rulePacks, urlAllowlist, sessionTtlDays, encryptionEnabled.
 {
   "rulePacks": [],
-  "urlAllowlist": []
+  "urlAllowlist": [],
+  "sessionTtlDays": 7,
+  "encryptionEnabled": false
 }
 Invalid entries are ignored at runtime.
 ```

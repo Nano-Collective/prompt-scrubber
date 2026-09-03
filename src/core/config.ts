@@ -6,6 +6,7 @@ export interface PromptScrubConfig {
   rulePacks?: string[];
   urlAllowlist?: string[];
   sessionTtlDays?: number;
+  encryptionEnabled?: boolean;
 }
 
 export interface ConfigFileState {
@@ -15,7 +16,7 @@ export interface ConfigFileState {
   config: PromptScrubConfig;
 }
 
-export function createDefaultConfig(): Required<PromptScrubConfig> {
+export function createDefaultConfig(): Required<Omit<PromptScrubConfig, 'encryptionEnabled'>> {
   return {
     rulePacks: [],
     urlAllowlist: [],
@@ -23,7 +24,7 @@ export function createDefaultConfig(): Required<PromptScrubConfig> {
   };
 }
 
-const CONFIG_KEYS = Object.keys(createDefaultConfig());
+const CONFIG_KEYS = ['rulePacks', 'urlAllowlist', 'sessionTtlDays', 'encryptionEnabled'];
 
 /**
  * Determines the base configuration directory based on the OS.
@@ -94,6 +95,13 @@ function validateConfig(data: unknown): string[] {
       continue;
     }
 
+    if (key === 'encryptionEnabled') {
+      if (typeof value !== 'boolean') {
+        errors.push(`"${key}" must be a boolean, received ${describeType(value)}.`);
+      }
+      continue;
+    }
+
     if (!Array.isArray(value)) {
       errors.push(`"${key}" must be an array of strings, received ${describeType(value)}.`);
     } else if (value.some((item) => typeof item !== 'string')) {
@@ -127,20 +135,25 @@ export function readConfigFile(): ConfigFileState {
   const record =
     parsed !== null && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {};
 
+  const config: PromptScrubConfig = {
+    rulePacks: toStringArray(record.rulePacks),
+    urlAllowlist: toStringArray(record.urlAllowlist),
+    sessionTtlDays:
+      typeof record.sessionTtlDays === 'number' &&
+      Number.isFinite(record.sessionTtlDays) &&
+      record.sessionTtlDays > 0
+        ? record.sessionTtlDays
+        : 7,
+  };
+  if (typeof record.encryptionEnabled === 'boolean') {
+    config.encryptionEnabled = record.encryptionEnabled;
+  }
+
   return {
     path: configPath,
     exists: true,
     errors: validateConfig(parsed),
-    config: {
-      rulePacks: toStringArray(record.rulePacks),
-      urlAllowlist: toStringArray(record.urlAllowlist),
-      sessionTtlDays:
-        typeof record.sessionTtlDays === 'number' &&
-        Number.isFinite(record.sessionTtlDays) &&
-        record.sessionTtlDays > 0
-          ? record.sessionTtlDays
-          : 7,
-    },
+    config,
   };
 }
 
