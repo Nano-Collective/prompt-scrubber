@@ -41,12 +41,12 @@ test.after.always(() => {
   delete process.env.PROMPT_SCRUB_KEY;
 });
 
-test('readSessionMap returns {} on missing file', (t) => {
+test.serial('readSessionMap returns {} on missing file', (t) => {
   const result = readSessionMap('non-existent-id');
   t.deepEqual(result, {});
 });
 
-test('writeSessionMap creates parent dirs and readSessionMap reads it back', (t) => {
+test.serial('writeSessionMap creates parent dirs and readSessionMap reads it back', (t) => {
   const id = 'test-write-id';
   const map = { '«Email_1»': 'test@example.com' };
 
@@ -56,38 +56,41 @@ test('writeSessionMap creates parent dirs and readSessionMap reads it back', (t)
   t.deepEqual(readMap, map);
 });
 
-test('writeSessionMap handles JSON parse errors gracefully by renaming corrupt files', (t) => {
-  const id = 'corrupt-test-id';
-  const map = { '«Secret_1»': 'sk-1234' };
+test.serial(
+  'writeSessionMap handles JSON parse errors gracefully by renaming corrupt files',
+  (t) => {
+    const id = 'corrupt-test-id';
+    const map = { '«Secret_1»': 'sk-1234' };
 
-  writeSessionMap(id, map);
+    writeSessionMap(id, map);
 
-  // Manually corrupt the file
-  const sessionsDir = path.join(tmpConfigDir, 'prompt-scrub', 'sessions');
-  const filePath = path.join(sessionsDir, `${id}.json`);
-  fs.writeFileSync(filePath, '{ corrupt_json: ]', 'utf-8');
+    // Manually corrupt the file
+    const sessionsDir = path.join(tmpConfigDir, 'prompt-scrub', 'sessions');
+    const filePath = path.join(sessionsDir, `${id}.json`);
+    fs.writeFileSync(filePath, '{ corrupt_json: ]', 'utf-8');
 
-  // Suppress the expected console.error/warn output from the corrupt-file handler
-  const originalError = console.error;
-  const originalWarn = console.warn;
-  console.error = () => {};
-  console.warn = () => {};
+    // Suppress the expected console.error/warn output from the corrupt-file handler
+    const originalError = console.error;
+    const originalWarn = console.warn;
+    console.error = () => {};
+    console.warn = () => {};
 
-  const readMap = readSessionMap(id);
+    const readMap = readSessionMap(id);
 
-  console.error = originalError;
-  console.warn = originalWarn;
+    console.error = originalError;
+    console.warn = originalWarn;
 
-  t.deepEqual(readMap, {}); // Should return empty on failure
+    t.deepEqual(readMap, {}); // Should return empty on failure
 
-  // Verify corrupt file was renamed
-  t.false(fs.existsSync(filePath), 'Original file should be renamed');
-  const files = fs.readdirSync(sessionsDir);
-  const corruptFile = files.find((f) => f.includes(`${id}.json.corrupt-`));
-  t.truthy(corruptFile, 'Corrupt file should exist with a timestamp suffix');
-});
+    // Verify corrupt file was renamed
+    t.false(fs.existsSync(filePath), 'Original file should be renamed');
+    const files = fs.readdirSync(sessionsDir);
+    const corruptFile = files.find((f) => f.includes(`${id}.json.corrupt-`));
+    t.truthy(corruptFile, 'Corrupt file should exist with a timestamp suffix');
+  },
+);
 
-test('deleteSessionMap returns true on hit and false on miss', (t) => {
+test.serial('deleteSessionMap returns true on hit and false on miss', (t) => {
   const id = 'delete-test-id';
   writeSessionMap(id, { '«Path_1»': '/var/log' });
 
@@ -98,7 +101,7 @@ test('deleteSessionMap returns true on hit and false on miss', (t) => {
   t.false(deletedMissing);
 });
 
-test('deleteSessionMap handles unlinkSync error', (t) => {
+test.serial('deleteSessionMap handles unlinkSync error', (t) => {
   const id = 'delete-fail-test-id';
   const filePath = getSessionStoragePath(id);
   const dirPath = path.dirname(filePath);
@@ -116,7 +119,7 @@ test('deleteSessionMap handles unlinkSync error', (t) => {
   fs.chmodSync(dirPath, 0o777); // restore
 });
 
-test('listSessions ignores non-.json files', (t) => {
+test.serial('listSessions ignores non-.json files', (t) => {
   const id = 'list-test-id';
   writeSessionMap(id, { '«Phone_1»': '555-1234' });
 
@@ -133,7 +136,7 @@ test('listSessions ignores non-.json files', (t) => {
   t.false(fileIds.includes(`${id}.json`)); // shouldn't match the `.tmp` extension incorrectly
 });
 
-test('listSessions returns sessions sorted by most recently modified', async (t) => {
+test.serial('listSessions returns sessions sorted by most recently modified', async (t) => {
   const id1 = 'sort-test-1';
   const id2 = 'sort-test-2';
 
@@ -151,7 +154,7 @@ test('listSessions returns sessions sorted by most recently modified', async (t)
   t.is(sorted[1]!.id, id1);
 });
 
-test('getSessionStoragePath returns correctly formatted path', (t) => {
+test.serial('getSessionStoragePath returns correctly formatted path', (t) => {
   const p = getSessionStoragePath('123');
   t.true(p.endsWith(path.join('prompt-scrub', 'sessions', '123.json')));
 });
@@ -237,7 +240,7 @@ test.serial('getConfigDir handles linux without XDG_CONFIG_HOME fallback to .con
   process.env.XDG_CONFIG_HOME = originalXdg;
 });
 
-test('writeSessionMap failure path handles unlinkSync error', (t) => {
+test.serial('writeSessionMap failure path handles unlinkSync error', (t) => {
   const id = 'write-fail-test';
   const filePath = getSessionStoragePath(id);
   const tmpPath = `${filePath}.tmp`;
@@ -256,7 +259,7 @@ test('writeSessionMap failure path handles unlinkSync error', (t) => {
   fs.rmSync(tmpPath, { recursive: true, force: true });
 });
 
-test('readSessionMap fails to rename corrupt file gracefully', (t) => {
+test.serial('readSessionMap fails to rename corrupt file gracefully', (t) => {
   const id = 'corrupt-rename-fail-test';
   const filePath = getSessionStoragePath(id);
   const dirPath = path.dirname(filePath);

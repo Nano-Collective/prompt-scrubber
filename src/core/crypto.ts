@@ -42,8 +42,8 @@ export function isEncryptedEnvelope(data: unknown): data is EncryptedEnvelope {
  */
 const derivedKeyCache = new Map<string, Buffer>();
 
-function deriveCacheKey(passphrase: string, salt: Buffer): string {
-  return crypto.createHash('sha256').update(passphrase).update(salt).digest('hex');
+function deriveCacheKey(inputKey: string, salt: Buffer): string {
+  return crypto.createHash('sha256').update(inputKey).update(salt).digest('hex');
 }
 
 export function deriveSessionKey(passphrase: string, salt: Buffer): Buffer {
@@ -102,7 +102,7 @@ export function decryptSession(envelope: EncryptedEnvelope, passphrase: string):
   const key = deriveSessionKey(passphrase, salt);
 
   try {
-    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv, { authTagLength: 16 });
     decipher.setAuthTag(authTag);
     let decrypted = decipher.update(envelope.ciphertext, 'base64', 'utf8');
     decrypted += decipher.final('utf8');

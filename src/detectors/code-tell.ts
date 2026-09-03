@@ -16,6 +16,7 @@ export class CodeTellDetector implements Detector {
       const escapedTerms = sortedTerms.map(escapeRegExp);
 
       const pattern = `(?<![a-zA-Z0-9_$])(?:${escapedTerms.join('|')})(?![a-zA-Z0-9_$])`;
+      // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
       this.regex = new RegExp(pattern, 'g');
     }
   }
