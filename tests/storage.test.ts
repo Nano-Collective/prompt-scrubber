@@ -2,13 +2,16 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'ava';
+import { SessionDecryptionError, clearDerivedKeyCache } from '../src/core/crypto.js';
+import { clearCachedEncryptionKey, setCachedEncryptionKey } from '../src/core/key-manager.js';
 import {
   deleteSessionMap,
+  gcSessions,
   getSessionStoragePath,
+  isSessionEncrypted,
   listSessions,
   readSessionMap,
   writeSessionMap,
-  gcSessions,
 } from '../src/session/storage.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -32,6 +35,10 @@ test.after.always(() => {
   if (fs.existsSync(tmpConfigDir)) {
     fs.rmSync(tmpConfigDir, { recursive: true, force: true });
   }
+  // Reset any globals tests may have set so other files run clean.
+  clearCachedEncryptionKey();
+  clearDerivedKeyCache();
+  delete process.env.PROMPT_SCRUB_KEY;
 });
 
 test('readSessionMap returns {} on missing file', (t) => {
@@ -333,4 +340,123 @@ test.serial('gcSessions ignores errors (e.g. concurrent deletion)', (t) => {
 
   // Cleanup
   fs.rmdirSync(oldPath);
+});
+
+// ---------------------------------------------------------------------------
+// Encryption-specific tests. These mutate the global config file and the
+// PROMPT_SCRUB_KEY env var, so they run as `test.serial` to keep AVA's
+// concurrent worker pool from interleaving them.
+// ---------------------------------------------------------------------------
+
+test.serial('writeSessionMap encrypts when enabled and decrypts successfully', (t) => {
+  const id = 'encrypted-test-1';
+  const map = { '«Secret_1»': 'sk-1234' };
+
+  clearCachedEncryptionKey();
+  setCachedEncryptionKey('test-key');
+  process.env.PROMPT_SCRUB_KEY = 'test-key';
+
+  // Write the global config to enable encryption
+  const globalConfigPath = path.join(tmpConfigDir, 'prompt-scrub', 'config.json');
+  fs.mkdirSync(path.dirname(globalConfigPath), { recursive: true });
+  fs.writeFileSync(globalConfigPath, JSON.stringify({ encryptionEnabled: true }));
+
+  writeSessionMap(id, map);
+
+  // Verify it's encrypted on disk — plaintext must NOT appear anywhere in the file
+  const rawData = fs.readFileSync(getSessionStoragePath(id), 'utf-8');
+  t.false(rawData.includes('sk-1234'), 'plaintext secret must not appear on disk');
+  t.false(rawData.includes('«Secret_1»'), 'plaintext placeholder must not appear on disk');
+  const parsed = JSON.parse(rawData);
+  t.is(parsed.encrypted, true);
+
+  // Read back via the same key
+  const readMap = readSessionMap(id);
+  t.deepEqual(readMap, map);
+
+  // Cleanup
+  delete process.env.PROMPT_SCRUB_KEY;
+  clearCachedEncryptionKey();
+  fs.rmSync(globalConfigPath);
+});
+
+test.serial('readSessionMap throws SessionDecryptionError when key is wrong or missing', (t) => {
+  const id = 'encrypted-test-2';
+  const map = { '«Secret_1»': 'sk-1234' };
+
+  setCachedEncryptionKey('test-key');
+  process.env.PROMPT_SCRUB_KEY = 'test-key';
+
+  const globalConfigPath = path.join(tmpConfigDir, 'prompt-scrub', 'config.json');
+  fs.writeFileSync(globalConfigPath, JSON.stringify({ encryptionEnabled: true }));
+
+  writeSessionMap(id, map);
+
+  // Missing key: clear both cache and env so readSessionMap must ask for one.
+  clearCachedEncryptionKey();
+  delete process.env.PROMPT_SCRUB_KEY;
+
+  t.throws(() => readSessionMap(id), {
+    instanceOf: SessionDecryptionError,
+    message: /no key is available/i,
+  });
+
+  // Wrong key: re-cache a deliberately wrong key.
+  setCachedEncryptionKey('wrong-key');
+  process.env.PROMPT_SCRUB_KEY = 'wrong-key';
+
+  t.throws(() => readSessionMap(id), {
+    instanceOf: SessionDecryptionError,
+    message: /Unable to decrypt session/i,
+  });
+
+  // Cleanup
+  clearCachedEncryptionKey();
+  delete process.env.PROMPT_SCRUB_KEY;
+  fs.rmSync(globalConfigPath);
+});
+
+test.serial('disabling encryptionEnabled does NOT downgrade an already-encrypted session', (t) => {
+  const id = 'encrypted-no-downgrade';
+
+  // First, write the session with encryption on.
+  setCachedEncryptionKey('persisted-key');
+  process.env.PROMPT_SCRUB_KEY = 'persisted-key';
+  const globalConfigPath = path.join(tmpConfigDir, 'prompt-scrub', 'config.json');
+  fs.writeFileSync(globalConfigPath, JSON.stringify({ encryptionEnabled: true }));
+
+  writeSessionMap(id, { '«Secret_1»': 'persisted-value' });
+
+  // Now flip the config off and overwrite the same session.
+  fs.writeFileSync(globalConfigPath, JSON.stringify({ encryptionEnabled: false }));
+  writeSessionMap(id, { '«Secret_1»': 'persisted-value' });
+
+  // The file must still be encrypted — silent downgrade would lose access for
+  // users who keep toggling the setting.
+  t.true(isSessionEncrypted(id), 'session must remain encrypted after rewrite');
+  t.true(fs.readFileSync(getSessionStoragePath(id), 'utf-8').includes('"encrypted": true'));
+
+  // Cleanup
+  clearCachedEncryptionKey();
+  delete process.env.PROMPT_SCRUB_KEY;
+  fs.rmSync(globalConfigPath);
+});
+
+test.serial('isSessionEncrypted is true for envelopes and false for plaintext', (t) => {
+  setCachedEncryptionKey('iso-key');
+  process.env.PROMPT_SCRUB_KEY = 'iso-key';
+  const globalConfigPath = path.join(tmpConfigDir, 'prompt-scrub', 'config.json');
+  fs.writeFileSync(globalConfigPath, JSON.stringify({ encryptionEnabled: true }));
+
+  writeSessionMap('iso-enc', { '«Secret_1»': 'sk-1' });
+  t.true(isSessionEncrypted('iso-enc'));
+
+  fs.writeFileSync(globalConfigPath, JSON.stringify({ encryptionEnabled: false }));
+  writeSessionMap('iso-plain', { '«Secret_1»': 'sk-2' });
+  t.false(isSessionEncrypted('iso-plain'));
+
+  // Cleanup
+  clearCachedEncryptionKey();
+  delete process.env.PROMPT_SCRUB_KEY;
+  fs.rmSync(globalConfigPath);
 });

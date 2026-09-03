@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import type { Command } from 'commander';
+import { resolveEncryptionKeyOrExit } from '../../core/cli-key-resolver.js';
 import { loadConfig } from '../../core/config.js';
+import { isSessionEncrypted } from '../../session/storage.js';
 
 import { loadConfiguredRulePacks } from '../../core/rule-packs.js';
 import { scrub } from '../../core/scrub.js';
@@ -125,6 +127,19 @@ export function setupScrubCommand(program: Command) {
       if (!input) {
         process.exit(0);
         return;
+      }
+
+      // Pull the encryption key up-front when we'll need to write a session.
+      // We resolve before reading the file so a wrong key fails fast without
+      // leaking the original sensitive content via the scrubbed output.
+      const config = loadConfig();
+      const sessionIsEncrypted =
+        Boolean(config.encryptionEnabled) ||
+        (typeof options.sessionId === 'string' && options.sessionId.length > 0
+          ? isSessionEncrypted(options.sessionId)
+          : false);
+      if (sessionIsEncrypted) {
+        await resolveEncryptionKeyOrExit();
       }
 
       const result = await handleScrub(input, options);

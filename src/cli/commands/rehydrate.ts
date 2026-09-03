@@ -1,5 +1,8 @@
 import { readFileSync } from 'node:fs';
 import type { Command } from 'commander';
+import { resolveEncryptionKeyOrExit } from '../../core/cli-key-resolver.js';
+import { SessionDecryptionError } from '../../core/crypto.js';
+import { isSessionEncrypted } from '../../session/storage.js';
 import { rehydrate } from '../../core/rehydrate.js';
 
 export function handleRehydrate(text: string, options: { sessionId: string }) {
@@ -16,7 +19,7 @@ export function setupRehydrateCommand(program: Command) {
     .description('Rehydrate a file using stored session')
     .argument('[file]', 'File to rehydrate. If omitted, reads from stdin.')
     .requiredOption('--session-id <id>', 'Resume or target a specific session')
-    .action((file, options) => {
+    .action(async (file, options) => {
       let input = '';
 
       if (file) {
@@ -43,20 +46,33 @@ export function setupRehydrateCommand(program: Command) {
         return;
       }
 
-      const result = handleRehydrate(input, options);
+      if (isSessionEncrypted(options.sessionId)) {
+        await resolveEncryptionKeyOrExit();
+      }
 
-      // Print rehydrated content to stdout
-      const outStr =
-        typeof result.content === 'string'
-          ? result.content
-          : JSON.stringify(result.content, null, 2);
-      process.stdout.write(outStr);
+      try {
+        const result = handleRehydrate(input, options);
 
-      // Print any warnings to stderr
-      if (result.warnings && result.warnings.length > 0) {
-        for (const warning of result.warnings) {
-          console.error(warning);
+        // Print rehydrated content to stdout
+        const outStr =
+          typeof result.content === 'string'
+            ? result.content
+            : JSON.stringify(result.content, null, 2);
+        process.stdout.write(outStr);
+
+        // Print any warnings to stderr
+        if (result.warnings && result.warnings.length > 0) {
+          for (const warning of result.warnings) {
+            console.error(warning);
+          }
         }
+      } catch (err: unknown) {
+        if (err instanceof SessionDecryptionError) {
+          console.error(err.message);
+          process.exit(1);
+          return;
+        }
+        throw err;
       }
     });
 }
