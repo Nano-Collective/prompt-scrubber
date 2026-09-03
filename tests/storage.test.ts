@@ -141,9 +141,15 @@ test.serial('listSessions returns sessions sorted by most recently modified', as
   const id2 = 'sort-test-2';
 
   writeSessionMap(id1, { '«Email_1»': 'a@b.com' });
-  // Need a small delay so mtime is strictly greater
-  await new Promise((r) => setTimeout(r, 10));
   writeSessionMap(id2, { '«Email_1»': 'c@d.com' });
+
+  // Explicitly ensure id1 is older than id2
+  const p1 = getSessionStoragePath(id1);
+  const p2 = getSessionStoragePath(id2);
+  const now = new Date();
+  const past = new Date(now.getTime() - 10000);
+  fs.utimesSync(p1, past, past);
+  fs.utimesSync(p2, now, now);
 
   const sessions = listSessions();
   // Filter out other tests' sessions

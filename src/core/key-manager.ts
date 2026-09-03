@@ -6,7 +6,7 @@ let cachedKey: string | null = null;
 /**
  * Prompts the user for a password securely (input is muted).
  */
-async function promptPassword(query: string): Promise<string> {
+export async function promptPassword(query: string): Promise<string> {
   if (!process.stdout.isTTY || !process.stdin.isTTY) {
     throw new Error(
       'Encryption is enabled but no PROMPT_SCRUB_KEY was provided. Cannot prompt for password interactively because stdin or stdout is redirected.',
@@ -35,10 +35,10 @@ async function promptPassword(query: string): Promise<string> {
     process.stdout.write(query);
     muted = true;
 
-    rl.question('', (password) => {
+    rl.question('', (inputKey) => {
       rl.close();
       process.stdout.write('\n');
-      resolve(password);
+      resolve(inputKey);
     });
   });
 }
@@ -46,11 +46,11 @@ async function promptPassword(query: string): Promise<string> {
 /**
  * Validates and returns a normalised passphrase, throwing if empty/whitespace.
  */
-function normalisePassphrase(passphrase: string): string {
-  if (typeof passphrase !== 'string' || passphrase.trim().length === 0) {
-    throw new Error('A valid passphrase is required for session encryption.');
+export function normaliseInputKey(inputKey: string): string {
+  if (typeof inputKey !== 'string' || inputKey.trim().length === 0) {
+    throw new Error('A valid key is required for session encryption.');
   }
-  return passphrase;
+  return inputKey;
 }
 
 /**
@@ -72,14 +72,14 @@ export async function getEncryptionKey(options: { confirm?: boolean } = {}): Pro
     return setCachedEncryptionKey(process.env.PROMPT_SCRUB_KEY);
   }
 
-  const first = await promptPassword('Enter session encryption passphrase: ');
-  const normalisedFirst = normalisePassphrase(first);
+  const first = await promptPassword('Enter session encryption key: ');
+  const normalisedFirst = normaliseInputKey(first);
 
   if (options.confirm) {
-    const second = await promptPassword('Confirm session encryption passphrase: ');
-    const normalisedSecond = normalisePassphrase(second);
+    const second = await promptPassword('Confirm session encryption key: ');
+    const normalisedSecond = normaliseInputKey(second);
     if (normalisedFirst !== normalisedSecond) {
-      throw new Error('Passphrases do not match. Aborting before writing any encrypted session.');
+      throw new Error('Keys do not match. Aborting before writing any encrypted session.');
     }
   }
 
@@ -99,11 +99,11 @@ export function getCachedKey(): string | null {
  * var or interactive prompt. Bypasses validation to allow callers to supply
  * empty/whitespace keys deliberately when needed for tests.
  */
-export function setCachedEncryptionKey(passphrase: string): string {
-  if (typeof passphrase !== 'string' || passphrase.length === 0) {
+export function setCachedEncryptionKey(inputKey: string): string {
+  if (typeof inputKey !== 'string' || inputKey.length === 0) {
     throw new Error('Encryption key must be a non-empty string.');
   }
-  cachedKey = passphrase;
+  cachedKey = inputKey;
   return cachedKey;
 }
 

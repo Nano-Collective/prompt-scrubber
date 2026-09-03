@@ -137,6 +137,21 @@ test.serial('CLI: sessions encrypt migrates plaintext sessions to encrypted', (t
   t.false(after.includes('bob@example.com'), 'plaintext must be gone after migration');
   const parsed = JSON.parse(after);
   t.is(parsed.encrypted, true);
+
+  // Now run encrypt again to cover the "already encrypted" (skipped) branch
+  const migrateAgain = runCli(['sessions', 'encrypt'], undefined, { PROMPT_SCRUB_KEY: 'migrate-key' });
+  t.is(migrateAgain.status, 0);
+  t.true(migrateAgain.stdout.includes('0 session(s), 1 already encrypted'));
+});
+
+test.serial('CLI: sessions encrypt handles empty sessions list gracefully', (t) => {
+  fs.rmSync(tmpConfigDir, { recursive: true, force: true });
+  fs.mkdirSync(tmpConfigDir, { recursive: true });
+  writeConfig({ encryptionEnabled: true });
+
+  const result = runCli(['sessions', 'encrypt'], undefined, { PROMPT_SCRUB_KEY: 'k' });
+  t.is(result.status, 0);
+  t.true(result.stdout.includes('No sessions to encrypt.'));
 });
 
 test.serial('CLI: sessions encrypt requires encryptionEnabled', (t) => {
