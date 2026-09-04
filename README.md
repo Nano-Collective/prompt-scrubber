@@ -13,14 +13,14 @@ Built by the [Nano Collective](https://nanocollective.org) — a community colle
 ![Stars](https://github.com/Nano-Collective/prompt-scrubber/raw/main/badges/stars.svg)
 ![Forks](https://github.com/Nano-Collective/prompt-scrubber/raw/main/badges/forks.svg)
 
-It maps sensitive data (emails, secrets, paths, URLs, phone numbers) to stable placeholders locally, allowing you to rehydrate the model's responses back to their original forms securely.
+It maps sensitive data (emails, secrets, paths, URLs, phone numbers, credit cards, IBANs, SSNs, IP addresses) to stable placeholders locally, allowing you to rehydrate the model's responses back to their original forms securely.
 
 ## What it is / What it is not
 
 `prompt-scrub` reduces identity leakage at the **content layer**. It is **partial defence, not anonymity**.
 
 **What it does:**
-- Detects and replaces common identifying content (emails, paths, phone numbers, secrets, URLs) before your prompt leaves your machine.
+- Detects and replaces common identifying content (emails, paths, phone numbers, secrets, URLs, credit cards, IBANs, SSNs, IP addresses) before your prompt leaves your machine.
 - Maps each value to a stable placeholder so the model's response can be rehydrated locally.
 - Gives you an `inspect` command so you can see exactly what was detected and what was missed before you commit to sending.
 
