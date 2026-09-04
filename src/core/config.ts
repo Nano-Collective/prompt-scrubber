@@ -5,6 +5,7 @@ import * as path from 'node:path';
 export interface PromptScrubConfig {
   rulePacks?: string[];
   urlAllowlist?: string[];
+  minConfidence?: number;
   sessionTtlDays?: number;
 }
 
@@ -19,11 +20,38 @@ export function createDefaultConfig(): Required<PromptScrubConfig> {
   return {
     rulePacks: [],
     urlAllowlist: [],
+    // 0 keeps every finding, so an existing install behaves exactly as before.
+    minConfidence: 0,
     sessionTtlDays: 7,
   };
 }
 
-const CONFIG_KEYS = Object.keys(createDefaultConfig());
+type ConfigKey = keyof Required<PromptScrubConfig>;
+
+/**
+ * One validator per config key, returning an error message or null.
+ *
+ * Typed as a total `Record<ConfigKey, …>` on purpose: adding a key to
+ * `PromptScrubConfig` without deciding how it is validated becomes a type
+ * error here, rather than a key that silently accepts anything. `CONFIG_KEYS`
+ * is derived from it so the "supported keys" list cannot drift either.
+ */
+const VALIDATORS: Record<ConfigKey, (value: unknown) => string | null> = {
+  rulePacks: (value) => validateStringArray('rulePacks', value),
+  urlAllowlist: (value) => validateStringArray('urlAllowlist', value),
+  minConfidence: (value) => {
+    if (isConfidence(value)) return null;
+    // Report an out-of-range number by value; anything else by its type.
+    const received = typeof value === 'number' ? `${value}` : describeType(value);
+    return `"minConfidence" must be a number between 0 and 1, received ${received}.`;
+  },
+  sessionTtlDays: (value) =>
+    typeof value === 'number' && Number.isFinite(value) && value > 0
+      ? null
+      : `"sessionTtlDays" must be a positive number, received ${describeType(value)}.`,
+};
+
+const CONFIG_KEYS = Object.keys(VALIDATORS) as ConfigKey[];
 
 /**
  * Determines the base configuration directory based on the OS.
@@ -69,6 +97,20 @@ function toStringArray(value: unknown): string[] {
   return Array.from(new Set(value.filter((item): item is string => typeof item === 'string')));
 }
 
+function isConfidence(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
+}
+
+function validateStringArray(key: string, value: unknown): string | null {
+  if (!Array.isArray(value)) {
+    return `"${key}" must be an array of strings, received ${describeType(value)}.`;
+  }
+  if (value.some((item) => typeof item !== 'string')) {
+    return `"${key}" must contain only strings.`;
+  }
+  return null;
+}
+
 function validateConfig(data: unknown): string[] {
   if (data === null || typeof data !== 'object' || Array.isArray(data)) {
     return [`Expected a JSON object, received ${describeType(data)}.`];
@@ -78,27 +120,17 @@ function validateConfig(data: unknown): string[] {
   const record = data as Record<string, unknown>;
 
   for (const key of Object.keys(record)) {
-    if (!CONFIG_KEYS.includes(key)) {
+    if (!(CONFIG_KEYS as string[]).includes(key)) {
       errors.push(`Unknown key "${key}". Supported keys: ${CONFIG_KEYS.join(', ')}.`);
     }
   }
 
   for (const key of CONFIG_KEYS) {
     const value = record[key];
+    // An absent key falls back to its default; only a present one is checked.
     if (value === undefined) continue;
-
-    if (key === 'sessionTtlDays') {
-      if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
-        errors.push(`"${key}" must be a positive number, received ${describeType(value)}.`);
-      }
-      continue;
-    }
-
-    if (!Array.isArray(value)) {
-      errors.push(`"${key}" must be an array of strings, received ${describeType(value)}.`);
-    } else if (value.some((item) => typeof item !== 'string')) {
-      errors.push(`"${key}" must contain only strings.`);
-    }
+    const error = VALIDATORS[key](value);
+    if (error) errors.push(error);
   }
 
   return errors;
@@ -134,6 +166,7 @@ export function readConfigFile(): ConfigFileState {
     config: {
       rulePacks: toStringArray(record.rulePacks),
       urlAllowlist: toStringArray(record.urlAllowlist),
+      minConfidence: isConfidence(record.minConfidence) ? record.minConfidence : 0,
       sessionTtlDays:
         typeof record.sessionTtlDays === 'number' &&
         Number.isFinite(record.sessionTtlDays) &&

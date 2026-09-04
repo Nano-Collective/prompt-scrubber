@@ -27,11 +27,11 @@ function priorityOf(finding: Finding): number {
  *
  * Returns findings sorted by start position ascending.
  */
-export function resolveCollisions(findings: Finding[]): Finding[] {
+export function resolveCollisions<T extends Finding>(findings: T[]): T[] {
   // Sort by start position so we process left-to-right
   const sorted = [...findings].sort((a, b) => a.span[0] - b.span[0]);
 
-  const accepted: Finding[] = [];
+  const accepted: T[] = [];
 
   for (const candidate of sorted) {
     const overlapIdx = accepted.findIndex(

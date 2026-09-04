@@ -58,3 +58,11 @@ test('does not fire on plain text', (t) => {
   const findings = detector.detect('I live down the street from here.');
   t.is(findings.length, 0);
 });
+
+// --- Confidence ---
+
+test('scores an address as a heuristic match', (t) => {
+  const findings = detector.detect('Ship it to 123 Main Street please');
+  t.is(findings[0]?.confidence, 0.7);
+  t.is(findings[0]?.method, 'heuristic');
+});

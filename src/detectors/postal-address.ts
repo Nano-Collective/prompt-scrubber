@@ -5,6 +5,10 @@ import type { Detector, Finding } from '../types/index.js';
 const ADDRESS_REGEX =
   /\b\d{1,6}[A-Za-z]?\s+[A-Za-z0-9\s.,'-]+?\b(?:street|st|road|rd|avenue|ave|boulevard|blvd|lane|ln|drive|dr|court|ct|place|pl|square|sq|terrace|ter)\b\.?/gi;
 
+// Street-suffix matching is a heuristic: "5 Church St" is an address, but so is
+// the shape of "12 Monkeys Ave" in prose. Deliberately below the 0.8 mark.
+const ADDRESS_CONFIDENCE = 0.7;
+
 export class PostalAddressDetector implements Detector {
   readonly name = 'AddressDetector';
 
@@ -22,6 +26,8 @@ export class PostalAddressDetector implements Detector {
         span: [match.index, match.index + value.length],
         value,
         placeholderPrefix: 'Address',
+        confidence: ADDRESS_CONFIDENCE,
+        method: 'heuristic',
       });
     }
 

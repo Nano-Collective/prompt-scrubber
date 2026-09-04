@@ -256,3 +256,95 @@ test.serial('CLI: sessions rm fails gracefully with invalid session id', (t) => 
   t.not(result.status, 0);
   t.true(result.stderr.includes('not found'));
 });
+
+test('CLI: inspect prints the confidence and method of each entity', (t) => {
+  const result = runCli(['inspect'], 'Contact me at alice@example.com');
+  t.is(result.status, 0);
+  t.true(result.stdout.includes('confidence 0.95 exact-pattern'));
+});
+
+test('CLI: inspect --min-confidence hides findings below the threshold', (t) => {
+  const input = 'Call 555-123-4567 or mail alice@example.com';
+
+  const all = runCli(['inspect'], input);
+  t.true(all.stdout.includes('[Phone]'));
+  t.true(all.stdout.includes('[Email]'));
+
+  const filtered = runCli(['inspect', '--min-confidence', '0.9'], input);
+  t.is(filtered.status, 0);
+  const [detected, suppressed] = filtered.stdout.split('Suppressed below');
+  // The phone drops out of what would be scrubbed...
+  t.false(detected?.includes('[Phone]'));
+  t.true(detected?.includes('[Email]'));
+  // ...and is named as still being in the clear rather than vanishing.
+  t.true(suppressed?.includes('[Phone]'));
+});
+
+test('CLI: scrub --min-confidence says what it suppressed', (t) => {
+  // The exact command from the review.
+  const result = runCli(
+    ['scrub', '--min-confidence', '0.9'],
+    'mail alice@example.com and call 555-123-4567',
+  );
+
+  t.is(result.status, 0);
+  t.is(result.stdout, 'mail «Email_1» and call 555-123-4567');
+  t.true(
+    result.stderr.includes(
+      'Scrubbed: 1 entity (1 Email); 1 suppressed below --min-confidence 0.9 (1 Phone)',
+    ),
+  );
+});
+
+test('CLI: a run where the threshold drops everything still says so', (t) => {
+  // stdout is byte-identical to a prompt with nothing sensitive in it, so the
+  // summary is the only thing standing between the user and a silent leak.
+  const result = runCli(['scrub', '--min-confidence', '0.95'], 'call 555-123-4567');
+
+  t.is(result.status, 0);
+  t.is(result.stdout, 'call 555-123-4567');
+  t.true(
+    result.stderr.includes(
+      'Scrubbed: 0 entities; 1 suppressed below --min-confidence 0.95 (1 Phone)',
+    ),
+  );
+});
+
+test('CLI: the summary is unchanged without a threshold', (t) => {
+  const result = runCli(['scrub'], 'mail alice@example.com and call 555-123-4567');
+
+  t.is(result.status, 0);
+  t.true(result.stderr.includes('Scrubbed: 2 entities (1 Email, 1 Phone)'));
+  t.false(result.stderr.includes('suppressed'));
+});
+
+test('CLI: -q suppresses the summary, threshold or not', (t) => {
+  const result = runCli(['scrub', '-q', '--min-confidence', '0.9'], 'call 555-123-4567');
+
+  t.is(result.status, 0);
+  t.false(result.stderr.includes('suppressed'));
+});
+
+test('CLI: --min-confidence rejects a value outside the 0-1 range', (t) => {
+  const result = runCli(['scrub', '--min-confidence', '2'], 'mail alice@example.com');
+  t.is(result.status, 1);
+  t.true(result.stderr.includes('Expected a number between 0 and 1.'));
+});
+
+test('CLI: --min-confidence rejects trailing garbage rather than truncating it', (t) => {
+  // parseFloat would read this as 0.9 and scrub at a threshold the user never
+  // typed. Failing loudly is the only safe reading.
+  const result = runCli(['scrub', '--min-confidence', '0.9zzz'], 'mail alice@example.com');
+  t.is(result.status, 1);
+  t.true(result.stderr.includes('Expected a number between 0 and 1.'));
+});
+
+test('CLI: scrub --min-confidence changes the inspect hash to match', (t) => {
+  const input = 'Call 555-123-4567 or mail alice@example.com';
+  const scrubbed = runCli(['scrub', '--min-confidence', '0.9'], input);
+  const hash = runCli(['inspect', '--min-confidence', '0.9', '--hash'], input);
+
+  t.is(scrubbed.stdout, 'Call 555-123-4567 or mail «Email_1»');
+  t.is(hash.stdout.trim().length, 64);
+  t.not(hash.stdout.trim(), runCli(['inspect', '--hash'], input).stdout.trim());
+});
