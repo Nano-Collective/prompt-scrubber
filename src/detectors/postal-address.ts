@@ -1,9 +1,9 @@
 import type { Detector, Finding } from '../types/index.js';
 
-// Conservative matching only: number + word(s) + street suffix.
+// Conservative matching only: number + up to five street-name words + street suffix.
 // Examples: 123 Main Street, 45 Oak Road, 1600 Pennsylvania Ave., 10 Downing St, 221B Baker St.
 const ADDRESS_REGEX =
-  /\b\d{1,6}[A-Za-z]?\s+[A-Za-z0-9\s.,'-]+?\b(?:street|st|road|rd|avenue|ave|boulevard|blvd|lane|ln|drive|dr|court|ct|place|pl|square|sq|terrace|ter)\b\.?/gi;
+  /\b\d{1,6}[A-Za-z]?\s+(?:[A-Za-z0-9][A-Za-z0-9.,'-]*\s+){1,5}(?:street|st|road|rd|avenue|ave|boulevard|blvd|lane|ln|drive|dr|court|ct|place|pl|square|sq|terrace|ter)\b\.?/gi;
 
 export class PostalAddressDetector implements Detector {
   readonly name = 'AddressDetector';
