@@ -9,7 +9,7 @@ import { SessionManager } from '../../session/session-manager.js';
 import type { Finding } from '../../types/index.js';
 import { emitError } from '../output.js';
 
-export interface InspectJsonOutput {
+interface InspectJsonOutput {
   entities: Array<{
     category: string;
     value: string;
@@ -95,7 +95,7 @@ export function computeHash(
   return { hash, placeholderMap };
 }
 
-export function toInspectJson(
+function toInspectJson(
   findings: Finding[],
   hash: string,
   placeholderMap: Map<number, string>,
