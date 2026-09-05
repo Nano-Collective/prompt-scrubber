@@ -29,6 +29,8 @@ The summary counts replacements, not unique values: a value that appears three t
 - `--session-id <id>`: Reuse an existing session map. If omitted, a new UUID is generated.
 - `--disable <detectors>`: Comma-separated list of detectors to disable (e.g. `EmailDetector,PhoneDetector`).
 - `-q, --quiet`: Suppress the summary. The `Session ID:` line is still printed, since scripts need it to rehydrate.
+- `--json` : Output result as structured JSON instead of text. 
+- `--include-session-map` : Include `sessionMap` in JSON output (⚠️ contains sensitive values).
 
 ### `prompt-scrub rehydrate [file]`
 Reads a scrubbed response from `stdin` or a file and prints the rehydrated response to `stdout`.
@@ -38,6 +40,7 @@ If the model hallucinates a placeholder that does not exist in the session map (
 
 **Options:**
 - `--session-id <id>` (Required): The session ID used during the `scrub` phase to restore original values.
+- `--json` : Output result as structured JSON instead of text.
 
 ### `prompt-scrub inspect [file]`
 Reads a message from `stdin` or a file and prints a human-readable diff of the transformations the scrubber will apply. Also prints a SHA-256 hash of the final byte-stable output for verifying prompt cache deterministic prefix stability.
@@ -45,6 +48,7 @@ Reads a message from `stdin` or a file and prints a human-readable diff of the t
 **Options:**
 - `--disable <detectors>`: Comma-separated list of detectors to disable.
 - `--hash`: Print *only* the SHA-256 hash for scripting purposes.
+- `--json` : Output result as structured JSON instead of text.
 
 ## Watch Mode
 
@@ -169,3 +173,45 @@ Prints the current version of the CLI.
 
 ### `prompt-scrub --help`
 Prints standard help documentation and available commands.
+
+## JSON Output Formats
+
+### scrub --json
+```json
+{
+  "scrubbedContent": "Email «Email_1» and «Email_2»",
+  "sessionId": "uuid-here",
+  "stats": {
+    "totalEntities": 2,
+    "byCategory": { "Email": 2 }
+  },
+  // Optional (only with --include-session-map):
+  // "sessionMap": { "«Email_1»": "bob@example.com", ... }
+}
+```
+### inspect --json
+```json
+{
+  "entities": [
+    {
+      "category": "Email",
+      "value": "alice@example.com",
+      "placeholder": "«Email_1»",
+      "span": [0, 20]
+    }
+  ],
+  "hash": "sha256-hex-here"
+}
+```
+### rehydrate --json
+```json
+{
+  "content": "Email alice@example.com and bob@example.com",
+  "sessionId": "uuid-here",
+  "warnings": []
+}
+```
+### Error envelope (any command with --json, exit code 1)
+```json
+{ "error": "message describing what went wrong" }
+```

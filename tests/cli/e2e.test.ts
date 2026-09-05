@@ -256,3 +256,278 @@ test.serial('CLI: sessions rm fails gracefully with invalid session id', (t) => 
   t.not(result.status, 0);
   t.true(result.stderr.includes('not found'));
 });
+
+test.serial('CLI: scrub --json returns structured output', (t) => {
+  const result = runCli(['scrub', '--json', '--include-session-map'], 'Contact alice@example.com');
+
+  t.is(result.status, 0);
+
+  const output = JSON.parse(result.stdout) as {
+    scrubbedContent: string;
+    sessionId: string;
+    sessionMap: Record<string, string>;
+    stats: { totalEntities: number };
+  };
+
+  t.is(output.scrubbedContent, 'Contact «Email_1»');
+  t.truthy(output.sessionId);
+  t.deepEqual(output.sessionMap, {
+    '«Email_1»': 'alice@example.com',
+  });
+  t.is(output.stats.totalEntities, 1);
+});
+
+test.serial('CLI: inspect --json returns entities and hash', (t) => {
+  const result = runCli(['inspect', '--json'], 'Contact alice@example.com');
+
+  t.is(result.status, 0);
+
+  const output = JSON.parse(result.stdout) as {
+    entities: Array<{
+      category: string;
+      value: string;
+      placeholder: string;
+      span: [number, number];
+    }>;
+    hash: string;
+  };
+
+  t.is(output.entities.length, 1);
+  t.is(output.entities[0]?.category, 'Email');
+  t.is(output.entities[0]?.value, 'alice@example.com');
+  t.is(output.entities[0]?.placeholder, '«Email_1»');
+  t.regex(output.hash, /^[a-f0-9]{64}$/);
+});
+
+test.serial('CLI: rehydrate --json returns restored content', (t) => {
+  const scrubResult = runCli(['scrub'], 'Contact alice@example.com');
+  const sessionId = scrubResult.stderr.match(/Session ID: (\S+)/)?.[1];
+
+  t.truthy(sessionId);
+
+  const result = runCli(['rehydrate', '--session-id', sessionId!, '--json'], 'Contact «Email_1»');
+
+  t.is(result.status, 0);
+
+  const output = JSON.parse(result.stdout) as {
+    content: string;
+    sessionId: string;
+    warnings: string[];
+  };
+
+  t.is(output.content, 'Contact alice@example.com');
+  t.is(output.sessionId, sessionId);
+  t.deepEqual(output.warnings, []);
+});
+
+test.serial('CLI: scrub --json dedupes repeated values to same placeholder', (t) => {
+  const input = 'Email alice@example.com and alice@example.com and bob@example.com';
+  const result = runCli(['scrub', '--json', '--include-session-map'], input);
+
+  t.is(result.status, 0);
+
+  const output = JSON.parse(result.stdout) as {
+    scrubbedContent: string;
+    sessionMap: Record<string, string>;
+  };
+
+  // Find placeholders for alice and bob
+  const alicePlaceholder = Object.entries(output.sessionMap).find(
+    ([_, value]) => value === 'alice@example.com',
+  )?.[0];
+  const bobPlaceholder = Object.entries(output.sessionMap).find(
+    ([_, value]) => value === 'bob@example.com',
+  )?.[0];
+
+  t.truthy(alicePlaceholder, 'alice placeholder not found');
+  t.truthy(bobPlaceholder, 'bob placeholder not found');
+  t.not(alicePlaceholder, bobPlaceholder); // They should be different
+
+  // Verify the scrubbed content uses the same placeholder for alice twice
+  const matches = output.scrubbedContent.match(/«Email_\d»/g);
+  t.is(matches?.[0], matches?.[1]); // First two should be identical (both alice)
+  t.not(matches?.[1], matches?.[2]); // Third should be different (bob)
+});
+
+test.serial('CLI: inspect --json dedupes repeated values to same placeholder', (t) => {
+  const input = 'Email alice@example.com and alice@example.com and bob@example.com';
+  const result = runCli(['inspect', '--json'], input);
+
+  t.is(result.status, 0);
+
+  const output = JSON.parse(result.stdout) as {
+    entities: Array<{ value: string; placeholder: string }>;
+  };
+
+  t.is(output.entities.length, 3);
+  // alice appears at indices 0 and 1
+  t.is(output.entities[0]?.value, 'alice@example.com');
+  t.is(output.entities[1]?.value, 'alice@example.com');
+  t.is(output.entities[2]?.value, 'bob@example.com');
+
+  // Both alice entities should have the SAME placeholder
+  t.is(output.entities[0]?.placeholder, output.entities[1]?.placeholder);
+  // Bob should have a DIFFERENT placeholder
+  t.not(output.entities[1]?.placeholder, output.entities[2]?.placeholder); // ← CHANGED from t.notEqual
+});
+
+test.serial('CLI: scrub --json with empty input emits valid JSON', (t) => {
+  const result = runCli(['scrub', '--json'], '');
+
+  t.is(result.status, 0);
+  t.truthy(result.stdout);
+
+  const output = JSON.parse(result.stdout) as {
+    scrubbedContent: string;
+    stats: { totalEntities: number };
+  };
+
+  t.is(output.scrubbedContent, '');
+  t.is(output.stats.totalEntities, 0);
+});
+
+test.serial('CLI: inspect --json with empty input emits valid JSON', (t) => {
+  const result = runCli(['inspect', '--json'], '');
+
+  t.is(result.status, 0);
+  t.truthy(result.stdout);
+
+  const output = JSON.parse(result.stdout) as {
+    entities: unknown[];
+    hash: string;
+  };
+
+  t.deepEqual(output.entities, []);
+  t.is(output.hash, 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'); // SHA-256 of empty string
+});
+
+test.serial('CLI: rehydrate --json with empty input emits valid JSON', (t) => {
+  const result = runCli(['rehydrate', '--session-id', 'dummy-id', '--json'], '');
+
+  t.is(result.status, 0);
+  t.truthy(result.stdout);
+
+  const output = JSON.parse(result.stdout) as {
+    content: string;
+    warnings: unknown[];
+  };
+
+  t.is(output.content, '');
+  t.deepEqual(output.warnings, []);
+});
+
+test.serial('CLI: scrub --json without --include-session-map omits sessionMap', (t) => {
+  const result = runCli(['scrub', '--json'], 'Contact alice@example.com');
+
+  t.is(result.status, 0);
+
+  const output = JSON.parse(result.stdout) as Record<string, unknown>;
+
+  t.falsy(output.sessionMap); // Should not be present
+  t.truthy(output.scrubbedContent);
+  t.truthy(output.sessionId);
+  t.truthy(output.stats);
+});
+
+test.serial('CLI: scrub --json with --include-session-map includes sessionMap', (t) => {
+  const result = runCli(['scrub', '--json', '--include-session-map'], 'Contact alice@example.com');
+
+  t.is(result.status, 0);
+
+  const output = JSON.parse(result.stdout) as {
+    sessionMap: Record<string, string>;
+  };
+
+  t.truthy(output.sessionMap);
+  t.true(Object.keys(output.sessionMap).length > 0);
+  t.true(Object.values(output.sessionMap).includes('alice@example.com'));
+});
+
+test.serial('CLI: scrub --json works with file argument', (t) => {
+  // Create a temp file
+  const tmpFile = path.join(tmpConfigDir, 'test-input.txt');
+  fs.mkdirSync(path.dirname(tmpFile), { recursive: true });
+  fs.writeFileSync(tmpFile, 'Contact alice@example.com');
+
+  const result = runCli(['scrub', '--json', tmpFile]);
+
+  t.is(result.status, 0);
+  t.truthy(result.stdout);
+
+  const output = JSON.parse(result.stdout) as {
+    scrubbedContent: string;
+  };
+
+  t.is(output.scrubbedContent, 'Contact «Email_1»');
+
+  fs.unlinkSync(tmpFile);
+});
+
+test.serial('CLI: inspect --json works with file argument', (t) => {
+  const tmpFile = path.join(tmpConfigDir, 'test-inspect.txt');
+  fs.mkdirSync(path.dirname(tmpFile), { recursive: true });
+  fs.writeFileSync(tmpFile, 'Contact alice@example.com');
+
+  const result = runCli(['inspect', '--json', tmpFile]);
+
+  t.is(result.status, 0);
+  t.truthy(result.stdout);
+
+  const output = JSON.parse(result.stdout) as {
+    entities: Array<{ value: string }>;
+  };
+
+  t.is(output.entities.length, 1);
+  t.is(output.entities[0]?.value, 'alice@example.com');
+
+  fs.unlinkSync(tmpFile);
+});
+
+test.serial('CLI: scrub --json file error goes to stderr with exit code 1', (t) => {
+  const result = runCli(['scrub', '--json', 'non-existent-file-xyz.txt']);
+
+  t.is(result.status, 1);
+  t.true(result.stderr.length > 0);
+  t.false(result.stdout.length > 0);
+
+  // Extract JSON from stderr (find content between first { and last })
+  const match = result.stderr.match(/\{[\s\S]*\}/);
+  t.truthy(match, 'No JSON error found in stderr');
+
+  const error = JSON.parse(match![0]!) as { error: string };
+  t.truthy(error.error);
+});
+
+test.serial('CLI: rehydrate --json file error goes to stderr with exit code 1', (t) => {
+  const result = runCli([
+    'rehydrate',
+    '--session-id',
+    'test-id',
+    '--json',
+    'non-existent-file-xyz.txt',
+  ]);
+
+  t.is(result.status, 1);
+  t.true(result.stderr.length > 0);
+  t.false(result.stdout.length > 0);
+
+  // Extract JSON from stderr (find content between first { and last })
+  const match = result.stderr.match(/\{[\s\S]*\}/);
+  t.truthy(match, 'No JSON error found in stderr');
+  const error = JSON.parse(match![0]!) as { error: string };
+  t.truthy(error.error);
+});
+
+test.serial('CLI: inspect --json file error goes to stderr with exit code 1', (t) => {
+  const result = runCli(['inspect', '--json', 'non-existent-file-xyz.txt']);
+
+  t.is(result.status, 1);
+  t.true(result.stderr.length > 0);
+  t.false(result.stdout.length > 0);
+
+  // Extract JSON from stderr (find content between first { and last })
+  const match = result.stderr.match(/\{[\s\S]*\}/);
+  t.truthy(match, 'No JSON error found in stderr');
+  const error = JSON.parse(match![0]!) as { error: string };
+  t.truthy(error.error);
+});

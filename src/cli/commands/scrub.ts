@@ -1,11 +1,11 @@
 import { readFileSync } from 'node:fs';
 import type { Command } from 'commander';
 import { loadConfig } from '../../core/config.js';
-
 import { loadConfiguredRulePacks } from '../../core/rule-packs.js';
 import { scrub } from '../../core/scrub.js';
 import { gcSessions } from '../../session/storage.js';
 import type { ScrubStats } from '../../types/index.js';
+import { emitError } from '../output.js';
 
 export async function handleScrub(
   text: string,
@@ -92,6 +92,10 @@ export function setupScrubCommand(program: Command) {
       'Enable strict allowlisting for NameDetector to reduce false positives',
     )
     .option(
+      '--include-session-map',
+      'Include the sessionMap in JSON output (contains sensitive values)',
+    )
+    .option(
       '--code-tell-terms <terms>',
       'Comma-separated list of private identifiers to detect (enables CodeTellDetector)',
     )
@@ -100,6 +104,7 @@ export function setupScrubCommand(program: Command) {
       'Comma-separated list of hostnames to pass-through in URLs (subdomains are implicitly allowed)',
     )
     .option('-q, --quiet', 'Suppress the scrub summary printed to stderr')
+    .option('--json', 'Output a structured JSON object instead of plain text')
     .action(async (file, options) => {
       let input = '';
 
@@ -107,27 +112,49 @@ export function setupScrubCommand(program: Command) {
         try {
           input = readFileSync(file, 'utf8');
         } catch (err: unknown) {
-          console.error(`Error reading file: ${(err as Error).message}`);
+          const message = `Error reading file: ${(err as Error).message}`;
+          emitError(message, options.json);
           process.exit(1);
           return;
         }
       } else {
-        // Read from stdin
         try {
           input = readFileSync(0, 'utf-8');
         } catch {
-          console.error('No input provided.');
+          const message = 'No input provided.';
+          emitError(message, options.json);
           process.exit(1);
           return;
         }
       }
 
       if (!input) {
+        if (options.json) {
+          const output = {
+            scrubbedContent: '',
+            sessionId: '',
+            stats: { totalEntities: 0, byCategory: {} },
+          };
+          process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+        }
         process.exit(0);
         return;
       }
 
       const result = await handleScrub(input, options);
+
+      if (options.json) {
+        const output: Record<string, unknown> = {
+          scrubbedContent: result.scrubbedContent,
+          sessionId: result.sessionId,
+          stats: result.stats,
+        };
+        if (options.includeSessionMap) {
+          output.sessionMap = result.sessionMap;
+        }
+        process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+        return;
+      }
 
       // Print scrubbed content to stdout
       process.stdout.write(result.scrubbedContent as string);
