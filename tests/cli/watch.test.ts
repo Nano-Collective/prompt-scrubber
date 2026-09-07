@@ -264,7 +264,11 @@ test('handleWatch mints a session ID when --session-id is the empty string', asy
 
   const idLine = logs.find((l) => l.startsWith('[watch] Session ID: '));
   t.truthy(idLine, 'a session ID must still be printed');
-  t.not(idLine, '[watch] Session ID: ', 'the empty string must not be used as the session ID itself');
+  t.not(
+    idLine,
+    '[watch] Session ID: ',
+    'the empty string must not be used as the session ID itself',
+  );
 });
 
 test('handleWatch throws when neither --clipboard nor --file is provided', async (t) => {
