@@ -1,33 +1,3 @@
-# Root level - main maintainers
-* @will-lamerton @akramcodez
-
-# Core scrubbing pipeline
-src/core/* @will-lamerton @akramcodez
-
-# Detectors
-src/detectors/* @will-lamerton @akramcodez
-
-# Session management and storage
-src/session/* @will-lamerton @akramcodez
-
-# CLI
-src/cli/**/* @will-lamerton @akramcodez
-
-# Shared types
-src/types/* @will-lamerton @akramcodez
-
-# Test files
-tests/**/* @will-lamerton @akramcodez
-
-# Build and configuration files
-package.json @will-lamerton @akramcodez
-tsconfig.json @will-lamerton @akramcodez
-biome.json @will-lamerton @akramcodez
-
-# Documentation
-docs/**/* @will-lamerton @akramcodez
-README.md @will-lamerton @akramcodez
-CONTRIBUTING.md @will-lamerton @akramcodez
-
-# GitHub workflows and configurations
-.github/**/* @will-lamerton @akramcodez
+# Ownership is held by the team, not by individuals. This replaces thirteen
+# per-path lines that all named the same two people.
+* @Nano-Collective/core-team
