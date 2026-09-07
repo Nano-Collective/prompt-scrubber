@@ -40,6 +40,14 @@ test('formatNotificationMessage correctly formats single and plural categories',
   t.is(formatNotificationMessage({ Secret: 1, Email: 1 }), 'Scrubbed 1 secret, 1 email');
 });
 
+test('formatNotificationMessage pluralizes irregularly-suffixed categories correctly', (t) => {
+  // 'Address' is the category naive `+s` gets wrong ('addresss' instead of
+  // 'addresses'). Pins that formatNotificationMessage shares the real
+  // pluralize() from scrub.ts rather than re-implementing it.
+  t.is(formatNotificationMessage({ Address: 2 }), 'Scrubbed 2 addresses');
+  t.is(formatNotificationMessage({ Address: 1 }), 'Scrubbed 1 address');
+});
+
 test('watchClipboardStep scrubs sensitive data, logs, and triggers notification', async (t) => {
   let written = '';
   let logged = '';
@@ -208,6 +216,30 @@ test('handleWatch reuses an explicit --session-id instead of minting one', async
       .content,
     'Contact carol@example.com',
   );
+});
+
+test('handleWatch mints a session ID when --session-id is the empty string', async (t) => {
+  // `options.sessionId ?? randomUUID()` treats '' as a real ID, giving a
+  // session path of `sessions/.json` for anyone who passes `--session-id ""`
+  // (e.g. via an unset shell variable). '' is falsy but not nullish, so `??`
+  // let it through; `||` treats it the same as "no ID given".
+  const filePath = path.join(tmpDir, 'empty-session-id.txt');
+  fs.writeFileSync(filePath, 'Contact dave@example.com', 'utf8');
+
+  const logs: string[] = [];
+
+  await handleWatch({
+    file: filePath,
+    sessionId: '',
+    once: true,
+    logFn: (msg) => {
+      logs.push(msg);
+    },
+  });
+
+  const idLine = logs.find((l) => l.startsWith('[watch] Session ID: '));
+  t.truthy(idLine, 'a session ID must still be printed');
+  t.not(idLine, '[watch] Session ID: ', 'the empty string must not be used as the session ID itself');
 });
 
 test('handleWatch throws when neither --clipboard nor --file is provided', async (t) => {

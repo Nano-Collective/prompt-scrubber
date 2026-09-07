@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import type { Command } from 'commander';
-import { handleScrub } from './scrub.js';
+import { handleScrub, pluralize } from './scrub.js';
 
 /**
  * Every external process below is invoked through `spawnSync` with an argv
@@ -164,10 +164,9 @@ export function formatNotificationMessage(byCategory?: Record<string, number>): 
   const entries = Object.entries(byCategory ?? {});
   if (entries.length === 0) return 'Scrubbed 0 items';
 
-  const parts = entries.map(([category, count]) => {
-    const name = category.toLowerCase();
-    return `${count} ${count === 1 ? name : `${name}s`}`;
-  });
+  const parts = entries.map(
+    ([category, count]) => `${count} ${pluralize(category.toLowerCase(), count)}`,
+  );
 
   return `Scrubbed ${parts.join(', ')}`;
 }
@@ -278,7 +277,7 @@ export async function handleWatch(
   // session starting from an empty map, so the per-category counter would reset
   // and a later tick would reissue «Email_1» for a different value - silently
   // overwriting the first one in the file that is the only copy of it.
-  const sessionId = options.sessionId ?? randomUUID();
+  const sessionId = options.sessionId || randomUUID();
   const stepOptions: WatchStepOptions = { ...options, sessionId };
   log(`[watch] Session ID: ${sessionId}`);
 

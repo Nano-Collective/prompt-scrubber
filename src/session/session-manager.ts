@@ -5,13 +5,17 @@ import { deleteSessionMap, listSessions, readSessionMap, writeSessionMap } from 
 /**
  * Placeholder format: "«Prefix_Index»".
  *
- * The prefix is `[^«»]+`, not `[A-Za-z]+`: `placeholderPrefix` is a free-form
+ * The prefix is `[^«»\s]+`, not `[A-Za-z]+`: `placeholderPrefix` is a free-form
  * string on the public extension surface (`options.customDetectors`, and rule
  * packs), so a pack using `Ticket2` mints `«Ticket2_1»`. A guard that only
- * recognises alphabetic prefixes would leave exactly the collision this exists
+ * recognised alphabetic prefixes would leave exactly the collision this exists
  * to prevent reachable for anyone using the documented extension point.
+ *
+ * Whitespace is excluded on top of the guillemets: `[^«»]+` alone would also
+ * match ordinary quoted text ending in `_<digits>` (e.g. French/Russian
+ * guillemets around a sentence), which is not a placeholder we ever minted.
  */
-const PLACEHOLDER_TOKEN_REGEX = /«[^«»]+_\d+»/g;
+const PLACEHOLDER_TOKEN_REGEX = /«[^«»\s]+_\d+»/g;
 
 export class SessionManager {
   private sessionId: string | undefined;
@@ -71,10 +75,10 @@ export class SessionManager {
     const counts: Record<string, number> = {};
 
     for (const placeholder of Object.keys(map)) {
-      // Same free-form prefix as PLACEHOLDER_TOKEN_REGEX — a counter that
-      // cannot see a rule pack's placeholders would restart at 1 and reissue
-      // one on the next call against the same session.
-      const match = placeholder.match(/^«([^«»]+)_(\d+)»$/);
+      // Same free-form, whitespace-excluding prefix as PLACEHOLDER_TOKEN_REGEX —
+      // a counter that cannot see a rule pack's placeholders would restart at 1
+      // and reissue one on the next call against the same session.
+      const match = placeholder.match(/^«([^«»\s]+)_(\d+)»$/);
       if (match && match[1] && match[2]) {
         const category = match[1];
         const index = parseInt(match[2], 10);
@@ -123,7 +127,7 @@ export class SessionManager {
 
     let count = this.categoryCounts[category] || 1;
     let newPlaceholder = `«${category}_${count}»`;
-    while (this.reservedNames.has(newPlaceholder) || newPlaceholder in this.map) {
+    while (this.reservedNames.has(newPlaceholder) || Object.hasOwn(this.map, newPlaceholder)) {
       count += 1;
       newPlaceholder = `«${category}_${count}»`;
     }
