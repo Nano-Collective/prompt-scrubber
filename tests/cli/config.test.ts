@@ -503,6 +503,18 @@ test('CLI: rules list omits the locale columns when no locale detectors are load
   t.false(result.stderr.includes('Active locale'));
 });
 
+test('CLI: rules list --locale still echoes the locale when it activates nothing', (t) => {
+  // Same starting point as the test above (no locale detector loaded), but
+  // --locale is now passed explicitly. That's exactly the case someone runs
+  // this command to check - a typo'd tag or an uninstalled pack must not
+  // look identical to not having passed --locale at all.
+  const configDir = makeConfigDir();
+  const result = runCli(configDir, ['rules', 'list', '--locale', 'pt-BR']);
+
+  t.is(result.status, 0);
+  t.true(result.stderr.includes('Active locale: pt-BR'));
+});
+
 test('CLI: scrub rejects a malformed --locale instead of scrubbing without it', (t) => {
   const configDir = makeConfigDir();
 

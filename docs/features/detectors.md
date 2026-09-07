@@ -61,7 +61,7 @@ Priority is implicitly handled by a defined order of precedence:
 
 If `SecretDetector` and `UrlDetector` match the same string (e.g., a URL with a token), `SecretDetector` wins.
 
-Findings from locale-scoped detectors take precedence over the generic built-in of the same category, so a `de-DE` rule pack can override an English-shaped `AddressDetector` match on the same span. They still lose to higher-priority detectors such as `SecretDetector`, and the precedence never applies when it would shrink the redaction: a locale finding strictly inside a built-in match loses to the wider span.
+Findings from locale-scoped detectors take precedence over the generic built-in of the same category, so a `de-DE` rule pack can override an English-shaped `AddressDetector` match on the same span. They still lose to higher-priority detectors such as `SecretDetector`, and the precedence never applies when it would redact less text than the finding it displaces — whether the locale finding sits strictly inside the built-in's span or only partially overlaps it, the finding that covers more is kept so nothing previously covered is left in the clear.
 
 ## Registration System
 

@@ -62,8 +62,12 @@ export function setupRulesCommands(program: Command) {
       }
 
       const showLocales = detectors.some((d) => d.locales && d.locales.length > 0);
+      // An explicit --locale that activates nothing looks identical to a typo
+      // or an uninstalled pack unless it's echoed back - the one case this
+      // command exists to check.
+      const explicitLocaleFlag = (options.locale?.trim().length ?? 0) > 0;
 
-      if (showLocales) {
+      if (showLocales || explicitLocaleFlag) {
         console.error(`Active locale: ${locale || '(none)'}`);
       }
 

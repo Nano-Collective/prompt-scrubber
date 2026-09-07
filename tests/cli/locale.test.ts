@@ -47,21 +47,21 @@ test('resolveLocale does not re-validate an already-rejected config locale', (t)
 });
 
 test('warnIfLocaleUnused stays silent when a detector matches', (t) => {
-  resetLocaleWarning();
+  t.teardown(resetLocaleWarning);
   const messages: string[] = [];
   warnIfLocaleUnused('de-DE', [noop, german], (m) => messages.push(m));
   t.deepEqual(messages, []);
 });
 
 test('warnIfLocaleUnused stays silent when no locale is active', (t) => {
-  resetLocaleWarning();
+  t.teardown(resetLocaleWarning);
   const messages: string[] = [];
   warnIfLocaleUnused('', [noop], (m) => messages.push(m));
   t.deepEqual(messages, []);
 });
 
 test('warnIfLocaleUnused warns when a valid locale activates nothing', (t) => {
-  resetLocaleWarning();
+  t.teardown(resetLocaleWarning);
   const messages: string[] = [];
   warnIfLocaleUnused('pt-BR', [noop, german], (m) => messages.push(m));
   t.is(messages.length, 1);
@@ -70,7 +70,7 @@ test('warnIfLocaleUnused warns when a valid locale activates nothing', (t) => {
 });
 
 test('warnIfLocaleUnused warns at most once per process', (t) => {
-  resetLocaleWarning();
+  t.teardown(resetLocaleWarning);
   const messages: string[] = [];
   warnIfLocaleUnused('pt-BR', [], (m) => messages.push(m));
   warnIfLocaleUnused('pt-BR', [], (m) => messages.push(m));

@@ -190,3 +190,54 @@ test('locale-scoped findings that do not overlap are all kept', (t) => {
 
   t.is(result.length, 2);
 });
+
+test('a locale-scoped finding never wins on a partial (non-containing) overlap that covers less', (t) => {
+  // generic [0,20] (len 20) vs locale [15,30] (len 15, localeScoped). Neither
+  // span contains the other, so this is not the strict-containment case
+  // `covers()` guards against on its own - it must fall through to the
+  // longest-value tie-break rather than let the locale span win outright,
+  // which would expose characters 0-15 that the generic finding redacted.
+  const generic = makeFinding('Address', 0, 20, 'x'.repeat(20));
+  const locale = makeLocaleFinding('Address', 15, 30, 'x'.repeat(15));
+
+  for (const findings of [
+    [generic, locale],
+    [locale, generic],
+  ]) {
+    const result = resolveCollisions(findings);
+    t.is(result.length, 1);
+    t.deepEqual(result[0]?.span, [0, 20], 'the wider, non-locale finding must win');
+  }
+});
+
+test('a locale-scoped finding wins a partial overlap when it covers strictly more', (t) => {
+  // The reverse of the case above: the locale finding's span is a superset of
+  // the generic one's, so it legitimately covers more text and should win.
+  const generic = makeFinding('Address', 5, 15, 'x'.repeat(10));
+  const locale = makeLocaleFinding('Address', 0, 20, 'x'.repeat(20));
+
+  const result = resolveCollisions([generic, locale]);
+
+  t.is(result.length, 1);
+  t.true(result[0]?.localeScoped);
+  t.deepEqual(result[0]?.span, [0, 20]);
+});
+
+test('two different categories at the same default priority do not enter the locale tie-break', (t) => {
+  // Both categories are unrecognised, so priorityOf falls through to the same
+  // `?? 99` bucket for each - "same priority" is not "same category". A
+  // locale-scoped finding from one category must not out-rank an overlapping
+  // finding from a genuinely different category just because they share that
+  // default bucket; it must fall to the ordinary longest-value tie-break.
+  const cpf = makeLocaleFinding('Cpf', 0, 10, 'short');
+  const ticket = makeFinding('Ticket', 5, 25, 'a much longer ticket value');
+
+  const result = resolveCollisions([cpf, ticket]);
+
+  t.is(result.length, 1);
+  t.is(
+    result[0]?.category,
+    'Ticket',
+    'the longer value wins; category, not localeScoped, decided it',
+  );
+});

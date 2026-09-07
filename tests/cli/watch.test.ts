@@ -322,6 +322,7 @@ function clearWatchConfig(): void {
 
 test.serial('watchFileStep honours --locale', async (t) => {
   configureCpfPack();
+  t.teardown(clearWatchConfig);
   const filePath = path.join(tmpDir, 'test-watch-locale.txt');
   fs.writeFileSync(filePath, `Meu CPF e ${CPF}`, 'utf8');
 
@@ -332,18 +333,17 @@ test.serial('watchFileStep honours --locale', async (t) => {
   });
 
   t.is(next, 'Meu CPF e «Cpf_1»');
-  clearWatchConfig();
 });
 
 test.serial('watchFileStep leaves a locale pack idle without --locale', async (t) => {
   configureCpfPack();
+  t.teardown(clearWatchConfig);
   const filePath = path.join(tmpDir, 'test-watch-no-locale.txt');
   fs.writeFileSync(filePath, `Meu CPF e ${CPF}`, 'utf8');
 
   const next = await watchFileStep(filePath, '', { logFn: () => {}, notifyFn: () => {} });
 
   t.is(next, `Meu CPF e ${CPF}`);
-  clearWatchConfig();
 });
 
 test.serial('handleWatch rejects a malformed --locale before polling starts', async (t) => {

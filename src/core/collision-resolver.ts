@@ -30,21 +30,15 @@ function priorityOf(finding: Finding): number {
   return DETECTOR_PRIORITY[`${finding.category}Detector`] ?? 99;
 }
 
-function spanLength(finding: Finding): number {
-  return finding.span[1] - finding.span[0];
-}
-
 /**
- * True when `inner` sits entirely within `outer` and covers strictly less text.
- * Preferring such a finding would leave the uncovered remainder of `outer` in
- * the clear, so the locale tie-break below refuses to do it.
+ * True when `outer` redacts every character `inner` does (and possibly more).
+ * The locale tie-break below only prefers a locale-scoped finding when it
+ * covers the finding it would displace — on a partial overlap (as opposed to
+ * strict containment), preferring the locale finding would still leave part
+ * of `inner`'s span in the clear, so it must not win outright there either.
  */
-function redactsStrictlyLessThan(inner: Finding, outer: Finding): boolean {
-  return (
-    inner.span[0] >= outer.span[0] &&
-    inner.span[1] <= outer.span[1] &&
-    spanLength(inner) < spanLength(outer)
-  );
+function covers(outer: Finding, inner: Finding): boolean {
+  return outer.span[0] <= inner.span[0] && outer.span[1] >= inner.span[1];
 }
 
 /** Decides which of two overlapping findings survives. */
@@ -56,14 +50,24 @@ function candidateWins(candidate: ResolvableFinding, existing: ResolvableFinding
     return candidatePriority < existingPriority;
   }
 
-  // Same category: a locale-scoped finding replaces the English-shaped one, so
-  // a locale pack can correct a built-in match instead of losing to it. It is
-  // never allowed to shrink the redacted span — narrowing a redaction would
-  // leak text that would otherwise have been replaced.
-  if (Boolean(candidate.localeScoped) !== Boolean(existing.localeScoped)) {
+  // Same category — not just same priority bucket, which is what the check
+  // above actually compares: two different categories that both fall through
+  // to the ?? 99 default (e.g. a locale-scoped "Cpf" finding and an unrelated
+  // custom "Ticket" finding) must not enter the locale tie-break together.
+  //
+  // A locale-scoped finding replaces the English-shaped one, so a locale pack
+  // can correct a built-in match instead of losing to it. It is never allowed
+  // to shrink the redacted span — preferring a finding that covers less text
+  // than the one it would displace would leak text that used to be replaced,
+  // whether that finding sits strictly inside the other or only partially
+  // overlaps it.
+  if (
+    candidate.category === existing.category &&
+    Boolean(candidate.localeScoped) !== Boolean(existing.localeScoped)
+  ) {
     const preferred = candidate.localeScoped ? candidate : existing;
     const other = candidate.localeScoped ? existing : candidate;
-    if (!redactsStrictlyLessThan(preferred, other)) {
+    if (covers(preferred, other)) {
       return preferred === candidate;
     }
   }
@@ -76,9 +80,11 @@ function candidateWins(candidate: ResolvableFinding, existing: ResolvableFinding
  * spans so that the result contains only non-overlapping findings.
  *
  * When two findings overlap, the one from the higher-priority detector wins.
- * Within one category a locale-scoped finding takes precedence, unless that
- * would redact less text than the finding it displaces. Remaining ties resolve
- * in favour of the longer span.
+ * Within one category a locale-scoped finding takes precedence, but only when
+ * it covers the same text as the finding it would displace or more — it never
+ * wins by covering less, whether it sits strictly inside the other finding or
+ * only partially overlaps it. Remaining ties resolve in favour of the longer
+ * span.
  *
  * Returns findings sorted by start position ascending.
  */
