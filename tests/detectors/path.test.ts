@@ -167,6 +167,73 @@ test('a tab ends a Windows path match', (t) => {
   t.is(findings[0]?.value, 'C:\\a\\b');
 });
 
+// A space before a second drive spec never continues the first path (#127
+// follow-up): without a guard, the capitalised or backslash-bearing drive
+// letter reads as ordinary path continuation and swallows it, destroying the
+// second path's own "X:\" prefix so it can never be re-matched — the tail is
+// then left in cleartext next to a placeholder.
+
+test('a copy-style command keeps source and destination as two paths', (t) => {
+  const findings = detector.detect('copy C:\\src\\bin D:\\dest\\bin');
+  t.is(findings.length, 2);
+  t.is(findings[0]?.value, 'C:\\src\\bin');
+  t.is(findings[1]?.value, 'D:\\dest\\bin');
+});
+
+test('an xcopy-style command keeps source and destination as two paths', (t) => {
+  const findings = detector.detect('xcopy C:\\Users\\bob\\docs C:\\backup\\docs');
+  t.is(findings.length, 2);
+  t.is(findings[0]?.value, 'C:\\Users\\bob\\docs');
+  t.is(findings[1]?.value, 'C:\\backup\\docs');
+});
+
+test('a comma-separated list of paths does not merge into one finding', (t) => {
+  const findings = detector.detect('Files: C:\\a\\b, D:\\c\\d');
+  t.is(findings.length, 2);
+  t.is(findings[0]?.value, 'C:\\a\\b');
+  t.is(findings[1]?.value, 'D:\\c\\d');
+});
+
+test('a semicolon-separated PATH list splits into separate paths', (t) => {
+  const findings = detector.detect('SET PATH=C:\\tools;C:\\bin');
+  t.is(findings.length, 2);
+  t.is(findings[0]?.value, 'C:\\tools');
+  t.is(findings[1]?.value, 'C:\\bin');
+});
+
+// An all-caps token after an extension-less path reads as a log-level or
+// status word, not a path component — the swallowed prose is context the
+// model needs (build logs and stack traces are exactly what this targets).
+
+test('an all-caps status word after the path is not absorbed', (t) => {
+  const findings = detector.detect('Build output C:\\src\\build FAILED after 3 retries');
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, 'C:\\src\\build');
+});
+
+// A sentence-initial capital (mixed case, unlike an all-caps word above) is
+// still indistinguishable from a genuine path component such as "John Doe" or
+// "Program Files", so it is over-matched rather than dropped — the safe
+// direction per the detector's design note. Pinned here so a future change to
+// this boundary is deliberate.
+
+test('a sentence-initial capital after an extension-less path is over-matched, not dropped', (t) => {
+  const findings = detector.detect('Failed to open C:\\app\\cfg Error 404 occurred');
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, 'C:\\app\\cfg Error 404');
+});
+
+// A quoted path takes everything between its quotes, including trailing prose
+// — the quotes are the user's own delimiter, so this is accepted over-match
+// rather than a boundary the detector tries to guess. Pinned so a change here
+// is deliberate rather than accidental.
+
+test('a quoted path absorbs trailing prose inside the same quotes', (t) => {
+  const findings = detector.detect('Error: "C:\\app\\config.json not found" at startup');
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, 'C:\\app\\config.json not found');
+});
+
 test('detects multiple paths in one string', (t) => {
   const findings = detector.detect('Copy /etc/hosts to ~/Desktop/hosts.bak');
   t.is(findings.length, 2);

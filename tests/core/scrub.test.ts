@@ -104,6 +104,27 @@ test('a project name inside a Windows path is not left in cleartext', (t) => {
   t.is(result.sessionMap?.['«Path_1»'], 'C:\\repos\\my project\\src\\config.ini');
 });
 
+// A second drive spec on the same line (#127 follow-up): without a guard the
+// first path's match ran into the second path's drive letter, destroying its
+// "X:\" prefix so the tail ("\dest\bin") was left in cleartext next to a
+// placeholder that made the line look scrubbed.
+
+test('a copy command redacts both source and destination paths', (t) => {
+  // Replacement runs right-to-left (see the Address_2/Address_1 test above),
+  // so the rightmost finding is numbered first.
+  const result = scrub({ content: 'copy C:\\src\\bin D:\\dest\\bin', sessionMap: {} });
+  t.is(result.scrubbedContent, 'copy «Path_2» «Path_1»');
+  t.is(result.sessionMap?.['«Path_2»'], 'C:\\src\\bin');
+  t.is(result.sessionMap?.['«Path_1»'], 'D:\\dest\\bin');
+});
+
+test('a comma-separated list of paths redacts both entries, not the separator', (t) => {
+  const result = scrub({ content: 'Files: C:\\a\\b, D:\\c\\d', sessionMap: {} });
+  t.is(result.scrubbedContent, 'Files: «Path_2», «Path_1»');
+  t.is(result.sessionMap?.['«Path_2»'], 'C:\\a\\b');
+  t.is(result.sessionMap?.['«Path_1»'], 'D:\\c\\d');
+});
+
 test('scrubbing the same value twice generates the same placeholder', (t) => {
   const result1 = scrub({ content: 'Contact: repeat@example.com' });
   const result2 = scrub({

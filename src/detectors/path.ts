@@ -20,12 +20,30 @@ const HOME_PATH_REGEX = /(?<![\w/])(~\/[a-zA-Z0-9_.@-][a-zA-Z0-9_.@\-/]*)(?![\w]
 //
 // The composed source below is assembled once at module load, not per call.
 
-// One character that may appear inside a path segment, excluding whitespace and
-// the characters Windows forbids in a filename.
-const WIN_SEG_CHAR = String.raw`[^\s\\/:*?"<>|]`;
+// One character that may appear inside a path segment, excluding whitespace,
+// the characters Windows forbids in a filename, and `;`/`,` — both are common
+// separators between two paths on one line (a `PATH=` list, a "Files: a, b"
+// enumeration) rather than filename characters, so letting them ride inside a
+// segment lets that segment's match run into the next path's drive letter.
+const WIN_SEG_CHAR = String.raw`[^\s\\/:*?"<>|;,]`;
 
 // A file extension at the end of a segment, e.g. `.ini`, `.xlsx`.
 const WIN_EXT = String.raw`\.[A-Za-z0-9]{1,8}`;
+
+// A second path starts here, not more of this one — without this guard the
+// space rules below treat the next drive letter as an ordinary capitalised (or
+// backslash-bearing) path component and swallow it. That eats the second
+// path's own "X:\" prefix, so the global scan can never re-match it and its
+// remainder ("\dest\bin") is left in cleartext: "copy C:\src\bin D:\dest\bin"
+// becomes one finding, "C:\src\bin D", with ":\dest\bin" leaked.
+const DRIVE_AHEAD = String.raw`(?![A-Za-z]:[\\/])`;
+
+// A token made entirely of 3+ capital letters reads as a log-level or status
+// word (FAILED, ERROR, WARN) rather than a path component. These are common
+// right after an extension-less path in exactly the build logs and stack
+// traces this detector targets, and the sentence around them is context the
+// model needs, so rule (b) below does not treat them as a continuation.
+const ALL_CAPS_WORD = `(?![A-Z]{3,}(?![A-Za-z]))`;
 
 // A space that continues the path rather than ending it. Any one of:
 //
@@ -43,11 +61,13 @@ const WIN_EXT = String.raw`\.[A-Za-z0-9]{1,8}`;
 //
 // Each lookahead only reaches to the end of the current token, so a backslash
 // later on the line cannot reach back and re-open the match: in
-// "C:\a\b.txt to D:\c\d.txt" the token after the space is just "to".
+// "C:\a\b.txt to D:\c\d.txt" the token after the space is just "to". None of
+// the three continue into a following drive spec (DRIVE_AHEAD), and (b) does
+// not fire for an all-caps word (ALL_CAPS_WORD).
 const WIN_PATH_SPACE = [
-  String.raw`[ ](?=${WIN_SEG_CHAR}*\\)`,
-  `(?<!${WIN_EXT})[ ](?=[A-Z0-9(])`,
-  `(?<!${WIN_EXT})[ ](?=${WIN_SEG_CHAR}*${WIN_EXT}(?!${WIN_SEG_CHAR}))`,
+  String.raw`[ ]${DRIVE_AHEAD}(?=${WIN_SEG_CHAR}*\\)`,
+  `(?<!${WIN_EXT})[ ]${DRIVE_AHEAD}${ALL_CAPS_WORD}(?=[A-Z0-9(])`,
+  `(?<!${WIN_EXT})[ ]${DRIVE_AHEAD}(?=${WIN_SEG_CHAR}*${WIN_EXT}(?!${WIN_SEG_CHAR}))`,
 ].join('|');
 
 // Quoted form — inside double quotes the path is already delimited, so spaces
