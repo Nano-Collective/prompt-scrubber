@@ -70,6 +70,27 @@ test.serial('CLI: scrub -q is the short form of --quiet', (t) => {
   t.false(result.stderr.includes('Scrubbed:'));
 });
 
+test.serial('CLI: scrub -q still reports what --min-confidence suppressed', (t) => {
+  // -q is exactly the automated-workflow path --min-confidence targets, so it
+  // must not be the thing that hides what got dropped — the dangerous
+  // direction for a redaction tool is silent under-redaction.
+  const result = runCli(
+    ['scrub', '-q', '--min-confidence', '0.9'],
+    'mail alice@example.com and call 555-123-4567',
+  );
+  t.is(result.status, 0);
+  t.is(result.stdout, 'mail «Email_1» and call 555-123-4567');
+  t.false(result.stderr.includes('Scrubbed:'));
+  t.true(result.stderr.includes('1 suppressed below --min-confidence 0.9 (1 Phone)'));
+});
+
+test.serial('CLI: scrub -q prints nothing when there is nothing to suppress', (t) => {
+  const result = runCli(['scrub', '-q', '--min-confidence', '0.9'], 'nothing sensitive here');
+  t.is(result.status, 0);
+  t.is(result.stdout, 'nothing sensitive here');
+  t.is(result.stderr, '');
+});
+
 test.serial('CLI: rehydrate reads from stdin and restores', (t) => {
   // Step 1: scrub
   const scrubRes = runCli(['scrub'], 'Secret: sk-abcdefghijklmnopqrstuvwxyz');
@@ -318,11 +339,16 @@ test('CLI: the summary is unchanged without a threshold', (t) => {
   t.false(result.stderr.includes('suppressed'));
 });
 
-test('CLI: -q suppresses the summary, threshold or not', (t) => {
+test('CLI: -q still reports what a threshold suppressed, even when nothing survived', (t) => {
+  // The worst case for a redaction tool: the threshold drops everything, so
+  // stdout is byte-identical to a prompt that never had a phone number in it.
+  // -q must not be what makes that silence indistinguishable from safety.
   const result = runCli(['scrub', '-q', '--min-confidence', '0.9'], 'call 555-123-4567');
 
   t.is(result.status, 0);
-  t.false(result.stderr.includes('suppressed'));
+  t.is(result.stdout, 'call 555-123-4567');
+  t.false(result.stderr.includes('Scrubbed:'));
+  t.true(result.stderr.includes('1 suppressed below --min-confidence 0.9 (1 Phone)'));
 });
 
 test('CLI: --min-confidence rejects a value outside the 0-1 range', (t) => {

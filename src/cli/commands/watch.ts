@@ -1,7 +1,8 @@
 import { spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import type { Command } from 'commander';
-import { formatSuppressionNotice, handleScrub, parseConfidence } from './scrub.js';
+import { parseConfidence } from '../options.js';
+import { formatSuppressionNotice, handleScrub } from './scrub.js';
 
 /**
  * Every external process below is invoked through `spawnSync` with an argv

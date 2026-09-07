@@ -6,7 +6,7 @@ import { loadConfiguredRulePacks } from '../../core/rule-packs.js';
 import { getActiveDetectors, runDetectors } from '../../core/scrub.js';
 import { SessionManager } from '../../session/session-manager.js';
 import type { Finding, ScoredFinding } from '../../types/index.js';
-import { parseConfidence } from './scrub.js';
+import { parseConfidence } from '../options.js';
 
 export async function handleInspect(
   text: string,
@@ -94,7 +94,12 @@ export function formatInspectOutput(
   minConfidence = 0,
 ): string {
   if (findings.length === 0) {
-    return `No sensitive entities detected.\n${formatSuppressedSection(suppressed, minConfidence)}\nNo session written.\nHash: ${hash}\n`;
+    const suppressedSection = formatSuppressedSection(suppressed, minConfidence);
+    // The blank-line separator before "No session written" only belongs when
+    // there is a section above it to separate from — an unconditional `\n`
+    // here would add a line main never printed when nothing was suppressed.
+    const separator = suppressedSection ? '\n' : '';
+    return `No sensitive entities detected.\n${suppressedSection}${separator}No session written.\nHash: ${hash}\n`;
   }
 
   let output = 'Detected entities:\n';

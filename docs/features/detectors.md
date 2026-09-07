@@ -90,6 +90,13 @@ prompt-scrub scrub --min-confidence 0.9 prompt.txt
 Filtering happens **before** collision resolution, so a discarded low-confidence
 finding can never mask a higher-confidence one that overlaps it.
 
+That guarantee covers filtering only. Two findings that both clear the threshold
+(including the default threshold of `0`, where nothing is filtered) still resolve
+an overlap by detector priority, not by confidence — a 0.60 entropy `Secret` can
+still win over a 0.95 `Url` it sits inside, exactly as before this feature. A
+confidence tie-break for findings at equal priority would be a reasonable
+follow-up, but is not implemented.
+
 Run `inspect` first: it prints the score and method of every entity, so you can
 see what a threshold would drop before you commit to it.
 

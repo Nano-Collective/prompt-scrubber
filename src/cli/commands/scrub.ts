@@ -1,30 +1,12 @@
 import { readFileSync } from 'node:fs';
-import { type Command, InvalidArgumentError } from 'commander';
+import type { Command } from 'commander';
 import { loadConfig } from '../../core/config.js';
 
 import { loadConfiguredRulePacks } from '../../core/rule-packs.js';
 import { scrub } from '../../core/scrub.js';
 import { gcSessions } from '../../session/storage.js';
 import type { ScrubStats } from '../../types/index.js';
-
-/**
- * Commander option parser for `--min-confidence`. Rejecting out-of-range values
- * here means the CLI exits with a clear message instead of silently scrubbing
- * more (or less) than the user asked for.
- */
-export function parseConfidence(value: string): number {
-  // Number(), not Number.parseFloat(): parseFloat stops at the first invalid
-  // character, so `0.9zzz` would quietly become 0.9 — exactly the silent
-  // reinterpretation this function exists to prevent. Number() rejects the
-  // whole string outright, and still accepts `0`, `1`, `.85` and `9e-1`.
-  // Number('') is 0, so an empty value is rejected explicitly.
-  const trimmed = value.trim();
-  const parsed = Number(trimmed);
-  if (trimmed === '' || Number.isNaN(parsed) || parsed < 0 || parsed > 1) {
-    throw new InvalidArgumentError('Expected a number between 0 and 1.');
-  }
-  return parsed;
-}
+import { parseConfidence } from '../options.js';
 
 export async function handleScrub(
   text: string,
@@ -95,25 +77,29 @@ function formatBreakdown(byCategory: Record<string, number>): string {
 }
 
 /**
+ * "N suppressed below --min-confidence X (breakdown)", or null when the
+ * threshold cost nothing. Shared so every surface that can filter reports it
+ * the same way.
+ */
+export function formatSuppressionNotice(stats: ScrubStats, minConfidence: number): string | null {
+  const suppressed = stats.suppressed;
+  if (!suppressed || suppressed.total === 0) return null;
+  return `${suppressed.total} suppressed below --min-confidence ${minConfidence} (${formatBreakdown(suppressed.byCategory)})`;
+}
+
+/**
  * The one-line stderr summary.
  *
  * When a threshold dropped something, say so. Without this the output of a
  * filtered run is indistinguishable from "there was nothing there", and
  * `--min-confidence` is aimed squarely at automated workflows where nobody
  * runs `inspect` first — silent under-redaction is the dangerous direction.
+ *
+ * `minConfidence` is not defaulted: a populated `stats.suppressed` with a
+ * forgotten second argument would otherwise print "below --min-confidence 0"
+ * instead of failing to compile.
  */
-/**
- * "N suppressed below --min-confidence X (breakdown)", or null when the
- * threshold cost nothing. Shared so every surface that can filter reports it
- * the same way.
- */
-export function formatSuppressionNotice(stats: ScrubStats, minConfidence = 0): string | null {
-  const suppressed = stats.suppressed;
-  if (!suppressed || suppressed.total === 0) return null;
-  return `${suppressed.total} suppressed below --min-confidence ${minConfidence} (${formatBreakdown(suppressed.byCategory)})`;
-}
-
-export function formatScrubSummary(stats: ScrubStats, minConfidence = 0): string {
+export function formatScrubSummary(stats: ScrubStats, minConfidence: number): string {
   const noun = stats.totalEntities === 1 ? 'entity' : 'entities';
   const scrubbed =
     stats.totalEntities === 0
@@ -192,6 +178,13 @@ export function setupScrubCommand(program: Command) {
 
       if (!options.quiet) {
         console.error(formatScrubSummary(result.stats, result.minConfidence));
+      } else {
+        // --quiet is exactly the automated-workflow path --min-confidence
+        // targets, so it must not be the thing that hides what got dropped.
+        const notice = formatSuppressionNotice(result.stats, result.minConfidence);
+        if (notice) {
+          console.error(notice);
+        }
       }
     });
 }

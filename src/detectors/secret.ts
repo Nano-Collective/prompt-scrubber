@@ -10,46 +10,26 @@ const ENTROPY_CONFIDENCE = 0.6;
 
 // --- Layer 1: Known API key prefixes ---
 // These are high-precision patterns: specific vendor prefixes + characteristic lengths.
-const PREFIX_PATTERNS: { regex: RegExp; name: string; confidence: number }[] = [
+// `confidence` defaults to PREFIX_CONFIDENCE below; only Bearer overrides it.
+const PREFIX_PATTERNS: { regex: RegExp; name: string; confidence?: number }[] = [
   // OpenAI: sk-...48 alphanumeric chars (new format: sk-proj-..., sk-svcacct-...)
   {
     regex: /sk-(?:proj-|svcacct-|ant-api\d+-)?[A-Za-z0-9_-]{20,80}/g,
     name: 'OpenAI/Anthropic key',
-    confidence: PREFIX_CONFIDENCE,
   },
   // GitHub personal access tokens
-  { regex: /ghp_[A-Za-z0-9]{36}/g, name: 'GitHub PAT', confidence: PREFIX_CONFIDENCE },
-  { regex: /gho_[A-Za-z0-9]{36}/g, name: 'GitHub OAuth', confidence: PREFIX_CONFIDENCE },
-  {
-    regex: /github_pat_[A-Za-z0-9_]{82}/g,
-    name: 'GitHub fine-grained PAT',
-    confidence: PREFIX_CONFIDENCE,
-  },
+  { regex: /ghp_[A-Za-z0-9]{36}/g, name: 'GitHub PAT' },
+  { regex: /gho_[A-Za-z0-9]{36}/g, name: 'GitHub OAuth' },
+  { regex: /github_pat_[A-Za-z0-9_]{82}/g, name: 'GitHub fine-grained PAT' },
   // Slack tokens
-  {
-    regex: /xoxb-[0-9]{11}-[0-9]{11}-[A-Za-z0-9]{24}/g,
-    name: 'Slack bot token',
-    confidence: PREFIX_CONFIDENCE,
-  },
-  {
-    regex: /xoxp-[0-9]{11}-[0-9]{11}-[0-9]{11}-[A-Za-z0-9]{32}/g,
-    name: 'Slack user token',
-    confidence: PREFIX_CONFIDENCE,
-  },
+  { regex: /xoxb-[0-9]{11}-[0-9]{11}-[A-Za-z0-9]{24}/g, name: 'Slack bot token' },
+  { regex: /xoxp-[0-9]{11}-[0-9]{11}-[0-9]{11}-[A-Za-z0-9]{32}/g, name: 'Slack user token' },
   // Google API key
-  { regex: /AIza[0-9A-Za-z\-_]{35}/g, name: 'Google API key', confidence: PREFIX_CONFIDENCE },
+  { regex: /AIza[0-9A-Za-z\-_]{35}/g, name: 'Google API key' },
   // Google OAuth access token
-  {
-    regex: /ya29\.[0-9A-Za-z\-_]{60,200}/g,
-    name: 'Google OAuth token',
-    confidence: PREFIX_CONFIDENCE,
-  },
+  { regex: /ya29\.[0-9A-Za-z\-_]{60,200}/g, name: 'Google OAuth token' },
   // AWS Access Key ID
-  {
-    regex: /(?<![A-Z0-9])(AKIA[0-9A-Z]{16})(?![A-Z0-9])/g,
-    name: 'AWS Access Key ID',
-    confidence: PREFIX_CONFIDENCE,
-  },
+  { regex: /(?<![A-Z0-9])(AKIA[0-9A-Z]{16})(?![A-Z0-9])/g, name: 'AWS Access Key ID' },
   // Bearer token in Authorization header
   {
     regex: /(?:Bearer|bearer)\s+([A-Za-z0-9\-._~+/]{20,}={0,2})/g,
@@ -87,7 +67,7 @@ export class SecretDetector implements Detector {
     const raw: ScoredFinding[] = [];
 
     // Layer 1: prefix-based patterns
-    for (const { regex, confidence } of PREFIX_PATTERNS) {
+    for (const { regex, confidence = PREFIX_CONFIDENCE } of PREFIX_PATTERNS) {
       regex.lastIndex = 0;
       let match: RegExpExecArray | null;
       while ((match = regex.exec(text)) !== null) {

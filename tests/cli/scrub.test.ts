@@ -2,7 +2,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'ava';
-import { formatScrubSummary, handleScrub, parseConfidence } from '../../src/cli/commands/scrub.js';
+import { formatScrubSummary, handleScrub } from '../../src/cli/commands/scrub.js';
+import { parseConfidence } from '../../src/cli/options.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -118,17 +119,17 @@ test.serial('scrub command fails when no stdin is provided', async (t) => {
 });
 
 test('formatScrubSummary renders counts, plurals and the empty case', (t) => {
-  t.is(formatScrubSummary({ totalEntities: 0, byCategory: {} }), 'Scrubbed: 0 entities');
+  t.is(formatScrubSummary({ totalEntities: 0, byCategory: {} }, 0), 'Scrubbed: 0 entities');
   t.is(
-    formatScrubSummary({ totalEntities: 1, byCategory: { Email: 1 } }),
+    formatScrubSummary({ totalEntities: 1, byCategory: { Email: 1 } }, 0),
     'Scrubbed: 1 entity (1 Email)',
   );
   t.is(
-    formatScrubSummary({ totalEntities: 3, byCategory: { Email: 1, Secret: 2 } }),
+    formatScrubSummary({ totalEntities: 3, byCategory: { Email: 1, Secret: 2 } }, 0),
     'Scrubbed: 3 entities (1 Email, 2 Secrets)',
   );
   t.is(
-    formatScrubSummary({ totalEntities: 4, byCategory: { Address: 2, Identity: 2 } }),
+    formatScrubSummary({ totalEntities: 4, byCategory: { Address: 2, Identity: 2 } }, 0),
     'Scrubbed: 4 entities (2 Addresses, 2 Identities)',
   );
 });
@@ -209,7 +210,7 @@ test('formatScrubSummary is unchanged when nothing was suppressed', (t) => {
   // No threshold in play, and a threshold that cost nothing, both produce the
   // exact string the tool printed before this feature existed.
   t.is(
-    formatScrubSummary({ totalEntities: 1, byCategory: { Email: 1 } }),
+    formatScrubSummary({ totalEntities: 1, byCategory: { Email: 1 } }, 0),
     'Scrubbed: 1 entity (1 Email)',
   );
   t.is(

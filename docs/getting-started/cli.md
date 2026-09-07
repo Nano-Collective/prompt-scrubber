@@ -29,7 +29,7 @@ The summary counts replacements, not unique values: a value that appears three t
 - `--session-id <id>`: Reuse an existing session map. If omitted, a new UUID is generated.
 - `--disable <detectors>`: Comma-separated list of detectors to disable (e.g. `EmailDetector,PhoneDetector`).
 - `--min-confidence <value>`: Discard findings scored below this confidence (`0`-`1`). Defaults to the configured `minConfidence`, or `0` (keep everything). Whatever the threshold discards is named in the summary, so a filtered run never quietly under-redacts. See [Confidence & Tiered Detection](../features/detectors.md#confidence--tiered-detection).
-- `-q, --quiet`: Suppress the summary. The `Session ID:` line is still printed, since scripts need it to rehydrate.
+- `-q, --quiet`: Suppress the summary. The `Session ID:` line is still printed, since scripts need it to rehydrate. A `--min-confidence` suppression notice is still printed too — `-q` is exactly the automated-workflow path that flag targets, so it must not be what hides what got dropped.
 
 ### `prompt-scrub rehydrate [file]`
 Reads a scrubbed response from `stdin` or a file and prints the rehydrated response to `stdout`.

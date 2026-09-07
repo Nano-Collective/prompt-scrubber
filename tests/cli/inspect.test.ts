@@ -19,8 +19,9 @@ test('formatInspectOutput formats findings and includes hash', async (t) => {
 test('formatInspectOutput handles empty findings and includes hash', (t) => {
   const hash = computeHash('Hello', []);
   const output = formatInspectOutput([], hash);
-  t.true(output.includes('No sensitive entities detected'));
-  t.true(output.includes(`Hash: ${hash}`));
+  // Asserted as the literal string, not just `.includes`: a substring check
+  // can't see an extra blank line sitting between the two sentences.
+  t.is(output, `No sensitive entities detected.\nNo session written.\nHash: ${hash}\n`);
 });
 
 test('computeHash yields identical hash for identical scrubbed output (byte stability)', async (t) => {

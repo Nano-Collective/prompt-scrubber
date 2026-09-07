@@ -203,7 +203,14 @@ export function scrub(request: ScrubRequest): ScrubResult {
   const session = new SessionManager(sessionId, sessionMap);
   const detectors = getActiveDetectors(options);
   const stats: ScrubStats = { totalEntities: 0, byCategory: {} };
-  const minConfidence = options?.minConfidence ?? 0;
+  // A library caller can pass anything through `minConfidence` (NaN from a bad
+  // parseFloat, 2, -1, ...). `finding.confidence >= NaN` is always false, so an
+  // unclamped NaN would silently drop every finding — fail-open in exactly the
+  // direction this feature exists to prevent. Clamp rather than trust the input.
+  const rawMinConfidence = options?.minConfidence ?? 0;
+  const minConfidence = Number.isFinite(rawMinConfidence)
+    ? Math.min(Math.max(rawMinConfidence, 0), 1)
+    : 0;
 
   let scrubbedContent: string | Message[];
 

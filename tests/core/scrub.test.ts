@@ -551,6 +551,30 @@ test('suppressed counts accumulate across a Message[] payload', (t) => {
   t.deepEqual(result.stats.suppressed, { total: 2, byCategory: { Phone: 2 } });
 });
 
+test('a non-finite minConfidence is clamped to 0 rather than dropping everything', (t) => {
+  // finding.confidence >= NaN is always false, so an unclamped NaN — e.g. from
+  // a library caller doing Number(process.env.MIN_CONF) on a bad value — would
+  // silently discard every finding. That is fail-open in exactly the direction
+  // this feature exists to prevent.
+  const result = scrub({
+    content: 'mail alice@example.com and key sk-abcdefghijklmnopqrstuvwxyz',
+    options: { minConfidence: Number.NaN },
+  });
+  t.is(result.scrubbedContent, 'mail «Email_1» and key «Secret_1»');
+  t.is(result.stats.totalEntities, 2);
+});
+
+test('an out-of-range minConfidence is clamped into 0-1', (t) => {
+  const tooHigh = scrub({ content: NAME_AND_EMAIL, options: { minConfidence: 2 } });
+  t.is(tooHigh.scrubbedContent, NAME_AND_EMAIL);
+
+  const tooLow = scrub({
+    content: NAME_AND_EMAIL,
+    options: { enabledDetectors: ['NameDetector'], minConfidence: -1 },
+  });
+  t.is(tooLow.scrubbedContent, 'ask «Name_1» about «Email_1»');
+});
+
 test('overlapping low-confidence findings collapse to one suppressed region', (t) => {
   // Two weak detectors firing on the same span is one region left in the
   // clear, not two, so the count reflects regions rather than detector hits.
