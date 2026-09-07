@@ -15,6 +15,7 @@ import {
   watchFileStep,
 } from '../../src/cli/commands/watch.js';
 import { rehydrate } from '../../src/core/rehydrate.js';
+import { readSessionMap } from '../../src/session/storage.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -171,6 +172,30 @@ test('handleWatch shares one session so distinct values never collide', async (t
     'me: alice@example.com / them: bob@example.com',
     'one session round-trips both values',
   );
+});
+
+test('the persisted session map accumulates both values across ticks, not just the latest', async (t) => {
+  // Exercises the actual on-disk map (not an in-memory sessionMap passed
+  // directly to scrub()) across two real watchFileStep ticks, mirroring the
+  // issue's exact repro. The first tick's «Email_1» -> alice entry must still
+  // be present after the second tick adds «Email_2» -> bob - the guard that
+  // reserves «Email_1» so it isn't reissued must not be confused with, or
+  // substitute for, the map already carrying that entry forward from disk.
+  const filePath = path.join(tmpDir, 'persisted-map.txt');
+  fs.writeFileSync(filePath, 'me: alice@example.com', 'utf8');
+
+  const sessionId = 'watch-persisted-map';
+  const opts = { sessionId, logFn: () => {}, notifyFn: () => {} };
+
+  const first = await watchFileStep(filePath, '', opts);
+  fs.appendFileSync(filePath, ' / them: bob@example.com', 'utf8');
+  await watchFileStep(filePath, first, opts);
+
+  const map = readSessionMap(sessionId);
+  t.deepEqual(map, {
+    '«Email_1»': 'alice@example.com',
+    '«Email_2»': 'bob@example.com',
+  });
 });
 
 test('a later tick reports only what it scrubbed, not the running session total', async (t) => {
