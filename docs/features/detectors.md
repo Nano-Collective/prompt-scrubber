@@ -36,7 +36,7 @@ export interface Detector {
 - `EmailDetector`: Detects RFC 5322 shaped email addresses.
 - `PhoneDetector`: Detects international and US-shaped phone numbers.
 - `UrlDetector`: Detects full URLs and bare API endpoints. Can be configured to pass-through trusted hosts via `urlAllowlist` in configuration or `--url-allowlist` in the CLI. Subdomains of allowlisted hosts are implicitly trusted.
-- `PathDetector`: Detects absolute paths and home directories.
+- `PathDetector`: Detects absolute paths and home directories. Windows paths are matched in two forms: quoted (`"C:\Program Files\App\app.exe"`), where spaces are taken as part of the path, and unquoted, where a space continues the path when the next token contains a backslash, looks like a path component, or carries a file extension. So `C:\Users\john smith\creds.json` and `C:\data\quarterly report.xlsx` are matched in full, while `C:\app\cfg.ini owner` stops at the file. Where a path is genuinely ambiguous the detector errs towards matching more, since collision resolution narrows an over-broad `Path` against any email or secret inside it — over-redaction is recoverable, a dropped tail is a leak. A space never continues into a second drive spec, so `copy C:\src\bin D:\dest\bin` and `Files: C:\a\b, D:\c\d` stay two paths rather than one path swallowing the next path's `X:\` prefix. An all-caps word (`FAILED`, `ERROR`, `WARN`) after an extension-less path is treated as log-level prose rather than a path component, so `C:\src\build FAILED after 3 retries` stops at `build` — but a sentence-initial capital that isn't all-caps (`C:\app\cfg Error 404 occurred`) is indistinguishable from a genuine path component like `John Doe`, so it is still over-matched by the same "match more, not less" rule.
 - `SecretDetector`: Detects high-entropy strings, API keys, and tokens.
 - `AddressDetector`: Detects unambiguous postal addresses (e.g., street shapes).
 
@@ -63,6 +63,10 @@ If `SecretDetector` and `UrlDetector` match the same string (e.g., a URL with a 
 
 Findings from locale-scoped detectors take precedence over the generic built-in of the same category, so a `de-DE` rule pack can override an English-shaped `AddressDetector` match on the same span. They still lose to higher-priority detectors such as `SecretDetector`, and the precedence never applies when it would redact less text than the finding it displaces — whether the locale finding sits strictly inside the built-in's span or only partially overlaps it, the finding that covers more is kept so nothing previously covered is left in the clear.
 
+The losing finding is not thrown away. It is narrowed to the part of its span the winner does not cover, so an over-broad match degrades to over-redaction rather than emitting the text it over-matched in cleartext. A narrowed part that still overlaps another finding is narrowed again, until nothing overlaps. Two exceptions, where the loser is dropped instead: findings of the same category are rival readings of one entity, so the winner's span is taken as authoritative; and a finding whose `value` does not map 1:1 onto its `span` cannot be re-sliced.
+
+The resolved findings are always non-overlapping and sorted by start position.
+
 ## Registration System
 
 By default, the core scrub function runs the built-in detectors in priority order. You can optionally configure detectors via `ScrubOptions` in the API, or through the CLI:
@@ -70,7 +74,7 @@ By default, the core scrub function runs the built-in detectors in priority orde
 - **Disable defaults**: Pass `disabledDetectors` (or `--disable` via CLI) to turn off specific built-ins.
 - **Enable opt-ins**: Pass `enabledDetectors` (or `--enable` via CLI) to activate off-by-default detectors like `NameDetector`.
 - **Strict Mode**: Pass `strictNameDetector: true` (or `--strict-name` via CLI) to reduce false positives for the `NameDetector`.
-- **Code Tell**: Pass `codeTellTerms` (or `--code-tell-terms` via CLI) as an array of identifiers to enable and configure the `CodeTellDetector`.
+- **Code Tell**: Pass `codeTellTerms` (or `--code-tell-terms` via CLI) as an array of identifiers to enable and configure the `CodeTellDetector`. Terms longer than 64 characters and terms past the 64-term cap are silently dropped to bound the per-scrub cost; call `detector.getDiagnostics()` to see exactly which terms were rejected.
 
 ### Custom Detectors (Programmatic)
 

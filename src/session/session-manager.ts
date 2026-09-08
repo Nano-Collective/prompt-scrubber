@@ -2,12 +2,31 @@ import * as crypto from 'node:crypto';
 import type { SessionMap } from '../types/index.js';
 import { deleteSessionMap, listSessions, readSessionMap, writeSessionMap } from './storage.js';
 
+/**
+ * Placeholder format: "«Prefix_Index»".
+ *
+ * The prefix is `[^«»\s]+`, not `[A-Za-z]+`: `placeholderPrefix` is a free-form
+ * string on the public extension surface (`options.customDetectors`, and rule
+ * packs), so a pack using `Ticket2` mints `«Ticket2_1»`. A guard that only
+ * recognised alphabetic prefixes would leave exactly the collision this exists
+ * to prevent reachable for anyone using the documented extension point.
+ *
+ * Whitespace is excluded on top of the guillemets: `[^«»]+` alone would also
+ * match ordinary quoted text ending in `_<digits>` (e.g. French/Russian
+ * guillemets around a sentence), which is not a placeholder we ever minted.
+ */
+const PLACEHOLDER_TOKEN_REGEX = /«[^«»\s]+_\d+»/g;
+
 export class SessionManager {
   private sessionId: string | undefined;
   private map: SessionMap;
   private valueToPlaceholder: Record<string, string>;
   // Keeps track of the next index to use for each category to generate placeholders like "«Email_1»"
   private categoryCounts: Record<string, number>;
+  // Placeholder names that already appear literally in the text being scrubbed.
+  // They are not ours to hand out: reusing one collapses two different values
+  // into a single token that rehydrates wrong in at least one position.
+  private reservedNames: Set<string>;
   private diskEnabled: boolean;
 
   constructor(sessionId?: string, initialMap?: SessionMap) {
@@ -27,6 +46,18 @@ export class SessionManager {
 
     this.categoryCounts = this.rebuildCategoryCounts(this.map);
     this.valueToPlaceholder = this.buildReverseLookup(this.map);
+    this.reservedNames = new Set();
+  }
+
+  /**
+   * Records every placeholder-shaped token already present in `text` so a newly
+   * minted placeholder can never reuse one the text carries literally - as when
+   * already-scrubbed output is scrubbed again.
+   */
+  public reservePlaceholdersIn(text: string): void {
+    for (const match of text.matchAll(PLACEHOLDER_TOKEN_REGEX)) {
+      this.reservedNames.add(match[0]);
+    }
   }
 
   private buildReverseLookup(map: SessionMap): Record<string, string> {
@@ -44,8 +75,10 @@ export class SessionManager {
     const counts: Record<string, number> = {};
 
     for (const placeholder of Object.keys(map)) {
-      // Placeholder format: "«Category_Index»"
-      const match = placeholder.match(/^«([A-Za-z]+)_(\d+)»$/);
+      // Same free-form, whitespace-excluding prefix as PLACEHOLDER_TOKEN_REGEX —
+      // a counter that cannot see a rule pack's placeholders would restart at 1
+      // and reissue one on the next call against the same session.
+      const match = placeholder.match(/^«([^«»\s]+)_(\d+)»$/);
       if (match && match[1] && match[2]) {
         const category = match[1];
         const index = parseInt(match[2], 10);
@@ -92,10 +125,14 @@ export class SessionManager {
       return existing;
     }
 
-    const count = this.categoryCounts[category] || 1;
+    let count = this.categoryCounts[category] || 1;
+    let newPlaceholder = `«${category}_${count}»`;
+    while (this.reservedNames.has(newPlaceholder) || Object.hasOwn(this.map, newPlaceholder)) {
+      count += 1;
+      newPlaceholder = `«${category}_${count}»`;
+    }
     this.categoryCounts[category] = count + 1;
 
-    const newPlaceholder = `«${category}_${count}»`;
     this.map[newPlaceholder] = originalValue;
     this.valueToPlaceholder[originalValue] = newPlaceholder;
 

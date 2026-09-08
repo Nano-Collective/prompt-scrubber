@@ -87,6 +87,89 @@ test('handles exactly abutting spans (no overlap)', (t) => {
   t.is(result.length, 2);
 });
 
+// A loser is only narrowed when its value lines up with its span, so these use
+// real text rather than the default placeholder value.
+
+test('a losing finding is narrowed to the part the winner does not cover', (t) => {
+  const text = 'C:\\app\\cfg.ini owner alice@corp.com';
+  const emailStart = text.indexOf('alice@corp.com');
+  const overBroadPath = makeFinding('Path', 0, text.length, text);
+  const email = makeFinding('Email', emailStart, text.length, text.slice(emailStart));
+
+  const result = resolveCollisions([overBroadPath, email]);
+
+  t.is(result.length, 2);
+  t.is(result[0]?.value, 'C:\\app\\cfg.ini owner');
+  t.is(result[1]?.value, 'alice@corp.com');
+});
+
+test('a winner inside the loser keeps the loser on both sides', (t) => {
+  const text = 'aaaa BBBB cccc';
+  const wide = makeFinding('Path', 0, text.length, text);
+  const inner = makeFinding('Secret', 5, 9, 'BBBB');
+
+  const result = resolveCollisions([wide, inner]);
+
+  t.deepEqual(
+    result.map((f) => f.value),
+    ['aaaa', 'BBBB', 'cccc'],
+  );
+});
+
+test('a losing finding of the same category is dropped rather than narrowed', (t) => {
+  // Rival readings of one entity — the leftover "10" must not become an Address
+  const text = '10 Downing St, London';
+  const short = makeFinding('Address', 0, 13, text.slice(0, 13));
+  const long = makeFinding('Address', 3, text.length, text.slice(3));
+
+  const result = resolveCollisions([short, long]);
+
+  t.is(result.length, 1);
+  t.is(result[0]?.value, 'Downing St, London');
+});
+
+test('output is pairwise non-overlapping', (t) => {
+  // scrub replaces placeholders right-to-left by span, which is only correct
+  // while the resolved findings do not overlap. Narrowing adds findings rather
+  // than only filtering them, so assert the invariant directly over a spread of
+  // shapes: nested, staggered, abutting, identical and same-category.
+  const text = 'aaaa BBBB cccc dddd eeee ffff gggg hhhh';
+  const slice = (start: number, end: number) => text.slice(start, end);
+  const cases: Finding[][] = [
+    [makeFinding('Path', 0, 24, slice(0, 24)), makeFinding('Secret', 5, 9, slice(5, 9))],
+    [
+      makeFinding('Path', 0, 19, slice(0, 19)),
+      makeFinding('Email', 5, 14, slice(5, 14)),
+      makeFinding('Secret', 10, 24, slice(10, 24)),
+    ],
+    [
+      makeFinding('Path', 0, 29, slice(0, 29)),
+      makeFinding('Secret', 5, 9, slice(5, 9)),
+      makeFinding('Email', 15, 19, slice(15, 19)),
+      makeFinding('Phone', 25, 29, slice(25, 29)),
+    ],
+    [makeFinding('Address', 0, 13, slice(0, 13)), makeFinding('Address', 3, 24, slice(3, 24))],
+    [makeFinding('Url', 0, 10, slice(0, 10)), makeFinding('Url', 0, 10, slice(0, 10))],
+    [makeFinding('Name', 4, 9, slice(4, 9)), makeFinding('Phone', 9, 14, slice(9, 14))],
+  ];
+
+  for (const findings of cases) {
+    const result = resolveCollisions(findings);
+    for (let i = 1; i < result.length; i++) {
+      const prev = result[i - 1]!;
+      const curr = result[i]!;
+      t.true(
+        prev.span[1] <= curr.span[0],
+        `overlap between ${JSON.stringify(prev.span)} and ${JSON.stringify(curr.span)}`,
+      );
+    }
+    // Every surviving finding must still describe the text under its own span.
+    for (const finding of result) {
+      t.is(text.slice(finding.span[0], finding.span[1]), finding.value);
+    }
+  }
+});
+
 test('handles unknown custom detector priority', (t) => {
   const unknown1 = makeFinding('UnknownDetectorA', 0, 10, 'short');
   const unknown2 = makeFinding('UnknownDetectorB', 5, 20, 'much_longer');
