@@ -44,6 +44,8 @@ mixes exact patterns with weaker heuristics: users can then filter your findings
 with `--min-confidence`. See [Confidence & Tiered Detection](./detectors.md#confidence--tiered-detection)
 for the scores the built-in detectors use.
 
+`placeholderPrefix` may be any string that does not contain `«`, `»`, or whitespace — digits and underscores are fine, so `Ticket2` and `Jira_Issue` both work. The engine mints `«<prefix>_<n>»`, recognises that shape when reserving tokens already present in the text, and matches it again on rehydration, so a prefix outside that rule would produce a placeholder that never round-trips (and a prefix containing whitespace risks the reservation/rehydration regex misreading ordinary quoted text as a placeholder).
+
 > **Note to Whitepaper Readers:** 
 > The original whitepaper conceptually defines a `Finding` as `{ category, span, replacement }`. The canonical runtime interface explicitly omits `replacement` because the exact placeholder (e.g. `Email_2`) requires session state, which detectors do not have. Rule-pack authors must return `value` and `placeholderPrefix`, allowing the core engine to deterministically generate the final replacement.
 

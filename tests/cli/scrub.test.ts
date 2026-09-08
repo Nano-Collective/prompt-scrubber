@@ -259,3 +259,138 @@ test('handleScrub leaves stats.suppressed absent without a threshold', async (t)
     'Scrubbed: 2 entities (1 Email, 1 Phone)',
   );
 });
+
+test('scrub runs the diagnostics walk with --enable set', async (t) => {
+  const program = new Command();
+  setupScrubCommand(program);
+
+  const originalError = console.error;
+  const errorOutput: string[] = [];
+  console.error = (msg: string) => {
+    errorOutput.push(msg);
+  };
+
+  const originalExit = process.exit;
+  process.exit = (() => {}) as unknown as typeof process.exit;
+
+  const tmpFile = path.join(__dirname, '.tmp-with-enable.txt');
+  fs.writeFileSync(tmpFile, 'plain text with no detector matches', 'utf8');
+
+  try {
+    await program.parseAsync(['node', 'test', 'scrub', tmpFile, '--enable', 'CodeTellDetector']);
+  } finally {
+    process.exit = originalExit;
+    console.error = originalError;
+    fs.rmSync(tmpFile, { force: true });
+  }
+
+  // The diagnostic walk runs without throwing even when CodeTellDetector
+  // is in --enable but no --code-tell-terms is provided.
+  t.pass('diagnostics walk did not throw');
+});
+
+test('scrub runs the diagnostics walk without --disable or --enable set', async (t) => {
+  const program = new Command();
+  setupScrubCommand(program);
+
+  const originalError = console.error;
+  const errorOutput: string[] = [];
+  console.error = (msg: string) => {
+    errorOutput.push(msg);
+  };
+
+  const originalExit = process.exit;
+  process.exit = (() => {}) as unknown as typeof process.exit;
+
+  const tmpFile = path.join(__dirname, '.tmp-no-disable-enable.txt');
+  fs.writeFileSync(tmpFile, 'plain text with no detector matches', 'utf8');
+
+  try {
+    await program.parseAsync(['node', 'test', 'scrub', tmpFile]);
+  } finally {
+    process.exit = originalExit;
+    console.error = originalError;
+    fs.rmSync(tmpFile, { force: true });
+  }
+
+  // No CodeTell warnings expected when --code-tell-terms is absent.
+  const combined = errorOutput.join('\n');
+  t.false(
+    combined.includes('CodeTellDetector dropped'),
+    `expected no CodeTell warnings, got: ${combined}`,
+  );
+});
+
+test('scrub warns on stderr when a configured CodeTell term exceeds MAX_TERM_LENGTH', async (t) => {
+  const program = new Command();
+  setupScrubCommand(program);
+
+  const originalError = console.error;
+  const errorOutput: string[] = [];
+  console.error = (msg: string) => {
+    errorOutput.push(msg);
+  };
+
+  // 80 chars is over the 64-char cap and triggers the warning.
+  const oversized = 'a'.repeat(80);
+  const originalExit = process.exit;
+  process.exit = (() => {}) as unknown as typeof process.exit;
+
+  // Write a tiny input file so the CLI has something to scrub.
+  const tmpFile = path.join(__dirname, '.tmp-codetell-warning.txt');
+  fs.writeFileSync(tmpFile, 'plain text with no detector matches', 'utf8');
+
+  try {
+    await program.parseAsync(['node', 'test', 'scrub', tmpFile, '--code-tell-terms', oversized]);
+  } finally {
+    process.exit = originalExit;
+    console.error = originalError;
+    fs.rmSync(tmpFile, { force: true });
+  }
+
+  const combined = errorOutput.join('\n');
+  t.true(
+    combined.includes('CodeTellDetector dropped 1 term(s) longer than 64 chars'),
+    `expected oversized-term warning, got: ${combined}`,
+  );
+});
+
+test('scrub warns on stderr when more than 64 CodeTell terms are configured', async (t) => {
+  const program = new Command();
+  setupScrubCommand(program);
+
+  const originalError = console.error;
+  const errorOutput: string[] = [];
+  console.error = (msg: string) => {
+    errorOutput.push(msg);
+  };
+
+  // 80 short terms pushes 16 past the 64-term cap.
+  const terms = Array.from({ length: 80 }, (_, i) => `t${i}`);
+  const originalExit = process.exit;
+  process.exit = (() => {}) as unknown as typeof process.exit;
+
+  const tmpFile = path.join(__dirname, '.tmp-codetell-overflow.txt');
+  fs.writeFileSync(tmpFile, 'plain text with no detector matches', 'utf8');
+
+  try {
+    await program.parseAsync([
+      'node',
+      'test',
+      'scrub',
+      tmpFile,
+      '--code-tell-terms',
+      terms.join(','),
+    ]);
+  } finally {
+    process.exit = originalExit;
+    console.error = originalError;
+    fs.rmSync(tmpFile, { force: true });
+  }
+
+  const combined = errorOutput.join('\n');
+  t.true(
+    combined.includes('CodeTellDetector dropped 16 term(s) past the 64-term cap'),
+    `expected overflow warning, got: ${combined}`,
+  );
+});

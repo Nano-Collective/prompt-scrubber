@@ -44,6 +44,87 @@ test('scrubs multiple finding types in one pass', (t) => {
   t.regex(scrubbed, /Url_\d/);
 });
 
+test('a Windows path is redacted even when an email follows it on the same line', (t) => {
+  const result = scrub({
+    content: 'Config at C:\\app\\cfg.ini owner alice@corp.com',
+    sessionMap: {},
+  });
+  t.is(result.scrubbedContent, 'Config at «Path_1» owner «Email_1»');
+  t.is(result.sessionMap?.['«Path_1»'], 'C:\\app\\cfg.ini');
+});
+
+test('a Windows path ending in a space-bearing segment is redacted in full', (t) => {
+  const result = scrub({ content: 'User dir C:\\Users\\John Doe', sessionMap: {} });
+  t.is(result.scrubbedContent, 'User dir «Path_1»');
+  t.is(result.sessionMap?.['«Path_1»'], 'C:\\Users\\John Doe');
+});
+
+test('a space-bearing Windows path is redacted alongside a following email', (t) => {
+  const result = scrub({
+    content: 'Owner C:\\Users\\John Doe mailed alice@corp.com',
+    sessionMap: {},
+  });
+  t.is(result.scrubbedContent, 'Owner «Path_1» mailed «Email_1»');
+  t.is(result.sessionMap?.['«Path_1»'], 'C:\\Users\\John Doe');
+});
+
+test('an over-matched Windows path is narrowed against the email inside it', (t) => {
+  // The detector treats "alice@corp.com" as a filename and keeps going; the
+  // resolver narrows the Path back. Nothing reaches the model in cleartext.
+  const result = scrub({ content: 'C:\\Users\\John Doe alice@corp.com', sessionMap: {} });
+  t.is(result.scrubbedContent, '«Path_1» «Email_1»');
+  t.is(result.sessionMap?.['«Path_1»'], 'C:\\Users\\John Doe');
+  t.is(result.sessionMap?.['«Email_1»'], 'alice@corp.com');
+});
+
+// Lowercase space-bearing segments: these leaked a surname, employer or filename
+// in cleartext next to a placeholder before the detector was reworked.
+
+test('a Windows path with a lowercase space-bearing segment leaks nothing', (t) => {
+  const result = scrub({
+    content: 'Home C:\\Users\\john smith\\AppData\\creds.json',
+    sessionMap: {},
+  });
+  t.is(result.scrubbedContent, 'Home «Path_1»');
+  t.is(result.sessionMap?.['«Path_1»'], 'C:\\Users\\john smith\\AppData\\creds.json');
+});
+
+test('an employer name inside a Windows path is not left in cleartext', (t) => {
+  const result = scrub({ content: 'C:\\dev\\acme corp\\client list.csv', sessionMap: {} });
+  t.is(result.scrubbedContent, '«Path_1»');
+  t.is(result.sessionMap?.['«Path_1»'], 'C:\\dev\\acme corp\\client list.csv');
+});
+
+test('a project name inside a Windows path is not left in cleartext', (t) => {
+  const result = scrub({
+    content: 'Build failed in C:\\repos\\my project\\src\\config.ini',
+    sessionMap: {},
+  });
+  t.is(result.scrubbedContent, 'Build failed in «Path_1»');
+  t.is(result.sessionMap?.['«Path_1»'], 'C:\\repos\\my project\\src\\config.ini');
+});
+
+// A second drive spec on the same line (#127 follow-up): without a guard the
+// first path's match ran into the second path's drive letter, destroying its
+// "X:\" prefix so the tail ("\dest\bin") was left in cleartext next to a
+// placeholder that made the line look scrubbed.
+
+test('a copy command redacts both source and destination paths', (t) => {
+  // Replacement runs right-to-left (see the Address_2/Address_1 test above),
+  // so the rightmost finding is numbered first.
+  const result = scrub({ content: 'copy C:\\src\\bin D:\\dest\\bin', sessionMap: {} });
+  t.is(result.scrubbedContent, 'copy «Path_2» «Path_1»');
+  t.is(result.sessionMap?.['«Path_2»'], 'C:\\src\\bin');
+  t.is(result.sessionMap?.['«Path_1»'], 'D:\\dest\\bin');
+});
+
+test('a comma-separated list of paths redacts both entries, not the separator', (t) => {
+  const result = scrub({ content: 'Files: C:\\a\\b, D:\\c\\d', sessionMap: {} });
+  t.is(result.scrubbedContent, 'Files: «Path_2», «Path_1»');
+  t.is(result.sessionMap?.['«Path_2»'], 'C:\\a\\b');
+  t.is(result.sessionMap?.['«Path_1»'], 'D:\\c\\d');
+});
+
 test('scrubbing the same value twice generates the same placeholder', (t) => {
   const result1 = scrub({ content: 'Contact: repeat@example.com' });
   const result2 = scrub({
@@ -320,6 +401,117 @@ test('stats include categories contributed by custom detectors', (t) => {
 
   t.is(result.stats.totalEntities, 2);
   t.deepEqual(result.stats.byCategory, { Ticket: 1, Email: 1 });
+});
+
+test('a placeholder already present in the text is never reissued to a new value', (t) => {
+  const sessionMap: Record<string, string> = {};
+  const result = scrub({
+    content: 'the token «Email_1» is literal, contact a@b.com',
+    sessionMap,
+  });
+
+  t.is(result.scrubbedContent, 'the token «Email_1» is literal, contact «Email_2»');
+  t.deepEqual(sessionMap, { '«Email_2»': 'a@b.com' });
+  t.is(
+    rehydrate({ content: result.scrubbedContent as string, sessionMap }).content,
+    'the token «Email_1» is literal, contact a@b.com',
+    'the literal token survives and only the real value is restored',
+  );
+});
+
+test('the placeholder guard is order-independent across a Message[] payload', (t) => {
+  // The literal token is in the LAST message. Reserving per message would only
+  // protect against literals seen at or before the message being scrubbed, so
+  // message 1 would happily mint «Email_1» for a real address and both tokens
+  // would mean two different things.
+  const sessionMap: Record<string, string> = {};
+  const result = scrub({
+    content: [
+      { role: 'user', content: 'real x@y.com' },
+      { role: 'user', content: 'literal «Email_1» here' },
+    ],
+    sessionMap,
+  });
+
+  const messages = result.scrubbedContent as Message[];
+  t.is(messages[0]?.content, 'real «Email_2»');
+  t.is(messages[1]?.content, 'literal «Email_1» here');
+  t.deepEqual(sessionMap, { '«Email_2»': 'x@y.com' });
+
+  const back = rehydrate({ content: messages, sessionMap }).content as Message[];
+  t.is(back[0]?.content, 'real x@y.com');
+  t.is(back[1]?.content, 'literal «Email_1» here', 'the literal token is left alone');
+});
+
+test('the placeholder guard covers non-alphabetic rule-pack prefixes', (t) => {
+  // `placeholderPrefix` is free-form on the public extension surface, so a pack
+  // may mint «Ticket2_1». A guard that only recognised [A-Za-z]+ prefixes would
+  // leave exactly the collision it exists to prevent reachable for rule packs.
+  const ticketDetector = {
+    name: 'TicketDetector',
+    detect: (text: string) => {
+      const index = text.indexOf('TKT-99');
+      return index === -1
+        ? []
+        : [
+            {
+              category: 'Ticket2',
+              span: [index, index + 'TKT-99'.length] as [number, number],
+              value: 'TKT-99',
+              placeholderPrefix: 'Ticket2',
+            },
+          ];
+    },
+  };
+
+  const sessionMap: Record<string, string> = {};
+  const result = scrub({
+    content: 'literal «Ticket2_1» plus TKT-99',
+    sessionMap,
+    options: { customDetectors: [ticketDetector] },
+  });
+
+  t.is(result.scrubbedContent, 'literal «Ticket2_1» plus «Ticket2_2»');
+  t.deepEqual(sessionMap, { '«Ticket2_2»': 'TKT-99' });
+  t.is(
+    rehydrate({ content: result.scrubbedContent as string, sessionMap }).content,
+    'literal «Ticket2_1» plus TKT-99',
+    'and the value round-trips — a distinct token that never rehydrates is no fix',
+  );
+});
+
+test('a non-alphabetic prefix resumes its counter across a reused session', (t) => {
+  // rebuildCategoryCounts reads the prefix back off the map. A counter that
+  // cannot parse «Ticket2_5» restarts at 1 and hands out «Ticket2_1» — a name
+  // an earlier run may well have used for something else. The gap is the point:
+  // the `newPlaceholder in this.map` guard alone would not catch this, because
+  // «Ticket2_1» is genuinely absent from the map.
+  const sessionMap: Record<string, string> = { '«Ticket2_5»': 'TKT-5' };
+  const makeDetector = (value: string) => ({
+    name: 'TicketDetector',
+    detect: (text: string) => {
+      const index = text.indexOf(value);
+      return index === -1
+        ? []
+        : [
+            {
+              category: 'Ticket2',
+              span: [index, index + value.length] as [number, number],
+              value,
+              placeholderPrefix: 'Ticket2',
+            },
+          ];
+    },
+  });
+
+  const result = scrub({
+    content: 'next is TKT-2',
+    sessionMap,
+    options: { customDetectors: [makeDetector('TKT-2')] },
+  });
+
+  t.is(result.scrubbedContent, 'next is «Ticket2_6»');
+  t.deepEqual(sessionMap, { '«Ticket2_5»': 'TKT-5', '«Ticket2_6»': 'TKT-2' });
 });
 
 // --- Confidence Filtering ---

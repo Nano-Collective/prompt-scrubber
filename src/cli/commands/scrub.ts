@@ -2,8 +2,9 @@ import { readFileSync } from 'node:fs';
 import type { Command } from 'commander';
 import { loadConfig } from '../../core/config.js';
 
+import { CodeTellDetector } from '../../detectors/code-tell.js';
 import { loadConfiguredRulePacks } from '../../core/rule-packs.js';
-import { scrub } from '../../core/scrub.js';
+import { getActiveDetectors, scrub } from '../../core/scrub.js';
 import { gcSessions } from '../../session/storage.js';
 import type { ScrubStats } from '../../types/index.js';
 import { parseConfidence } from '../options.js';
@@ -63,7 +64,7 @@ export async function handleScrub(
   return { ...result, minConfidence };
 }
 
-function pluralize(word: string, count: number): string {
+export function pluralize(word: string, count: number): string {
   if (count === 1) return word;
   if (/(s|x|z|ch|sh)$/i.test(word)) return `${word}es`;
   if (/[^aeiou]y$/i.test(word)) return `${word.slice(0, -1)}ies`;
@@ -164,6 +165,40 @@ export function setupScrubCommand(program: Command) {
       if (!input) {
         process.exit(0);
         return;
+      }
+
+      // Build detector options once and reuse for diagnostics + scrubbing.
+      const disabledDetectors = options.disable
+        ? options.disable.split(',').map((s: string) => s.trim())
+        : [];
+      const enabledDetectors = options.enable
+        ? options.enable.split(',').map((s: string) => s.trim())
+        : [];
+      const codeTellTerms = options.codeTellTerms
+        ? options.codeTellTerms.split(',').map((s: string) => s.trim())
+        : undefined;
+
+      // Warn the user if any configured CodeTell terms were dropped by
+      // the per-term length / term-count caps before scrubbing starts.
+      for (const detector of getActiveDetectors({
+        disabledDetectors,
+        enabledDetectors,
+        ...(options.strictName !== undefined ? { strictNameDetector: options.strictName } : {}),
+        ...(codeTellTerms !== undefined ? { codeTellTerms } : {}),
+      })) {
+        if (detector instanceof CodeTellDetector) {
+          const diag = detector.getDiagnostics();
+          if (diag.oversized.length > 0) {
+            console.error(
+              `Warning: CodeTellDetector dropped ${diag.oversized.length} term(s) longer than 64 chars: ${diag.oversized.map((t) => `"${t.slice(0, 24)}…"`).join(', ')}`,
+            );
+          }
+          if (diag.overflowed.length > 0) {
+            console.error(
+              `Warning: CodeTellDetector dropped ${diag.overflowed.length} term(s) past the 64-term cap`,
+            );
+          }
+        }
       }
 
       const result = await handleScrub(input, options);

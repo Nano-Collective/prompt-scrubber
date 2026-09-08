@@ -9,3 +9,5 @@ When a threshold does drop something, the tool says so rather than under-redacti
 **Display change:** `inspect` now prints the confidence and method of every entity, and the suppression section above, whether or not a threshold is set. `--min-confidence` itself defaults to `0`, so nothing is filtered and `scrub` output, placeholders and session behaviour are unchanged for existing users. `inspect --hash` is unaffected by the display changes and remains the scripting-stable surface.
 
 `confidence`/`method` are optional on the `Detector` interface, so existing rule packs keep working and their findings are scored at `DEFAULT_CONFIDENCE` (0.5), which is now exported from the package root.
+
+**Interaction with narrowed findings:** when collision resolution narrows an over-broad finding instead of discarding it (see the Windows-path-overmatch fix), the surviving fragment's `confidence` is reduced to 80% of the original rather than carried over unchanged - it is weaker evidence than the full match that produced it, so a narrowed finding can drop below a `--min-confidence` threshold the original would have cleared.

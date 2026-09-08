@@ -212,11 +212,23 @@ export function scrub(request: ScrubRequest): ScrubResult {
     ? Math.min(Math.max(rawMinConfidence, 0), 1)
     : 0;
 
+  // Claim every placeholder the request already carries BEFORE minting any, so
+  // re-scrubbing scrubbed output cannot hand the same token to a second value.
+  //
+  // Reserved over the whole request, not per message: doing this inside
+  // scrubString would only protect against literals at or before the message
+  // being scrubbed, so a literal «Email_1» in message 2 would not stop message
+  // 1 minting «Email_1» for a real address. A guard that depends on the order
+  // the caller happened to supply is not a guard.
   let scrubbedContent: string | Message[];
 
   if (typeof content === 'string') {
+    session.reservePlaceholdersIn(content);
     scrubbedContent = scrubString(content, detectors, session, stats, minConfidence);
   } else {
+    for (const msg of content) {
+      session.reservePlaceholdersIn(msg.content);
+    }
     // Message[] — scrub each message's content independently, preserve structure
     scrubbedContent = content.map((msg) => ({
       ...msg,
