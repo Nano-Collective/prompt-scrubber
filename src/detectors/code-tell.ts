@@ -41,15 +41,35 @@ function isIdentifierEnd(text: string, idx: number): boolean {
   return !IDENTIFIER_CHAR.test(text[idx] ?? '');
 }
 
+export interface CodeTellDiagnostics {
+  /** Terms that were longer than `MAX_TERM_LENGTH`. */
+  oversized: string[];
+  /** Terms that were dropped because we hit `MAX_TERM_COUNT`. */
+  overflowed: string[];
+}
+
 export class CodeTellDetector implements Detector {
   readonly name = 'CodeTellDetector';
   private terms: string[] = [];
+  private diagnostics: CodeTellDiagnostics = { oversized: [], overflowed: [] };
 
   constructor(terms: string[] = []) {
-    this.terms = terms
-      .map((t) => t.trim())
-      .filter((t) => t.length > 0 && t.length <= MAX_TERM_LENGTH)
-      .slice(0, MAX_TERM_COUNT);
+    const trimmed = terms.map((t) => t.trim()).filter((t) => t.length > 0);
+    const accepted = trimmed.filter((t) => t.length <= MAX_TERM_LENGTH);
+    this.diagnostics = {
+      oversized: trimmed.filter((t) => t.length > MAX_TERM_LENGTH),
+      overflowed: accepted.slice(MAX_TERM_COUNT),
+    };
+    this.terms = accepted.slice(0, MAX_TERM_COUNT);
+  }
+
+  /**
+   * Returns a snapshot of which configured terms were rejected at
+   * construction time and why. Callers (or the CLI) can surface this
+   * so users aren't silently surprised by missing detections.
+   */
+  getDiagnostics(): Readonly<CodeTellDiagnostics> {
+    return this.diagnostics;
   }
 
   detect(text: string): Finding[] {
