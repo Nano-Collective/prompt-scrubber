@@ -1,4 +1,5 @@
 import * as crypto from 'node:crypto';
+import { PassThrough } from 'node:stream';
 import test from 'ava';
 import { clearDerivedKeyCache, decryptSession, encryptSession } from '../src/core/crypto.js';
 import {
@@ -9,6 +10,27 @@ import {
   promptPassword,
   setCachedEncryptionKey,
 } from '../src/core/key-manager.js';
+
+/**
+ * Drive `promptPassword` under a fake TTY by feeding lines through a
+ * PassThrough that `readline` reads from. We pass the streams directly
+ * through the `io` argument instead of monkey-patching `process.stdin`/
+ * `process.stdout`, which is brittle across Node versions.
+ */
+async function withFakeTTY<T>(
+  linesToFeed: string[],
+  fn: (io: { input: PassThrough; output: PassThrough; isTTY: true }) => Promise<T>,
+): Promise<T> {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  setImmediate(() => {
+    for (const line of linesToFeed) {
+      input.write(`${line}\n`);
+    }
+    input.end();
+  });
+  return fn({ input, output, isTTY: true });
+}
 
 test.beforeEach(() => {
   clearCachedEncryptionKey();
@@ -110,4 +132,55 @@ test.serial('setCachedEncryptionKey does not validate against whitespace-only st
   // consumers.
   t.notThrows(() => setCachedEncryptionKey('   '));
   t.is(getCachedKey(), '   ');
+});
+
+test.serial('promptPassword resolves with the user-typed value under a fake TTY', async (t) => {
+  const result = await withFakeTTY(['hunter2'], async (io) => {
+    return promptPassword('Enter key: ', io);
+  });
+  t.is(result, 'hunter2');
+});
+
+test.serial(
+  'getEncryptionKey falls through to the interactive prompt when env is unset',
+  async (t) => {
+    const result = await withFakeTTY(['interactive-key'], async (io) => {
+      return getEncryptionKey({ io });
+    });
+    t.is(result, 'interactive-key');
+    t.is(getCachedKey(), 'interactive-key');
+  },
+);
+
+test.serial('getEncryptionKey with confirm: true succeeds on matching input', async (t) => {
+  const result = await withFakeTTY(['first', 'first'], async (io) => {
+    return getEncryptionKey({ confirm: true, io });
+  });
+  t.is(result, 'first');
+});
+
+test.serial('getEncryptionKey with confirm: true throws when the inputs differ', async (t) => {
+  await withFakeTTY(['first', 'second'], async (io) => {
+    await t.throwsAsync(() => getEncryptionKey({ confirm: true, io }), {
+      message: /Keys do not match/,
+    });
+  });
+  // Confirmation failure must not leave a half-cached key behind.
+  t.is(getCachedKey(), null);
+});
+
+test.serial('getEncryptionKey rejects whitespace-only interactive input', async (t) => {
+  await withFakeTTY(['   '], async (io) => {
+    await t.throwsAsync(() => getEncryptionKey({ io }), {
+      message: /A valid key is required/,
+    });
+  });
+});
+
+test.serial('promptPassword rejects when isTTY=false', async (t) => {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  await t.throwsAsync(() => promptPassword('q', { input, output, isTTY: false }), {
+    message: /stdin or stdout is redirected/,
+  });
 });

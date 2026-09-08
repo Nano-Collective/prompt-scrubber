@@ -4,11 +4,32 @@ import { clearDerivedKeyCache } from './crypto.js';
 
 let cachedKey: string | null = null;
 
+export interface PromptIO {
+  input: NodeJS.ReadableStream;
+  output: NodeJS.WritableStream;
+  isTTY: boolean;
+}
+
 /**
- * Prompts the user for a password securely (input is muted).
+ * Reads the default IO from `process.stdin`/`process.stdout` and their TTY
+ * flags. Extracted so tests can inject a fake TTY without monkey-patching
+ * the global `process` object.
  */
-export async function promptPassword(query: string): Promise<string> {
-  if (!process.stdout.isTTY || !process.stdin.isTTY) {
+function defaultIO(): PromptIO {
+  return {
+    input: process.stdin,
+    output: process.stdout,
+    isTTY: Boolean(process.stdout.isTTY && process.stdin.isTTY),
+  };
+}
+
+/**
+ * Prompts the user for a password securely (input is muted). The IO streams
+ * and TTY gate are taken from the optional `io` argument so tests can drive
+ * the prompt without touching globals; production callers omit it.
+ */
+export async function promptPassword(query: string, io: PromptIO = defaultIO()): Promise<string> {
+  if (!io.isTTY) {
     throw new Error(
       'Encryption is enabled but no PROMPT_SCRUB_KEY was provided. Cannot prompt for password interactively because stdin or stdout is redirected.',
     );
@@ -19,26 +40,26 @@ export async function promptPassword(query: string): Promise<string> {
     const mutableStdout = new Writable({
       write(chunk, encoding, callback) {
         if (!muted) {
-          process.stdout.write(chunk, encoding);
+          (io.output as NodeJS.WritableStream).write(chunk, encoding);
         }
         callback();
       },
     });
 
     const rl = readline.createInterface({
-      input: process.stdin,
+      input: io.input,
       output: mutableStdout,
       terminal: true,
     });
 
     rl.on('error', reject);
 
-    process.stdout.write(query);
+    (io.output as NodeJS.WritableStream).write(query);
     muted = true;
 
     rl.question('', (inputKey) => {
       rl.close();
-      process.stdout.write('\n');
+      (io.output as NodeJS.WritableStream).write('\n');
       resolve(inputKey);
     });
   });
@@ -66,7 +87,9 @@ export function assertValidKey(inputKey: unknown): string {
  * recommended path when first enabling encryption because a typo here will
  * permanently lock the session.
  */
-export async function getEncryptionKey(options: { confirm?: boolean } = {}): Promise<string> {
+export async function getEncryptionKey(
+  options: { confirm?: boolean; io?: PromptIO } = {},
+): Promise<string> {
   if (cachedKey !== null) {
     return cachedKey;
   }
@@ -76,11 +99,12 @@ export async function getEncryptionKey(options: { confirm?: boolean } = {}): Pro
     return setCachedEncryptionKey(fromEnv);
   }
 
-  const first = await promptPassword('Enter session encryption key: ');
+  const io = options.io;
+  const first = await promptPassword('Enter session encryption key: ', io);
   const normalisedFirst = assertValidKey(first);
 
   if (options.confirm) {
-    const second = await promptPassword('Confirm session encryption key: ');
+    const second = await promptPassword('Confirm session encryption key: ', io);
     const normalisedSecond = assertValidKey(second);
     if (normalisedFirst !== normalisedSecond) {
       throw new Error('Keys do not match. Aborting before writing any encrypted session.');
