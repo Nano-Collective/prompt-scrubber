@@ -98,6 +98,20 @@ test('string with no placeholders returns unchanged with no warnings', (t) => {
   t.falsy(result.warnings);
 });
 
+test('ordinary guillemet-quoted text ending in "_<digits>" is not misread as a placeholder', (t) => {
+  // The prefix regex is [^«»\s]+, not [^«»]+: without excluding whitespace it
+  // would match any French/Russian quotation that happens to end in
+  // "_<digits>", producing a spurious "not found in session" warning on
+  // ordinary prose that was never a placeholder.
+  const sessionId = seedSession('rh-guillemet-prose', {});
+  const result = rehydrate({
+    content: 'il dit «bonjour mon ami_1» ok',
+    sessionId,
+  });
+  t.is(result.content, 'il dit «bonjour mon ami_1» ok');
+  t.falsy(result.warnings);
+});
+
 test('same placeholder appearing multiple times is fully replaced', (t) => {
   const sessionId = seedSession('rh-repeat', { '«Email_1»': 'bob@example.com' });
   const result = rehydrate({
