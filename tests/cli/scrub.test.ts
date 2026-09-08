@@ -138,3 +138,37 @@ test('handleScrub returns stats alongside the scrubbed content', async (t) => {
   t.is(result.stats.totalEntities, 2);
   t.deepEqual(result.stats.byCategory, { Email: 2 });
 });
+
+test('scrub warns on stderr when a configured CodeTell term exceeds MAX_TERM_LENGTH', async (t) => {
+  const program = new Command();
+  setupScrubCommand(program);
+
+  const originalError = console.error;
+  const errorOutput: string[] = [];
+  console.error = (msg: string) => {
+    errorOutput.push(msg);
+  };
+
+  // 80 chars is over the 64-char cap and triggers the warning.
+  const oversized = 'a'.repeat(80);
+  const originalExit = process.exit;
+  process.exit = (() => {}) as unknown as typeof process.exit;
+
+  // Write a tiny input file so the CLI has something to scrub.
+  const tmpFile = path.join(__dirname, '.tmp-codetell-warning.txt');
+  fs.writeFileSync(tmpFile, 'plain text with no detector matches', 'utf8');
+
+  try {
+    await program.parseAsync(['node', 'test', 'scrub', tmpFile, '--code-tell-terms', oversized]);
+  } finally {
+    process.exit = originalExit;
+    console.error = originalError;
+    fs.rmSync(tmpFile, { force: true });
+  }
+
+  const combined = errorOutput.join('\n');
+  t.true(
+    combined.includes('CodeTellDetector dropped 1 term(s) longer than 64 chars'),
+    `expected oversized-term warning, got: ${combined}`,
+  );
+});
