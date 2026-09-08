@@ -1,5 +1,6 @@
 import * as readline from 'node:readline';
 import { Writable } from 'node:stream';
+import { clearDerivedKeyCache } from './crypto.js';
 
 let cachedKey: string | null = null;
 
@@ -44,10 +45,12 @@ export async function promptPassword(query: string): Promise<string> {
 }
 
 /**
- * Validates and returns a normalised passphrase, throwing if empty/whitespace.
+ * Asserts a key is a non-empty, non-whitespace string. Returns it
+ * unchanged so callers that intentionally use leading/trailing spaces in
+ * a passphrase still get exactly what they typed.
  */
-export function normaliseInputKey(inputKey: string): string {
-  if (typeof inputKey !== 'string' || inputKey.trim().length === 0) {
+export function assertValidKey(inputKey: unknown): string {
+  if (typeof inputKey !== 'string' || inputKey.length === 0 || inputKey.trim().length === 0) {
     throw new Error('A valid key is required for session encryption.');
   }
   return inputKey;
@@ -68,16 +71,17 @@ export async function getEncryptionKey(options: { confirm?: boolean } = {}): Pro
     return cachedKey;
   }
 
-  if (process.env.PROMPT_SCRUB_KEY && process.env.PROMPT_SCRUB_KEY.length > 0) {
-    return setCachedEncryptionKey(process.env.PROMPT_SCRUB_KEY);
+  if (process.env.PROMPT_SCRUB_KEY !== undefined && process.env.PROMPT_SCRUB_KEY.length > 0) {
+    const fromEnv = assertValidKey(process.env.PROMPT_SCRUB_KEY);
+    return setCachedEncryptionKey(fromEnv);
   }
 
   const first = await promptPassword('Enter session encryption key: ');
-  const normalisedFirst = normaliseInputKey(first);
+  const normalisedFirst = assertValidKey(first);
 
   if (options.confirm) {
     const second = await promptPassword('Confirm session encryption key: ');
-    const normalisedSecond = normaliseInputKey(second);
+    const normalisedSecond = assertValidKey(second);
     if (normalisedFirst !== normalisedSecond) {
       throw new Error('Keys do not match. Aborting before writing any encrypted session.');
     }
@@ -108,9 +112,11 @@ export function setCachedEncryptionKey(inputKey: string): string {
 }
 
 /**
- * Clears the cached key. Intended for tests; production code rarely needs
- * this because the process is typically short-lived.
+ * Clears the cached key and any derived key material so nothing sensitive
+ * outlives the explicit "lock" request. Intended for tests; production code
+ * rarely needs this because the process is typically short-lived.
  */
 export function clearCachedEncryptionKey(): void {
   cachedKey = null;
+  clearDerivedKeyCache();
 }

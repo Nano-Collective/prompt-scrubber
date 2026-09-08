@@ -8,6 +8,7 @@ import {
   isSessionEncrypted,
   listSessions,
   readSessionMap,
+  sessionExists,
   writeSessionMap,
 } from '../../session/storage.js';
 import type { SessionMap } from '../../types/index.js';
@@ -31,11 +32,11 @@ export function setupSessionsCommands(program: Command) {
         return;
       }
 
-      // Pull the key up-front if anything on disk looks encrypted, so a wrong
-      // key fails fast before we waste time parsing every session.
+      // Only prompt for a key when at least one session on disk is encrypted.
+      // Plaintext-only listings should never demand the passphrase just because
+      // the global config flag is on.
       const hasEncrypted = sessions.some((s) => isSessionEncrypted(s.id));
-      const config = loadConfig();
-      if (config.encryptionEnabled || hasEncrypted) {
+      if (hasEncrypted) {
         await resolveEncryptionKeyOrExit();
       }
 
@@ -54,7 +55,7 @@ export function setupSessionsCommands(program: Command) {
           throw err;
         }
         const count = Object.keys(map).length;
-        const dateStr = session.createdAt.toLocaleString();
+        const dateStr = session.lastModifiedAt.toLocaleString();
 
         console.log(`${session.id.padEnd(40)} | ${dateStr.padEnd(25)} | ${count}`);
       }
@@ -65,8 +66,8 @@ export function setupSessionsCommands(program: Command) {
     .description('Show the placeholder map for a session')
     .argument('<id>', 'Session ID to show')
     .action(async (id) => {
-      const config = loadConfig();
-      if (config.encryptionEnabled || isSessionEncrypted(id)) {
+      // Only prompt for a key when the target session is actually encrypted.
+      if (isSessionEncrypted(id)) {
         await resolveEncryptionKeyOrExit();
       }
 
@@ -137,10 +138,11 @@ export function setupSessionsCommands(program: Command) {
   sessionsCommand
     .command('encrypt')
     .description(
-      'Re-encrypt existing plaintext sessions on disk (requires encryptionEnabled + PROMPT_SCRUB_KEY)',
+      'Re-encrypt existing plaintext sessions on disk (requires encryptionEnabled + PROMPT_SCRUB_KEY). Pass --rekey to also rewrite already-encrypted sessions with a fresh passphrase.',
     )
     .argument('[id]', 'Session ID to encrypt; encrypts all sessions if omitted')
-    .action(async (id) => {
+    .option('--rekey', 'Rewrite already-encrypted sessions too (use to rotate the passphrase)')
+    .action(async (id, options) => {
       const config = loadConfig();
       if (!config.encryptionEnabled) {
         console.error(
@@ -153,6 +155,7 @@ export function setupSessionsCommands(program: Command) {
       await resolveEncryptionKeyOrExit();
 
       const targets = id ? [id] : listSessions().map((s) => s.id);
+
       if (targets.length === 0) {
         console.log('No sessions to encrypt.');
         return;
@@ -160,8 +163,22 @@ export function setupSessionsCommands(program: Command) {
 
       let encrypted = 0;
       let skipped = 0;
+      let missing = 0;
       for (const sessionId of targets) {
-        if (isSessionEncrypted(sessionId)) {
+        // Guard against fabricating an empty session: a missing file must
+        // never produce a new file on the encrypt path.
+        if (!sessionExists(sessionId)) {
+          missing += 1;
+          if (id) {
+            console.error(`Session ${sessionId} not found.`);
+            process.exit(1);
+            return;
+          }
+          continue;
+        }
+
+        const alreadyEncrypted = isSessionEncrypted(sessionId);
+        if (alreadyEncrypted && !options.rekey) {
           skipped += 1;
           continue;
         }
@@ -179,8 +196,9 @@ export function setupSessionsCommands(program: Command) {
         }
       }
 
-      console.log(
-        `Encrypted ${encrypted} session(s)${skipped > 0 ? `, ${skipped} already encrypted` : ''}.`,
-      );
+      const tail =
+        skipped > 0 ? `, ${skipped} already encrypted (use --rekey to rotate the passphrase)` : '';
+      const missingTail = missing > 0 && !id ? `, ${missing} missing skipped` : '';
+      console.log(`Encrypted ${encrypted} session(s)${tail}${missingTail}.`);
     });
 }

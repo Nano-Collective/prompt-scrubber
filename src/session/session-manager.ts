@@ -126,7 +126,7 @@ export class SessionManager {
   /**
    * Utility to list all existing session IDs.
    */
-  public static listAll(): Array<{ id: string; sizeBytes: number }> {
+  public static listAll(): Array<{ id: string; sizeBytes: number; lastModifiedAt: Date }> {
     return listSessions();
   }
 }

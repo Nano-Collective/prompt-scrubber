@@ -16,15 +16,16 @@ export interface ConfigFileState {
   config: PromptScrubConfig;
 }
 
-export function createDefaultConfig(): Required<Omit<PromptScrubConfig, 'encryptionEnabled'>> {
+export function createDefaultConfig(): Required<PromptScrubConfig> {
   return {
     rulePacks: [],
     urlAllowlist: [],
     sessionTtlDays: 7,
+    encryptionEnabled: false,
   };
 }
 
-const CONFIG_KEYS = ['rulePacks', 'urlAllowlist', 'sessionTtlDays', 'encryptionEnabled'];
+const CONFIG_KEYS = Object.keys(createDefaultConfig());
 
 /**
  * Determines the base configuration directory based on the OS.
@@ -144,10 +145,9 @@ export function readConfigFile(): ConfigFileState {
       record.sessionTtlDays > 0
         ? record.sessionTtlDays
         : 7,
+    encryptionEnabled:
+      typeof record.encryptionEnabled === 'boolean' ? record.encryptionEnabled : false,
   };
-  if (typeof record.encryptionEnabled === 'boolean') {
-    config.encryptionEnabled = record.encryptionEnabled;
-  }
 
   return {
     path: configPath,

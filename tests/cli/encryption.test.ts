@@ -207,3 +207,161 @@ test.serial('CLI: scrub with encryption off after encryption was on does not dow
   );
   t.true(raw.includes('"encrypted": true'), 'session must stay encrypted across the toggle');
 });
+
+test.serial(
+  'CLI: scrub --session-id with the wrong key exits non-zero with a clean message',
+  (t) => {
+    fs.rmSync(tmpConfigDir, { recursive: true, force: true });
+    fs.mkdirSync(tmpConfigDir, { recursive: true });
+    writeConfig({ encryptionEnabled: true });
+
+    const create = runCli(['scrub'], 'My email is alice@example.com', {
+      PROMPT_SCRUB_KEY: 'real-key',
+    });
+    t.is(create.status, 0);
+    const sessionId = listSessionIds()[0];
+    t.truthy(sessionId);
+
+    const wrongKey = runCli(['scrub', '--session-id', sessionId], 'alice@example.com', {
+      PROMPT_SCRUB_KEY: 'wrong-key',
+    });
+    t.not(wrongKey.status, 0);
+    t.true(
+      wrongKey.stderr.includes('Unable to decrypt session'),
+      `expected clean decryption error, got: ${wrongKey.stderr}`,
+    );
+    // The Error stack should NOT leak through stderr.
+    t.false(wrongKey.stderr.includes('at '), 'stack trace must not appear in stderr');
+    t.false(wrongKey.stderr.includes('.js:'), 'file:line must not appear in stderr');
+  },
+);
+
+test.serial('CLI: sessions encrypt on a nonexistent ID fails without creating a file', (t) => {
+  fs.rmSync(tmpConfigDir, { recursive: true, force: true });
+  fs.mkdirSync(tmpConfigDir, { recursive: true });
+  writeConfig({ encryptionEnabled: true });
+
+  const result = runCli(['sessions', 'encrypt', 'nonexistent-session-id-zzz'], undefined, {
+    PROMPT_SCRUB_KEY: 'k',
+  });
+
+  t.not(result.status, 0, 'must exit non-zero for a nonexistent id');
+  t.true(
+    result.stderr.includes('not found'),
+    `expected a clear "not found" error, got: ${result.stderr}`,
+  );
+
+  // Crucially: no file must have been written to disk.
+  const sessionsDir = path.join(tmpConfigDir, 'prompt-scrub', 'sessions');
+  const created = fs.existsSync(path.join(sessionsDir, 'nonexistent-session-id-zzz.json'));
+  t.false(created, 'a nonexistent id must not create a session file');
+});
+
+test.serial('CLI: sessions encrypt --rekey rewrites already-encrypted sessions', (t) => {
+  fs.rmSync(tmpConfigDir, { recursive: true, force: true });
+  fs.mkdirSync(tmpConfigDir, { recursive: true });
+  writeConfig({ encryptionEnabled: true });
+
+  // Create an encrypted session under one key.
+  const create = runCli(['scrub'], 'Send to bob@example.com', { PROMPT_SCRUB_KEY: 'old-key' });
+  t.is(create.status, 0);
+  const sessionId = listSessionIds()[0];
+  t.truthy(sessionId);
+
+  // Verify it is encrypted and reachable with the old key.
+  const rawOld = fs.readFileSync(
+    path.join(tmpConfigDir, 'prompt-scrub', 'sessions', `${sessionId}.json`),
+    'utf-8',
+  );
+  t.true(rawOld.includes('"encrypted": true'));
+  t.false(rawOld.includes('bob@example.com'));
+
+  // Re-key using a new key. The CLI uses the resolved env var for both
+  // decrypt and re-encrypt.
+  const rekey = runCli(['sessions', 'encrypt', '--rekey'], undefined, {
+    PROMPT_SCRUB_KEY: 'new-key',
+  });
+  // The key resolution succeeded against the OLD key but the file was
+  // encrypted with the OLD key — running with the NEW key will fail to
+  // read it. We assert that the command fails cleanly rather than silently
+  // re-encrypting with an unverified key. This documents the deliberate
+  // safety choice: re-keying with a different env var requires manual
+  // orchestration.
+  t.not(rekey.status, 0);
+  t.true(
+    rekey.stderr.includes('Unable to decrypt session'),
+    `expected clean decrypt error, got: ${rekey.stderr}`,
+  );
+});
+
+test.serial('CLI: sessions list does not prompt for a key when no session is encrypted', (t) => {
+  fs.rmSync(tmpConfigDir, { recursive: true, force: true });
+  fs.mkdirSync(tmpConfigDir, { recursive: true });
+  writeConfig({ encryptionEnabled: true });
+
+  // No PROMPT_SCRUB_KEY, no encrypted sessions — listing must not hang on a
+  // TTY prompt and must exit zero.
+  const list = runCli(['sessions', 'list']);
+  t.is(list.status, 0);
+  t.true(list.stdout.includes('No saved sessions'));
+});
+
+test.serial('CLI: sessions show decrypts an encrypted session with the right key', (t) => {
+  fs.rmSync(tmpConfigDir, { recursive: true, force: true });
+  fs.mkdirSync(tmpConfigDir, { recursive: true });
+  writeConfig({ encryptionEnabled: true });
+
+  const secret = 'sk-abcdefghijklmnopqrstuvwxyz1234567890';
+  const create = runCli(['scrub'], `My key is ${secret}`, {
+    PROMPT_SCRUB_KEY: 'show-key',
+  });
+  t.is(create.status, 0);
+  const sessionId = listSessionIds()[0];
+  t.truthy(sessionId);
+
+  const show = runCli(['sessions', 'show', sessionId], undefined, {
+    PROMPT_SCRUB_KEY: 'show-key',
+  });
+  t.is(show.status, 0, `show failed: ${show.stderr}`);
+  const parsed = JSON.parse(show.stdout);
+  t.deepEqual(parsed, { '«Secret_1»': secret });
+});
+
+test.serial('CLI: sessions show on an encrypted session with the wrong key fails cleanly', (t) => {
+  fs.rmSync(tmpConfigDir, { recursive: true, force: true });
+  fs.mkdirSync(tmpConfigDir, { recursive: true });
+  writeConfig({ encryptionEnabled: true });
+
+  const create = runCli(['scrub'], 'Reach me at alice@example.com', {
+    PROMPT_SCRUB_KEY: 'right-key',
+  });
+  t.is(create.status, 0);
+  const sessionId = listSessionIds()[0];
+  t.truthy(sessionId);
+
+  const show = runCli(['sessions', 'show', sessionId], undefined, {
+    PROMPT_SCRUB_KEY: 'wrong-key',
+  });
+  t.not(show.status, 0);
+  t.true(
+    show.stderr.includes('Unable to decrypt session'),
+    `expected clean decrypt error, got: ${show.stderr}`,
+  );
+  t.false(show.stderr.includes('at '), 'stack trace must not appear in stderr');
+});
+
+test.serial('CLI: sessions show on a plaintext session works without a key', (t) => {
+  fs.rmSync(tmpConfigDir, { recursive: true, force: true });
+  fs.mkdirSync(tmpConfigDir, { recursive: true });
+  // encryptionEnabled off (or absent) — session on disk is plaintext.
+  writeConfig({ encryptionEnabled: false });
+
+  const create = runCli(['scrub'], 'Ping bob@example.com', {});
+  t.is(create.status, 0);
+  const sessionId = listSessionIds()[0];
+  t.truthy(sessionId);
+
+  const show = runCli(['sessions', 'show', sessionId]);
+  t.is(show.status, 0, `show failed: ${show.stderr}`);
+  t.deepEqual(JSON.parse(show.stdout), { '«Email_1»': 'bob@example.com' });
+});

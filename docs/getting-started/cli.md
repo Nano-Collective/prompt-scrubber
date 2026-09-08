@@ -105,7 +105,7 @@ Deletes a session map from the disk permanently. Use the `--all` option to delet
 Manually cleans up expired sessions based on the `sessionTtlDays` configuration. (By default, expired sessions are automatically pruned when you run `scrub` or `sessions list`.)
 
 ### `prompt-scrub sessions encrypt [id]`
-Re-encrypts existing session files using the active encryption key. Pass a session ID to encrypt a single session; omit it to encrypt every session on disk. Requires `encryptionEnabled: true` in the config and `PROMPT_SCRUB_KEY` in the environment (or an interactive TTY prompt). Sessions that are already encrypted are skipped.
+Re-encrypts existing session files using the active encryption key. Pass a session ID to encrypt a single session; omit it to encrypt every session on disk. Requires `encryptionEnabled: true` in the config and `PROMPT_SCRUB_KEY` in the environment (or an interactive TTY prompt). Sessions that are already encrypted are skipped. Pass `--rekey` to also rewrite already-encrypted sessions — useful when rotating the passphrase. Note that re-keying requires the OLD passphrase to still be resolvable; the command refuses to silently overwrite a file it cannot decrypt.
 
 ## Encryption at Rest
 
@@ -147,6 +147,12 @@ const { scrubbedContent } = scrub({ content: 'My key is sk-12345' });
 ```
 
 The crypto envelope is `version: 1`, `algorithm: aes-256-gcm`, `kdf: scrypt`, with a per-file random 16-byte salt and 12-byte IV. Derived keys are cached by salt within a single process so listing many encrypted sessions does not re-derive every key.
+
+**Threat model boundaries.** Encryption protects the session file at rest on disk. It does NOT protect secrets while they are in memory, and it does NOT protect the output of commands like `sessions show` — running `prompt-scrub sessions show <id>` on an encrypted session prints the decrypted placeholders to stdout. Treat the decrypted map as ephemeral.
+
+**Re-keying.** Pass `--rekey` to `sessions encrypt` to rewrite already-encrypted sessions. Note that re-keying only works when the OLD passphrase is still resolvable — the command refuses to silently overwrite a file it cannot decrypt.
+
+**Environment-variable caveats.** `PROMPT_SCRUB_KEY` is the simplest way to script encryption, but on Linux the value is also readable via `/proc/<pid>/environ` to any process running as your user, and inline `PROMPT_SCRUB_KEY=…` invocations leave the passphrase in your shell history. Prefer `read -rs` or a secret-manager export.
 
 ## Configuration
 

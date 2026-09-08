@@ -52,6 +52,7 @@ test('CLI: init creates a default config file and its parent directories', (t) =
     rulePacks: [],
     urlAllowlist: [],
     sessionTtlDays: 7,
+    encryptionEnabled: false,
   });
 });
 
@@ -78,6 +79,7 @@ test('CLI: init --force overwrites an existing config file', (t) => {
     rulePacks: [],
     urlAllowlist: [],
     sessionTtlDays: 7,
+    encryptionEnabled: false,
   });
 });
 
@@ -94,7 +96,12 @@ test('CLI: config show prints defaults and a hint when no config file exists', (
   const result = runCli(configDir, ['config', 'show']);
 
   t.is(result.status, 0);
-  t.deepEqual(JSON.parse(result.stdout), { rulePacks: [], urlAllowlist: [], sessionTtlDays: 7 });
+  t.deepEqual(JSON.parse(result.stdout), {
+    rulePacks: [],
+    urlAllowlist: [],
+    sessionTtlDays: 7,
+    encryptionEnabled: false,
+  });
   t.true(result.stderr.includes('No config file at'));
   t.true(result.stderr.includes('prompt-scrub init'));
 });
@@ -113,6 +120,7 @@ test('CLI: config show prints the active configuration and its path', (t) => {
     rulePacks: ['pack-a'],
     urlAllowlist: ['example.com'],
     sessionTtlDays: 7,
+    encryptionEnabled: false,
   });
   t.true(result.stderr.includes(path.join(configDir, 'config.json')));
 });
@@ -125,7 +133,12 @@ test('CLI: config show reports invalid JSON', (t) => {
 
   t.is(result.status, 1);
   t.true(result.stderr.includes('Invalid JSON'));
-  t.deepEqual(JSON.parse(result.stdout), { rulePacks: [], urlAllowlist: [], sessionTtlDays: 7 });
+  t.deepEqual(JSON.parse(result.stdout), {
+    rulePacks: [],
+    urlAllowlist: [],
+    sessionTtlDays: 7,
+    encryptionEnabled: false,
+  });
 });
 
 test('CLI: config show reports an empty config file', (t) => {
@@ -202,6 +215,7 @@ test('CLI: config show reports non-string array members and drops them', (t) => 
     rulePacks: ['pack-a'],
     urlAllowlist: [],
     sessionTtlDays: 7,
+    encryptionEnabled: false,
   });
 });
 
@@ -216,6 +230,7 @@ test('CLI: config show deduplicates repeated entries', (t) => {
     rulePacks: [],
     urlAllowlist: ['example.com'],
     sessionTtlDays: 7,
+    encryptionEnabled: false,
   });
 });
 
@@ -225,7 +240,12 @@ test('CLI: init output round-trips through config show', (t) => {
 
   const result = runCli(configDir, ['config', 'show']);
   t.is(result.status, 0);
-  t.deepEqual(JSON.parse(result.stdout), { rulePacks: [], urlAllowlist: [], sessionTtlDays: 7 });
+  t.deepEqual(JSON.parse(result.stdout), {
+    rulePacks: [],
+    urlAllowlist: [],
+    sessionTtlDays: 7,
+    encryptionEnabled: false,
+  });
 });
 
 test('CLI: a configured urlAllowlist is applied when scrubbing', (t) => {

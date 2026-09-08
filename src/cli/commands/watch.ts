@@ -1,6 +1,9 @@
 import { spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import type { Command } from 'commander';
+import { resolveEncryptionKeyOrExit, runCliAction } from '../../core/cli-key-resolver.js';
+import { loadConfig } from '../../core/config.js';
+import { isSessionEncrypted, sessionExists } from '../../session/storage.js';
 import { handleScrub } from './scrub.js';
 
 /**
@@ -263,6 +266,12 @@ export async function handleWatch(
     interval?: string;
     once?: boolean;
     onStop?: () => void;
+    /**
+     * Resolver used to obtain the encryption key before the loop starts.
+     * Defaults to the real CLI resolver; tests inject a no-op so the watch
+     * loop can run with a pre-seeded key.
+     */
+    resolveEncryptionKey?: () => Promise<boolean>;
   },
 ) {
   if (!options.clipboard && !options.file) {
@@ -275,6 +284,20 @@ export async function handleWatch(
   // Only preflight the real clipboard path; injected mocks need no external tool.
   if (options.clipboard && !options.readClipboardFn) {
     assertClipboardSupport();
+  }
+
+  // If the watch is going to write a session — either because encryption is
+  // turned on globally, or because the named session is already encrypted —
+  // resolve the key up-front. Otherwise the first scrub tick can throw an
+  // unhandled `SessionDecryptionError` deep inside `writeSessionMap`.
+  const config = loadConfig();
+  const sessionId = typeof options.sessionId === 'string' ? options.sessionId : undefined;
+  const willEncrypt =
+    Boolean(config.encryptionEnabled) ||
+    (sessionId && sessionExists(sessionId) ? isSessionEncrypted(sessionId) : false);
+  if (willEncrypt) {
+    const resolve = options.resolveEncryptionKey ?? resolveEncryptionKeyOrExit;
+    await resolve();
   }
 
   const readFn = options.readClipboardFn ?? readClipboard;
@@ -343,11 +366,8 @@ export function setupWatchCommand(program: Command) {
     .option('--code-tell-terms <terms>', 'Comma-separated list of private terms to detect')
     .option('--url-allowlist <hosts>', 'Comma-separated list of hostnames to pass-through')
     .action(async (options) => {
-      try {
+      await runCliAction(async () => {
         await handleWatch(options);
-      } catch (err: unknown) {
-        console.error((err as Error).message);
-        process.exit(1);
-      }
+      });
     });
 }

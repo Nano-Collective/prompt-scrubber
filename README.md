@@ -109,6 +109,20 @@ To migrate existing plaintext sessions after enabling encryption:
 PROMPT_SCRUB_KEY=… prompt-scrub sessions encrypt
 ```
 
+**CLI: Watch clipboard**
+```bash
+# Monitor clipboard and automatically scrub sensitive data
+prompt-scrub watch --clipboard
+
+# Watch a file
+prompt-scrub watch --file prompt.txt --once
+
+# Preview changes without writing anything
+prompt-scrub watch --file prompt.txt --dry-run --once
+```
+
+See the [CLI Reference](docs/getting-started/cli.md#watch-mode) for all watch options and platform requirements.
+
 **Node.js API: Scrubbing, Rehydrating, and Key Injection**
 ```typescript
 import {

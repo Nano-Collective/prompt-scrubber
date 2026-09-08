@@ -18,9 +18,17 @@ export function getSessionStoragePath(sessionId: string): string {
 }
 
 /**
- * Quickly tells the caller whether a session file is encrypted on disk.
- * Reads and parses the file in full so the discriminator is reliable; for
- * CLI listings that want a cheap existence check, prefer `fs.existsSync`.
+ * Tells the caller whether a session file currently exists on disk.
+ * Cheap existence check that does not read or parse anything.
+ */
+export function sessionExists(sessionId: string): boolean {
+  return fs.existsSync(getSessionStoragePath(sessionId));
+}
+
+/**
+ * Tells the caller whether a session file is encrypted on disk. Reads and
+ * parses the file in full so the discriminator is reliable; for cheaper
+ * existence checks, prefer `sessionExists`.
  */
 export function isSessionEncrypted(sessionId: string): boolean {
   const filePath = getSessionStoragePath(sessionId);
@@ -106,7 +114,7 @@ export function writeSessionMap(sessionId: string, map: SessionMap): void {
     const config = loadConfig();
     const shouldEncrypt = Boolean(config.encryptionEnabled) || isSessionEncrypted(sessionId);
     const payload = shouldEncrypt
-      ? JSON.stringify(encryptWithKey(map, shouldEncrypt), null, 2)
+      ? JSON.stringify(encryptWithKey(map), null, 2)
       : JSON.stringify(map, null, 2);
 
     fs.writeFileSync(tmpPath, payload, { encoding: 'utf-8', mode: 0o600 });
@@ -121,7 +129,7 @@ export function writeSessionMap(sessionId: string, map: SessionMap): void {
   }
 }
 
-function encryptWithKey(map: SessionMap, _confirmed: boolean) {
+function encryptWithKey(map: SessionMap) {
   const key = getCachedKey() ?? process.env.PROMPT_SCRUB_KEY;
   if (!key) {
     throw new SessionDecryptionError(
@@ -150,7 +158,7 @@ export function deleteSessionMap(sessionId: string): boolean {
 /**
  * Lists all available session IDs by inspecting the storage directory.
  */
-export function listSessions(): Array<{ id: string; sizeBytes: number; createdAt: Date }> {
+export function listSessions(): Array<{ id: string; sizeBytes: number; lastModifiedAt: Date }> {
   const sessionsDir = path.join(getConfigDir(), 'sessions');
   if (!fs.existsSync(sessionsDir)) {
     return [];
@@ -165,11 +173,11 @@ export function listSessions(): Array<{ id: string; sizeBytes: number; createdAt
         id: path.basename(file, '.json'),
         sizeBytes: stats.size,
         mtimeMs: stats.mtimeMs,
-        createdAt: stats.mtime,
+        lastModifiedAt: stats.mtime,
       };
     })
     .sort((a, b) => b.mtimeMs - a.mtimeMs)
-    .map(({ id, sizeBytes, createdAt }) => ({ id, sizeBytes, createdAt }));
+    .map(({ id, sizeBytes, lastModifiedAt }) => ({ id, sizeBytes, lastModifiedAt }));
 }
 
 /**
