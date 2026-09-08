@@ -133,7 +133,7 @@ Anything that does not match a known shape (e.g. `GET /v1/models`, `POST /v1/emb
 
 **Limitations:**
 
-- Request bodies larger than 10 MB are rejected with `413 Payload Too Large`. Tune with `--max-body-bytes` on the programmatic API.
+- Request bodies larger than 10 MB are rejected with `413 Payload Too Large`. Tune with `maxBodyBytes` on the programmatic `ProxyOptions`.
 - Responses that arrive gzipped are forwarded uncompressed (we strip `accept-encoding` on the outbound hop). Upstreams that re-add gzip mid-flight are forwarded unchanged.
 - The proxy does not perform TLS termination for the inbound hop — terminate TLS at a reverse proxy if you need to expose it on a network interface. The default `127.0.0.1` binding is loopback-only.
 - The proxy is a development tool, not a hardened gateway. Run it on a trusted host.

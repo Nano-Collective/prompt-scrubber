@@ -453,6 +453,40 @@ test.serial(
   },
 );
 
+test.serial('runProxyCommand throws when --target is missing', async (t) => {
+  const { runProxyCommand } = await import('../../src/cli/commands/proxy.js');
+  await t.throwsAsync(() => runProxyCommand({ target: '', port: '8080' }), {
+    message: /Missing required --target/,
+  });
+});
+
+test.serial('runProxyCommand throws on an invalid --target URL', async (t) => {
+  const { runProxyCommand } = await import('../../src/cli/commands/proxy.js');
+  await t.throwsAsync(() => runProxyCommand({ target: 'not-a-url', port: '8080' }), {
+    message: /Invalid --target URL/,
+  });
+});
+
+test.serial('runProxyCommand throws on an invalid --port', async (t) => {
+  const { runProxyCommand } = await import('../../src/cli/commands/proxy.js');
+  await t.throwsAsync(() => runProxyCommand({ target: 'http://127.0.0.1:1', port: 'not-a-port' }), {
+    message: /Invalid --port/,
+  });
+});
+
+test.serial('runProxyCommand throws on an invalid --host', async (t) => {
+  const { runProxyCommand } = await import('../../src/cli/commands/proxy.js');
+  await t.throwsAsync(
+    () =>
+      runProxyCommand({
+        target: 'http://127.0.0.1:1',
+        port: '0',
+        host: 'bad host!',
+      }),
+    { message: /Invalid --host/ },
+  );
+});
+
 test.serial('runProxyCommand --no-gc actually maps to gc: false', async (t) => {
   // Commander maps `--no-foo` to `foo: false` on the parsed options. The
   // proxy CLI relies on this for `--no-gc`. Inspect the program metadata
@@ -478,70 +512,101 @@ test.serial('runProxyCommand --no-gc actually maps to gc: false', async (t) => {
   t.is(defaultOptions.gc !== false, true, 'gc undefined should run gcSessions');
 });
 
-test.serial('proxy surfaces an upstream error event when the upstream crashes mid-stream', async (t) => {
-  // Upstream sends half an SSE event then drops the connection. The proxy
-  // should emit an `error` event, kill the downstream, and exit cleanly
-  // rather than hanging the client.
-  const events: ProxyEvent[] = [];
-  const upstream = await new Promise<{
-    url: string;
-    port: number;
-    close: () => Promise<void>;
-  }>((resolve) => {
-    const server = http.createServer((_req, res) => {
-      res.writeHead(200, { 'content-type': 'text/event-stream' });
-      res.write('data: {"choices":[{"delta":{"content":"hello "}}]}\n\n');
-      // Then drop the connection.
-      res.destroy();
-    });
-    server.listen(0, '127.0.0.1', () => {
-      const address = server.address();
-      const port = typeof address === 'object' && address ? address.port : 0;
-      resolve({
-        url: `http://127.0.0.1:${port}`,
-        port,
-        close: () => new Promise<void>((r) => server.close(() => r())),
-      });
-    });
+test.serial('proxy preserves the target URL pathname prefix when forwarding', async (t) => {
+  // --target https://gateway.example.com/openai strips the /openai prefix
+  // if the proxy doesn't join the target's pathname with the incoming URL.
+  const seen: string[] = [];
+  const upstream = await startFakeUpstream((req, _body, res) => {
+    seen.push(req.url ?? '');
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end('{}');
+  });
+  const proxy = await createProxyServer({
+    target: new URL('http://127.0.0.1:' + upstream.port + '/openai'),
+    port: 0,
+    host: '127.0.0.1',
+    sessionStore: new Map(),
   });
 
-  const proxy = await createProxyServer(
-    {
-      target: new URL(upstream.url),
-      port: 0,
-      host: '127.0.0.1',
-      sessionStore: new Map(),
-    },
-    (e) => events.push(e),
-  );
-
   try {
-    await makeRequest(proxy.url + '/v1/chat/completions', {
+    const res = await makeRequest(proxy.url + '/v1/chat/completions', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        model: 'x',
-        stream: true,
-        messages: [{ role: 'user', content: 'hi' }],
-      }),
+      body: JSON.stringify({ messages: [] }),
     });
-  } catch {
-    // Expected — upstream dropped mid-stream.
+    t.is(res.status, 200);
   } finally {
     await proxy.close();
     await upstream.close();
   }
 
-  // If an `error` event fired it must reference something the upstream did.
-  for (const e of events) {
-    if (e.type === 'error') {
-      t.true(
-        e.message.length > 0,
-        `error event must carry a message, got: ${JSON.stringify(e)}`,
-      );
-    }
-  }
+  t.deepEqual(seen, ['/openai/v1/chat/completions']);
 });
+
+test.serial(
+  'proxy surfaces an upstream error event when the upstream crashes mid-stream',
+  async (t) => {
+    // Upstream sends half an SSE event then drops the connection. The proxy
+    // should emit an `error` event, kill the downstream, and exit cleanly
+    // rather than hanging the client.
+    const events: ProxyEvent[] = [];
+    const upstream = await new Promise<{
+      url: string;
+      port: number;
+      close: () => Promise<void>;
+    }>((resolve) => {
+      const server = http.createServer((_req, res) => {
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        res.write('data: {"choices":[{"delta":{"content":"hello "}}]}\n\n');
+        // Then drop the connection.
+        res.destroy();
+      });
+      server.listen(0, '127.0.0.1', () => {
+        const address = server.address();
+        const port = typeof address === 'object' && address ? address.port : 0;
+        resolve({
+          url: `http://127.0.0.1:${port}`,
+          port,
+          close: () => new Promise<void>((r) => server.close(() => r())),
+        });
+      });
+    });
+
+    const proxy = await createProxyServer(
+      {
+        target: new URL(upstream.url),
+        port: 0,
+        host: '127.0.0.1',
+        sessionStore: new Map(),
+      },
+      (e) => events.push(e),
+    );
+
+    try {
+      await makeRequest(proxy.url + '/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: 'x',
+          stream: true,
+          messages: [{ role: 'user', content: 'hi' }],
+        }),
+      });
+    } catch {
+      // Expected — upstream dropped mid-stream.
+    } finally {
+      await proxy.close();
+      await upstream.close();
+    }
+
+    // If an `error` event fired it must reference something the upstream did.
+    for (const e of events) {
+      if (e.type === 'error') {
+        t.true(e.message.length > 0, `error event must carry a message, got: ${JSON.stringify(e)}`);
+      }
+    }
+  },
+);
 
 test.serial(
   'stream:true request answered with JSON error is forwarded without SSE rehydration',

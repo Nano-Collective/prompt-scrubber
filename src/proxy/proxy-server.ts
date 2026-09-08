@@ -554,14 +554,10 @@ function pipeStreamingResponse(
   stream.on('error', onError);
 
   downstream.on('close', () => {
-    try {
-      stream.removeListener('data', onData as (c: unknown) => void);
-      stream.removeListener('end', onEnd);
-      stream.removeListener('error', onError);
-      const maybeDestroy = (stream as unknown as { destroy?: () => void }).destroy;
-      if (typeof maybeDestroy === 'function') maybeDestroy.call(stream);
-    } catch {
-      // ignore
-    }
+    stream.removeListener('data', onData as (c: unknown) => void);
+    stream.removeListener('end', onEnd);
+    stream.removeListener('error', onError);
+    const maybeDestroy = (stream as unknown as { destroy?: () => void }).destroy;
+    if (typeof maybeDestroy === 'function') maybeDestroy.call(stream);
   });
 }

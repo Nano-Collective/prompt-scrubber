@@ -21,7 +21,7 @@ function parseList(value: string | undefined): string[] {
     .filter(Boolean);
 }
 
-async function runProxyCommand(options: ProxyCommandOptions): Promise<void> {
+export async function runProxyCommand(options: ProxyCommandOptions): Promise<void> {
   if (!options.target) {
     throw new Error('Missing required --target <url> option.');
   }
