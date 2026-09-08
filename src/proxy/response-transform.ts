@@ -1,4 +1,5 @@
 import { StringDecoder } from 'node:string_decoder';
+import { rehydrateText } from '../core/rehydrate.js';
 import type { ProxyProvider } from './types.js';
 
 /**
@@ -26,7 +27,7 @@ export function rehydrateOpenAIJsonBody(
     if (typeof choice.message === 'object' && choice.message !== null) {
       const message = choice.message as Record<string, unknown>;
       if (typeof message.content === 'string') {
-        const { content, replaced } = rehydrateString(message.content, sessionMap);
+        const { content, replaced } = rehydrateText(message.content, sessionMap);
         placeholders += replaced;
         return { ...choice, message: { ...message, content } };
       }
@@ -62,7 +63,7 @@ export function rehydrateAnthropicJsonBody(
       (block as { type?: unknown }).type === 'text' &&
       typeof (block as { text?: unknown }).text === 'string'
     ) {
-      const { content: text, replaced } = rehydrateString(
+      const { content: text, replaced } = rehydrateText(
         (block as { text: string }).text,
         sessionMap,
       );
@@ -83,35 +84,6 @@ export function rehydrateJsonBody(
   if (provider === 'openai') return rehydrateOpenAIJsonBody(body, sessionMap);
   if (provider === 'anthropic') return rehydrateAnthropicJsonBody(body, sessionMap);
   return { body, placeholders: 0 };
-}
-
-/**
- * Count how many placeholder occurrences were replaced. Used for the
- * `rehydrated` proxy event.
- */
-function rehydrateString(
-  text: string,
-  sessionMap: Record<string, string>,
-): { content: string; replaced: number } {
-  const sortedTokens = Object.keys(sessionMap).sort((a, b) => b.length - a.length);
-  if (sortedTokens.length === 0) return { content: text, replaced: 0 };
-
-  let result = text;
-  let replaced = 0;
-  for (const token of sortedTokens) {
-    const value = sessionMap[token];
-    if (typeof value !== 'string') continue;
-    // Count non-overlapping occurrences of `token` in `result`.
-    let searchFrom = 0;
-    while (true) {
-      const idx = result.indexOf(token, searchFrom);
-      if (idx === -1) break;
-      replaced += 1;
-      searchFrom = idx + token.length;
-    }
-    result = result.split(token).join(value);
-  }
-  return { content: result, replaced };
 }
 
 /**
@@ -230,10 +202,9 @@ function transformSseData(
   } else if (provider === 'anthropic') {
     transformed = rehydrateAnthropicStreamChunk(parsed, sessionMap);
   }
-  // `JSON.stringify` on the already-JSON payload preserves the wire shape
-  // while letting us rewrite text fields. The original payload may have been
-  // pretty-printed, but SSE bodies are conventionally compact, so this is
-  // indistinguishable from the upstream bytes in practice.
+  // Skip the round-trip when nothing changed — `JSON.stringify` on an already
+  // compact payload would otherwise introduce subtle whitespace differences.
+  if (transformed === parsed) return payload;
   return JSON.stringify(transformed);
 }
 
@@ -253,7 +224,7 @@ function rehydrateOpenAIStreamChunk(payload: unknown, sessionMap: Record<string,
     if (typeof choice.delta !== 'object' || choice.delta === null) return choice;
     const delta = choice.delta as Record<string, unknown>;
     if (typeof delta.content === 'string') {
-      const { content, replaced } = rehydrateString(delta.content, sessionMap);
+      const { content, replaced } = rehydrateText(delta.content, sessionMap);
       if (replaced === 0) return choice;
       return { ...choice, delta: { ...delta, content } };
     }
@@ -280,6 +251,6 @@ function rehydrateAnthropicStreamChunk(
   if (typeof root.delta !== 'object' || root.delta === null) return payload;
   const delta = root.delta as Record<string, unknown>;
   if (typeof delta.text !== 'string') return payload;
-  const { content: text } = rehydrateString(delta.text, sessionMap);
+  const { content: text } = rehydrateText(delta.text, sessionMap);
   return { ...root, delta: { ...delta, text } };
 }

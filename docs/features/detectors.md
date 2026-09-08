@@ -68,7 +68,7 @@ By default, the core scrub function runs the built-in detectors in priority orde
 - **Disable defaults**: Pass `disabledDetectors` (or `--disable` via CLI) to turn off specific built-ins.
 - **Enable opt-ins**: Pass `enabledDetectors` (or `--enable` via CLI) to activate off-by-default detectors like `NameDetector`.
 - **Strict Mode**: Pass `strictNameDetector: true` (or `--strict-name` via CLI) to reduce false positives for the `NameDetector`.
-- **Code Tell**: Pass `codeTellTerms` (or `--code-tell-terms` via CLI) as an array of identifiers to enable and configure the `CodeTellDetector`.
+- **Code Tell**: Pass `codeTellTerms` (or `--code-tell-terms` via CLI) as an array of identifiers to enable and configure the `CodeTellDetector`. Terms longer than 64 characters and terms past the 64-term cap are silently dropped to bound the per-scrub cost; call `detector.getDiagnostics()` to see exactly which terms were rejected.
 
 ### Custom Detectors (Programmatic)
 

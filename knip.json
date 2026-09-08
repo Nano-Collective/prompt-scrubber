@@ -3,5 +3,5 @@
   "ignoreDependencies": [],
   "ignoreBinaries": ["semgrep", "pbcopy", "pbpaste", "xclip", "osascript", "notify-send"],
   "ignoreWorkspaces": ["examples/*"],
-  "entry": ["src/proxy/index.ts!"]
+  "entry": ["scripts/extract-changelog.js"]
 }

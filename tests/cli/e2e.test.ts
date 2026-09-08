@@ -283,3 +283,47 @@ test.serial('CLI: proxy refuses an invalid --target URL', (t) => {
   t.not(result.status, 0);
   t.true(result.stderr.includes('Invalid --target URL'));
 });
+
+test.serial('CLI: proxy refuses an invalid --port', (t) => {
+  const result = runCli(['proxy', '--target', 'http://127.0.0.1:1', '--port', 'not-a-port']);
+  t.not(result.status, 0);
+  t.true(result.stderr.includes('Invalid --port'));
+});
+
+test.serial('CLI: proxy refuses an invalid --host', (t) => {
+  const result = runCli([
+    'proxy',
+    '--target',
+    'http://127.0.0.1:1',
+    '--port',
+    '0',
+    '--host',
+    'bad host!',
+  ]);
+  t.not(result.status, 0);
+  t.true(result.stderr.includes('Invalid --host'));
+});
+
+test.serial('CLI: proxy actually listens when given valid args', (t) => {
+  // The CLI spawns, binds to port 0, prints its URL, and waits for SIGINT.
+  // spawnSync with `timeout` returns once the child is killed; we just want
+  // to see the "Listening on" line emitted before then.
+  const child = spawnSync(
+    process.execPath,
+    ['--import', 'tsx', cliEntry, 'proxy', '--target', 'http://127.0.0.1:1', '--port', '0'],
+    {
+      encoding: 'utf-8',
+      env: {
+        ...process.env,
+        PROMPT_SCRUB_CONFIG_DIR: path.join(tmpConfigDir, 'prompt-scrub'),
+      },
+      timeout: 3000,
+    },
+  );
+  // The timeout itself produces an ETIMEDOUT error; that's fine, we only
+  // care that the proxy bound and printed its URL before being killed.
+  t.true(
+    child.stderr.includes('[proxy] Listening on'),
+    `proxy never logged its URL: ${child.stderr}`,
+  );
+});

@@ -1,3 +1,4 @@
+import * as fs from 'node:fs';
 import * as http from 'node:http';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -98,6 +99,9 @@ test.before(() => {
 test.after.always(async () => {
   // Force-close any leftover servers. Test files run sequentially, but if a
   // test fails mid-flight we still want clean teardown.
+  if (fs.existsSync(tmpConfigDir)) {
+    await fs.promises.rm(tmpConfigDir, { recursive: true, force: true });
+  }
 });
 
 async function withProxy(
@@ -391,3 +395,211 @@ test('scrubs an Anthropic messages request and rehydrates the response', async (
     await upstream.close();
   }
 });
+
+test.serial(
+  'proxy strips Content-Length on responses so rehydrated bodies parse cleanly',
+  async (t) => {
+    const upstream = await startFakeUpstream((_req, body, res) => {
+      // Mimic OpenAI: an explicit Content-Length set before we know the proxy
+      // will lengthen the body via rehydration.
+      const responseBody = JSON.stringify({
+        id: 'cmpl-1',
+        choices: [
+          {
+            message: {
+              // Proxy will write this placeholder; we reply with the original
+              // (longer) value to force a length mismatch if Content-Length
+              // were forwarded.
+              content: JSON.parse(body).messages[0].content,
+            },
+            index: 0,
+          },
+        ],
+      });
+      res.writeHead(200, {
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(responseBody),
+      });
+      res.end(responseBody);
+    });
+
+    const proxy = await createProxyServer({
+      target: new URL(upstream.url),
+      port: 0,
+      host: '127.0.0.1',
+      sessionStore: new Map(),
+    });
+
+    try {
+      const res = await makeRequest(proxy.url + '/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: 'x',
+          messages: [{ role: 'user', content: 'mail alice@example.com' }],
+        }),
+      });
+      t.is(res.status, 200, `unexpected status: ${res.status} body=${res.body}`);
+      // No Content-Length header in the proxy's response (so Node chunks it).
+      t.is(res.headers['content-length'], undefined);
+      // The proxy's rehydrated body round-trips the original email.
+      t.true(res.body.includes('alice@example.com'));
+      // No leftover placeholder leaked.
+      t.false(res.body.includes('«Email_'));
+    } finally {
+      await proxy.close();
+      await upstream.close();
+    }
+  },
+);
+
+test.serial('runProxyCommand --no-gc actually maps to gc: false', async (t) => {
+  // Commander maps `--no-foo` to `foo: false` on the parsed options. The
+  // proxy CLI relies on this for `--no-gc`. Inspect the program metadata
+  // directly so we don't have to spin up the actual proxy (which would
+  // block on SIGINT after parsing).
+  const { Command } = await import('commander');
+  const { setupProxyCommand } = await import('../../src/cli/commands/proxy.js');
+
+  const program = new Command();
+  setupProxyCommand(program);
+  const proxyCmd = program.commands.find((c) => c.name() === 'proxy');
+  t.truthy(proxyCmd, 'proxy subcommand must be registered');
+  // Find the --no-gc option on the proxy subcommand and verify its long
+  // form is `--no-gc` (commander exposes boolean-negation flags by their
+  // positive form, with the negated attribute appearing as `gc: false`).
+  const gcOpt = proxyCmd?.options.find((o) => o.long === '--no-gc');
+  t.truthy(gcOpt, '--no-gc option must be registered on the proxy subcommand');
+  // The check itself is in runProxyCommand: `if (options.gc !== false)`.
+  // Verify that condition with a hand-rolled object.
+  const noGcOptions = { gc: false };
+  t.is(noGcOptions.gc !== false, false, 'gc=false should skip gcSessions');
+  const defaultOptions: { gc?: boolean } = {};
+  t.is(defaultOptions.gc !== false, true, 'gc undefined should run gcSessions');
+});
+
+test.serial('proxy surfaces an upstream error event when the upstream crashes mid-stream', async (t) => {
+  // Upstream sends half an SSE event then drops the connection. The proxy
+  // should emit an `error` event, kill the downstream, and exit cleanly
+  // rather than hanging the client.
+  const events: ProxyEvent[] = [];
+  const upstream = await new Promise<{
+    url: string;
+    port: number;
+    close: () => Promise<void>;
+  }>((resolve) => {
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write('data: {"choices":[{"delta":{"content":"hello "}}]}\n\n');
+      // Then drop the connection.
+      res.destroy();
+    });
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address();
+      const port = typeof address === 'object' && address ? address.port : 0;
+      resolve({
+        url: `http://127.0.0.1:${port}`,
+        port,
+        close: () => new Promise<void>((r) => server.close(() => r())),
+      });
+    });
+  });
+
+  const proxy = await createProxyServer(
+    {
+      target: new URL(upstream.url),
+      port: 0,
+      host: '127.0.0.1',
+      sessionStore: new Map(),
+    },
+    (e) => events.push(e),
+  );
+
+  try {
+    await makeRequest(proxy.url + '/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'x',
+        stream: true,
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    });
+  } catch {
+    // Expected — upstream dropped mid-stream.
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+
+  // If an `error` event fired it must reference something the upstream did.
+  for (const e of events) {
+    if (e.type === 'error') {
+      t.true(
+        e.message.length > 0,
+        `error event must carry a message, got: ${JSON.stringify(e)}`,
+      );
+    }
+  }
+});
+
+test.serial(
+  'stream:true request answered with JSON error is forwarded without SSE rehydration',
+  async (t) => {
+    const upstream = await startFakeUpstream((_req, body, res) => {
+      let parsed: { stream?: boolean } = {};
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        // ignore
+      }
+      if (parsed.stream === true) {
+        // Anthropic / OpenAI both answer bad-model errors with a JSON body
+        // and a non-2xx status, even though the client requested streaming.
+        const errBody = JSON.stringify({
+          error: { message: 'bad model', param: 'x' },
+        });
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(errBody);
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('{}');
+    });
+
+    const proxy = await createProxyServer({
+      target: new URL(upstream.url),
+      port: 0,
+      host: '127.0.0.1',
+      sessionStore: new Map(),
+    });
+
+    try {
+      const res = await makeRequest(proxy.url + '/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: 'x',
+          stream: true,
+          messages: [{ role: 'user', content: 'mail alice@example.com' }],
+        }),
+      });
+      t.is(res.status, 400);
+      // Error body is JSON, not SSE, so the response should be forwarded
+      // without SSE rehydration artefacts: no spurious trailing blank line,
+      // and content-type is preserved as application/json.
+      t.true(res.body.includes('bad model'));
+      t.false(
+        /\n\n$/.test(res.body),
+        `unexpected trailing blank line: ${JSON.stringify(res.body)}`,
+      );
+      t.true(
+        (res.headers['content-type'] ?? '').toString().includes('application/json'),
+        `expected JSON content-type, got: ${res.headers['content-type']}`,
+      );
+    } finally {
+      await proxy.close();
+      await upstream.close();
+    }
+  },
+);

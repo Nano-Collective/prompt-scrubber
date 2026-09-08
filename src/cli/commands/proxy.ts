@@ -1,5 +1,5 @@
 import type { Command } from 'commander';
-import { runProxy } from '../../proxy/index.js';
+import { runProxy } from '../../proxy/proxy-server.js';
 import type { ScrubCliOptions } from '../../proxy/types.js';
 import { loadConfig } from '../../core/config.js';
 import { gcSessions } from '../../session/storage.js';
@@ -9,7 +9,8 @@ interface ProxyCommandOptions extends ScrubCliOptions {
   port: string;
   host?: string;
   verbose?: boolean;
-  noGc?: boolean;
+  /** True when `--gc` was passed; defaults to true. `--no-gc` flips this off. */
+  gc?: boolean;
 }
 
 function parseList(value: string | undefined): string[] {
@@ -44,7 +45,7 @@ async function runProxyCommand(options: ProxyCommandOptions): Promise<void> {
 
   // Garbage-collect expired sessions before we start, unless told not to.
   // This keeps long-running proxies from accumulating stale maps.
-  if (!options.noGc) {
+  if (options.gc !== false) {
     try {
       const config = loadConfig();
       gcSessions(config.sessionTtlDays ?? 7);

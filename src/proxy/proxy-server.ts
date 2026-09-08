@@ -168,7 +168,12 @@ async function handleClientRequest(
   maxBodyBytes: number,
 ): Promise<void> {
   const inboundSession = readSessionHeader(req.headers[SESSION_HEADER]);
-  const sessionId = inboundSession ?? crypto.randomUUID();
+  // Only accept client-supplied session IDs that match a UUID — the proxy
+  // generates a fresh one when the client omits the header. This caps the
+  // growth vector (a malicious caller can no longer feed arbitrary strings
+  // into the in-memory session map) without breaking the documented
+  // "share a session ID across requests" workflow.
+  const sessionId = inboundSession && isUuid(inboundSession) ? inboundSession : crypto.randomUUID();
   if (!sessions.has(sessionId)) sessions.set(sessionId, {});
 
   const incomingUrl = req.url ?? '/';
@@ -191,6 +196,14 @@ async function handleClientRequest(
       res.writeHead(413, { 'content-type': 'text/plain; charset=utf-8' });
       res.end(`prompt-scrub proxy: request body too large or unreadable: ${message}\n`);
       emit({ type: 'error', message: `request body: ${message}` });
+      // Tear the client socket down rather than letting it finish uploading
+      // a body we'll only discard — surfaces as ECONNRESET to the caller
+      // instead of a silent hang on a half-closed connection.
+      try {
+        req.destroy();
+      } catch {
+        // Already torn down.
+      }
       return;
     }
   }
@@ -228,7 +241,7 @@ async function handleClientRequest(
 
   const upstreamResponse = await dispatchUpstream(options.target, {
     method: req.method ?? 'GET',
-    path: incomingUrl,
+    path: joinTargetPath(options.target, incomingUrl),
     headers: upstreamHeaders,
     ...(upstreamBody !== undefined ? { body: upstreamBody } : {}),
   });
@@ -237,7 +250,7 @@ async function handleClientRequest(
   responseHeaders[SESSION_HEADER] = sessionId;
 
   const contentType = upstreamResponse.headers['content-type'] ?? '';
-  const isStreaming = detectStreaming(contentType, bodyBuf);
+  const isStreaming = contentType.toLowerCase().includes('text/event-stream');
 
   if (isStreaming) {
     res.writeHead(upstreamResponse.statusCode ?? 502, responseHeaders);
@@ -257,7 +270,16 @@ async function handleClientRequest(
     }
     let payload = Buffer.concat(chunks);
     const map = sessions.get(sessionId) ?? {};
-    if (payload.length > 0 && contentType.toLowerCase().includes('application/json')) {
+    // Only attempt to rehydrate if this session actually has mappings. A
+    // 4xx error body from the upstream carries no placeholders — running
+    // it through the rehydrator is a no-op, but skipping the path entirely
+    // is faster and avoids surprising the client with re-serialised
+    // whitespace from upstream's compact JSON.
+    const shouldRehydrate =
+      payload.length > 0 &&
+      contentType.toLowerCase().includes('application/json') &&
+      Object.keys(map).length > 0;
+    if (shouldRehydrate) {
       try {
         const parsed = JSON.parse(payload.toString('utf8'));
         const { body, placeholders } = rehydrateJsonBody(provider, parsed, map);
@@ -294,14 +316,6 @@ function scrubTextSync(
   });
   const scrubbed = typeof result.scrubbedContent === 'string' ? result.scrubbedContent : text;
   return { content: scrubbed, entities: result.stats.totalEntities };
-}
-
-function detectStreaming(contentType: string, requestBody: Buffer | undefined): boolean {
-  if (contentType.toLowerCase().includes('text/event-stream')) return true;
-  if (!requestBody) return false;
-  // Match `"stream":true` and `"stream": true` and friends without parsing
-  // the whole body. False positives are harmless — we just stream a buffer.
-  return /"stream"\s*:\s*true/.test(requestBody.toString('utf8'));
 }
 
 function readBody(req: IncomingMessage, maxBodyBytes: number): Promise<Buffer> {
@@ -368,6 +382,11 @@ function readSessionHeader(value: string | string[] | undefined): string | undef
   return undefined;
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function isUuid(value: string): boolean {
+  return UUID_RE.test(value);
+}
+
 function buildUpstreamHeaders(
   incoming: http.IncomingHttpHeaders,
   target: URL,
@@ -398,6 +417,11 @@ function filterResponseHeaders(headers: http.IncomingHttpHeaders): http.Outgoing
     if (HOP_BY_HOP.has(lower)) continue;
     out[key] = value;
   }
+  // Rehydration typically lengthens the body (placeholders expand into the
+  // real values), so the upstream's content-length no longer matches what
+  // we'll actually write. Letting Node recompute it from the bytes we send
+  // avoids desyncing the HTTP parser on the keep-alive connection.
+  delete out['content-length'];
   return out;
 }
 
@@ -425,6 +449,7 @@ function dispatchUpstream(target: URL, req: DispatchRequest): Promise<UpstreamRe
         method: req.method,
         path: req.path,
         headers: req.headers,
+        timeout: 30_000,
       },
       (res) => {
         resolve({
@@ -435,11 +460,28 @@ function dispatchUpstream(target: URL, req: DispatchRequest): Promise<UpstreamRe
       },
     );
     upstreamReq.on('error', reject);
+    upstreamReq.on('timeout', () => {
+      upstreamReq.destroy(new Error('upstream timeout after 30s'));
+    });
     if (req.body && req.body.length > 0) {
       upstreamReq.write(req.body);
     }
     upstreamReq.end();
   });
+}
+
+/**
+ * Join the target's pathname prefix with the incoming URL's path. Without
+ * this, `--target https://gateway.example.com/openai` silently drops the
+ * `/openai` prefix and every request lands on `/`.
+ */
+function joinTargetPath(target: URL, incomingUrl: string): string {
+  const incomingPath = parsePath(incomingUrl);
+  const base = target.pathname.replace(/\/$/, '');
+  if (incomingPath === '/' || incomingPath === '') {
+    return `${base}/`;
+  }
+  return `${base}${incomingPath}`;
 }
 
 function pipeStreamingResponse(
@@ -490,10 +532,13 @@ function pipeStreamingResponse(
   const onData = (chunk: Buffer | Uint8Array) => {
     try {
       const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      const before = countPlaceholders(buf.toString('utf8'));
       const out = rehydrator.push(buf);
-      const after = countPlaceholders(out);
-      totalRehydrated += Math.max(0, before - after);
+      // The rehydrator already counts what it replaced; emit a per-chunk
+      // counter via the `rehydrated` event when chunks are small enough that
+      // we don't want to wait for the close. (`createSseRehydrator` tracks
+      // this internally; here we just count "did anything change?" to keep
+      // the events cheap.)
+      if (out !== buf.toString('utf8')) totalRehydrated += 1;
       if (out.length > 0) downstream.write(out);
     } catch (err) {
       onError(err);
@@ -519,24 +564,4 @@ function pipeStreamingResponse(
       // ignore
     }
   });
-}
-
-/**
- * Cheap heuristic to count `«Foo_N»` fragments in a string. Used to compute
- * how many placeholders were rewritten in a streaming chunk — the actual
- * rehydrator does the real work and would otherwise require walking the
- * tokenised stream.
- */
-function countPlaceholders(text: string): number {
-  let count = 0;
-  let i = 0;
-  while (i < text.length) {
-    const start = text.indexOf('«', i);
-    if (start === -1) return count;
-    const end = text.indexOf('»', start + 1);
-    if (end === -1) return count;
-    count += 1;
-    i = end + 1;
-  }
-  return count;
 }
