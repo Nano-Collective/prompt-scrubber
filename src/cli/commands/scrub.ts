@@ -1,6 +1,9 @@
 import { readFileSync } from 'node:fs';
 import type { Command } from 'commander';
+import { runCliAction } from '../../core/cli-key-resolver.js';
 import { loadConfig } from '../../core/config.js';
+import { getEncryptionKey } from '../../core/key-manager.js';
+import { isSessionEncrypted, sessionExists } from '../../session/storage.js';
 
 import { CodeTellDetector } from '../../detectors/code-tell.js';
 import { loadConfiguredRulePacks } from '../../core/rule-packs.js';
@@ -102,78 +105,108 @@ export function setupScrubCommand(program: Command) {
     )
     .option('-q, --quiet', 'Suppress the scrub summary printed to stderr')
     .action(async (file, options) => {
-      let input = '';
+      await runCliAction(async () => {
+        let input = '';
 
-      if (file) {
-        try {
-          input = readFileSync(file, 'utf8');
-        } catch (err: unknown) {
-          console.error(`Error reading file: ${(err as Error).message}`);
-          process.exit(1);
-          return;
-        }
-      } else {
-        // Read from stdin
-        try {
-          input = readFileSync(0, 'utf-8');
-        } catch {
-          console.error('No input provided.');
-          process.exit(1);
-          return;
-        }
-      }
-
-      if (!input) {
-        process.exit(0);
-        return;
-      }
-
-      // Build detector options once and reuse for diagnostics + scrubbing.
-      const disabledDetectors = options.disable
-        ? options.disable.split(',').map((s: string) => s.trim())
-        : [];
-      const enabledDetectors = options.enable
-        ? options.enable.split(',').map((s: string) => s.trim())
-        : [];
-      const codeTellTerms = options.codeTellTerms
-        ? options.codeTellTerms.split(',').map((s: string) => s.trim())
-        : undefined;
-
-      // Warn the user if any configured CodeTell terms were dropped by
-      // the per-term length / term-count caps before scrubbing starts.
-      for (const detector of getActiveDetectors({
-        disabledDetectors,
-        enabledDetectors,
-        ...(options.strictName !== undefined ? { strictNameDetector: options.strictName } : {}),
-        ...(codeTellTerms !== undefined ? { codeTellTerms } : {}),
-      })) {
-        if (detector instanceof CodeTellDetector) {
-          const diag = detector.getDiagnostics();
-          if (diag.oversized.length > 0) {
-            console.error(
-              `Warning: CodeTellDetector dropped ${diag.oversized.length} term(s) longer than 64 chars: ${diag.oversized.map((t) => `"${t.slice(0, 24)}…"`).join(', ')}`,
-            );
+        if (file) {
+          try {
+            input = readFileSync(file, 'utf8');
+          } catch (err: unknown) {
+            console.error(`Error reading file: ${(err as Error).message}`);
+            process.exit(1);
+            return;
           }
-          if (diag.overflowed.length > 0) {
-            console.error(
-              `Warning: CodeTellDetector dropped ${diag.overflowed.length} term(s) past the 64-term cap`,
-            );
+        } else {
+          // Read from stdin
+          try {
+            input = readFileSync(0, 'utf-8');
+          } catch {
+            console.error('No input provided.');
+            process.exit(1);
+            return;
           }
         }
-      }
 
-      const result = await handleScrub(input, options);
+        if (!input) {
+          process.exit(0);
+          return;
+        }
 
-      // Print scrubbed content to stdout
-      process.stdout.write(result.scrubbedContent as string);
+        // Pull the encryption key up-front when we'll need to write a session.
+        // We resolve before reading the file so a wrong key fails fast without
+        // leaking the original sensitive content via the scrubbed output.
+        const config = loadConfig();
+        const sessionId =
+          typeof options.sessionId === 'string' && options.sessionId.length > 0
+            ? options.sessionId
+            : undefined;
+        const sessionIsEncrypted =
+          Boolean(config.encryptionEnabled) || (sessionId ? isSessionEncrypted(sessionId) : false);
+        if (sessionIsEncrypted) {
+          // First-time encryption setup (interactive user, no env var, would
+          // create a brand-new session) requires passphrase confirmation so a
+          // typo doesn't permanently lock the new session.
+          const willCreateNew =
+            Boolean(config.encryptionEnabled) && (!sessionId || !sessionExists(sessionId));
+          const needsConfirm =
+            willCreateNew && !process.env.PROMPT_SCRUB_KEY && process.stdin.isTTY === true;
+          try {
+            await getEncryptionKey(needsConfirm ? { confirm: true } : {});
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(message);
+            process.exit(1);
+            return;
+          }
+        }
 
-      // Print session ID to stderr
-      if (result.scrubbedContent !== input) {
-        console.error(`Session ID: ${result.sessionId}`);
-      }
+        // Build detector options once and reuse for diagnostics + scrubbing.
+        const disabledDetectors = options.disable
+          ? options.disable.split(',').map((s: string) => s.trim())
+          : [];
+        const enabledDetectors = options.enable
+          ? options.enable.split(',').map((s: string) => s.trim())
+          : [];
+        const codeTellTerms = options.codeTellTerms
+          ? options.codeTellTerms.split(',').map((s: string) => s.trim())
+          : undefined;
 
-      if (!options.quiet) {
-        console.error(formatScrubSummary(result.stats));
-      }
+        // Warn the user if any configured CodeTell terms were dropped by
+        // the per-term length / term-count caps before scrubbing starts.
+        for (const detector of getActiveDetectors({
+          disabledDetectors,
+          enabledDetectors,
+          ...(options.strictName !== undefined ? { strictNameDetector: options.strictName } : {}),
+          ...(codeTellTerms !== undefined ? { codeTellTerms } : {}),
+        })) {
+          if (detector instanceof CodeTellDetector) {
+            const diag = detector.getDiagnostics();
+            if (diag.oversized.length > 0) {
+              console.error(
+                `Warning: CodeTellDetector dropped ${diag.oversized.length} term(s) longer than 64 chars: ${diag.oversized.map((t) => `"${t.slice(0, 24)}…"`).join(', ')}`,
+              );
+            }
+            if (diag.overflowed.length > 0) {
+              console.error(
+                `Warning: CodeTellDetector dropped ${diag.overflowed.length} term(s) past the 64-term cap`,
+              );
+            }
+          }
+        }
+
+        const result = await handleScrub(input, options);
+
+        // Print scrubbed content to stdout
+        process.stdout.write(result.scrubbedContent as string);
+
+        // Print session ID to stderr
+        if (result.scrubbedContent !== input) {
+          console.error(`Session ID: ${result.sessionId}`);
+        }
+
+        if (!options.quiet) {
+          console.error(formatScrubSummary(result.stats));
+        }
+      });
     });
 }

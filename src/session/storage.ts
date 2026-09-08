@@ -1,7 +1,15 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { getConfigDir } from '../core/config.js';
+import { getConfigDir, loadConfig } from '../core/config.js';
+import {
+  SessionDecryptionError,
+  decryptSession,
+  encryptSession,
+  isEncryptedEnvelope,
+} from '../core/crypto.js';
+import { getCachedKey } from '../core/key-manager.js';
 import type { SessionMap } from '../types/index.js';
+
 /**
  * Gets the file path for a specific session ID.
  */
@@ -10,7 +18,39 @@ export function getSessionStoragePath(sessionId: string): string {
 }
 
 /**
+ * Tells the caller whether a session file currently exists on disk.
+ * Cheap existence check that does not read or parse anything.
+ */
+export function sessionExists(sessionId: string): boolean {
+  return fs.existsSync(getSessionStoragePath(sessionId));
+}
+
+/**
+ * Tells the caller whether a session file is encrypted on disk. Reads and
+ * parses the file in full so the discriminator is reliable; for cheaper
+ * existence checks, prefer `sessionExists`.
+ */
+export function isSessionEncrypted(sessionId: string): boolean {
+  const filePath = getSessionStoragePath(sessionId);
+  if (!fs.existsSync(filePath)) {
+    return false;
+  }
+  try {
+    const data = fs.readFileSync(filePath, 'utf-8');
+    const parsed: unknown = JSON.parse(data);
+    return isEncryptedEnvelope(parsed);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Reads a session map from disk. Returns an empty object if the file doesn't exist.
+ *
+ * Throws `SessionDecryptionError` when the file is encrypted but cannot be
+ * decrypted (wrong key, tampered ciphertext, malformed envelope). Callers
+ * that want the historical "swallow and start fresh" behaviour should catch
+ * this error type and inspect it.
  */
 export function readSessionMap(sessionId: string): SessionMap {
   const filePath = getSessionStoragePath(sessionId);
@@ -18,24 +58,48 @@ export function readSessionMap(sessionId: string): SessionMap {
     return {};
   }
 
+  let parsed: unknown;
   try {
     const data = fs.readFileSync(filePath, 'utf-8');
-    return JSON.parse(data) as SessionMap;
+    parsed = JSON.parse(data);
   } catch {
-    if (fs.existsSync(filePath)) {
-      const corruptPath = `${filePath}.corrupt-${Date.now()}`;
-      try {
-        fs.renameSync(filePath, corruptPath);
-      } catch {
-        // Best-effort quarantine; ignore rename failure.
-      }
-    }
+    quarantineCorruptFile(filePath);
     return {};
+  }
+
+  if (isEncryptedEnvelope(parsed)) {
+    const key = getCachedKey() ?? process.env.PROMPT_SCRUB_KEY;
+    if (!key) {
+      throw new SessionDecryptionError(
+        'Session is encrypted but no key is available. Set PROMPT_SCRUB_KEY or call setCachedEncryptionKey() before reading the session.',
+      );
+    }
+    return decryptSession(parsed, key);
+  }
+
+  return parsed as SessionMap;
+}
+
+function quarantineCorruptFile(filePath: string): void {
+  if (!fs.existsSync(filePath)) return;
+  const corruptPath = `${filePath}.corrupt-${Date.now()}`;
+  try {
+    fs.renameSync(filePath, corruptPath);
+  } catch {
+    // Best-effort quarantine; ignore rename failure.
   }
 }
 
 /**
  * Writes a session map to disk, creating necessary parent directories if they don't exist.
+ *
+ * Encryption rules:
+ * - If `config.encryptionEnabled` is true, the map is always written encrypted.
+ * - If a previous file at this path was encrypted (i.e. the user enabled
+ *   encryption at some point), the new write is encrypted too. This prevents
+ *   a silent plaintext downgrade when someone toggles `encryptionEnabled`
+ *   off mid-session.
+ * - Otherwise the map is written as plain JSON.
  */
 export function writeSessionMap(sessionId: string, map: SessionMap): void {
   const filePath = getSessionStoragePath(sessionId);
@@ -47,7 +111,13 @@ export function writeSessionMap(sessionId: string, map: SessionMap): void {
   }
 
   try {
-    fs.writeFileSync(tmpPath, JSON.stringify(map, null, 2), { encoding: 'utf-8', mode: 0o600 });
+    const config = loadConfig();
+    const shouldEncrypt = Boolean(config.encryptionEnabled) || isSessionEncrypted(sessionId);
+    const payload = shouldEncrypt
+      ? JSON.stringify(encryptWithKey(map), null, 2)
+      : JSON.stringify(map, null, 2);
+
+    fs.writeFileSync(tmpPath, payload, { encoding: 'utf-8', mode: 0o600 });
     fs.renameSync(tmpPath, filePath);
   } catch (error) {
     if (fs.existsSync(tmpPath)) {
@@ -57,6 +127,16 @@ export function writeSessionMap(sessionId: string, map: SessionMap): void {
     }
     throw error;
   }
+}
+
+function encryptWithKey(map: SessionMap) {
+  const key = getCachedKey() ?? process.env.PROMPT_SCRUB_KEY;
+  if (!key) {
+    throw new SessionDecryptionError(
+      'Encryption is enabled but no key is available. Set PROMPT_SCRUB_KEY or call setCachedEncryptionKey() before writing the session.',
+    );
+  }
+  return encryptSession(map, key);
 }
 
 /**
