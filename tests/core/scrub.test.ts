@@ -44,6 +44,87 @@ test('scrubs multiple finding types in one pass', (t) => {
   t.regex(scrubbed, /Url_\d/);
 });
 
+test('a Windows path is redacted even when an email follows it on the same line', (t) => {
+  const result = scrub({
+    content: 'Config at C:\\app\\cfg.ini owner alice@corp.com',
+    sessionMap: {},
+  });
+  t.is(result.scrubbedContent, 'Config at «Path_1» owner «Email_1»');
+  t.is(result.sessionMap?.['«Path_1»'], 'C:\\app\\cfg.ini');
+});
+
+test('a Windows path ending in a space-bearing segment is redacted in full', (t) => {
+  const result = scrub({ content: 'User dir C:\\Users\\John Doe', sessionMap: {} });
+  t.is(result.scrubbedContent, 'User dir «Path_1»');
+  t.is(result.sessionMap?.['«Path_1»'], 'C:\\Users\\John Doe');
+});
+
+test('a space-bearing Windows path is redacted alongside a following email', (t) => {
+  const result = scrub({
+    content: 'Owner C:\\Users\\John Doe mailed alice@corp.com',
+    sessionMap: {},
+  });
+  t.is(result.scrubbedContent, 'Owner «Path_1» mailed «Email_1»');
+  t.is(result.sessionMap?.['«Path_1»'], 'C:\\Users\\John Doe');
+});
+
+test('an over-matched Windows path is narrowed against the email inside it', (t) => {
+  // The detector treats "alice@corp.com" as a filename and keeps going; the
+  // resolver narrows the Path back. Nothing reaches the model in cleartext.
+  const result = scrub({ content: 'C:\\Users\\John Doe alice@corp.com', sessionMap: {} });
+  t.is(result.scrubbedContent, '«Path_1» «Email_1»');
+  t.is(result.sessionMap?.['«Path_1»'], 'C:\\Users\\John Doe');
+  t.is(result.sessionMap?.['«Email_1»'], 'alice@corp.com');
+});
+
+// Lowercase space-bearing segments: these leaked a surname, employer or filename
+// in cleartext next to a placeholder before the detector was reworked.
+
+test('a Windows path with a lowercase space-bearing segment leaks nothing', (t) => {
+  const result = scrub({
+    content: 'Home C:\\Users\\john smith\\AppData\\creds.json',
+    sessionMap: {},
+  });
+  t.is(result.scrubbedContent, 'Home «Path_1»');
+  t.is(result.sessionMap?.['«Path_1»'], 'C:\\Users\\john smith\\AppData\\creds.json');
+});
+
+test('an employer name inside a Windows path is not left in cleartext', (t) => {
+  const result = scrub({ content: 'C:\\dev\\acme corp\\client list.csv', sessionMap: {} });
+  t.is(result.scrubbedContent, '«Path_1»');
+  t.is(result.sessionMap?.['«Path_1»'], 'C:\\dev\\acme corp\\client list.csv');
+});
+
+test('a project name inside a Windows path is not left in cleartext', (t) => {
+  const result = scrub({
+    content: 'Build failed in C:\\repos\\my project\\src\\config.ini',
+    sessionMap: {},
+  });
+  t.is(result.scrubbedContent, 'Build failed in «Path_1»');
+  t.is(result.sessionMap?.['«Path_1»'], 'C:\\repos\\my project\\src\\config.ini');
+});
+
+// A second drive spec on the same line (#127 follow-up): without a guard the
+// first path's match ran into the second path's drive letter, destroying its
+// "X:\" prefix so the tail ("\dest\bin") was left in cleartext next to a
+// placeholder that made the line look scrubbed.
+
+test('a copy command redacts both source and destination paths', (t) => {
+  // Replacement runs right-to-left (see the Address_2/Address_1 test above),
+  // so the rightmost finding is numbered first.
+  const result = scrub({ content: 'copy C:\\src\\bin D:\\dest\\bin', sessionMap: {} });
+  t.is(result.scrubbedContent, 'copy «Path_2» «Path_1»');
+  t.is(result.sessionMap?.['«Path_2»'], 'C:\\src\\bin');
+  t.is(result.sessionMap?.['«Path_1»'], 'D:\\dest\\bin');
+});
+
+test('a comma-separated list of paths redacts both entries, not the separator', (t) => {
+  const result = scrub({ content: 'Files: C:\\a\\b, D:\\c\\d', sessionMap: {} });
+  t.is(result.scrubbedContent, 'Files: «Path_2», «Path_1»');
+  t.is(result.sessionMap?.['«Path_2»'], 'C:\\a\\b');
+  t.is(result.sessionMap?.['«Path_1»'], 'D:\\c\\d');
+});
+
 test('scrubbing the same value twice generates the same placeholder', (t) => {
   const result1 = scrub({ content: 'Contact: repeat@example.com' });
   const result2 = scrub({
