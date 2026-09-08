@@ -14,8 +14,16 @@ test('truncated CSI does not wipe the rest of the line', (t) => {
   t.is(sanitizeLine('\x1b[3'), '');
 });
 
-test('OSC is dropped through BEL', (t) => {
-  t.is(sanitizeLine('\x1b]0;secret@corp.com\x07visible'), 'visible');
+test('OSC payload is kept after dropping ESC', (t) => {
+  t.is(sanitizeLine('\x1b]0;secret@corp.com\x07visible'), ']0;secret@corp.comvisible');
+});
+
+test('unterminated OSC does not eat the rest of the line', (t) => {
+  t.is(sanitizeLine('\x1b]0;secret@corp.com still here'), ']0;secret@corp.com still here');
+});
+
+test('C1 CSI introducer 0x9B is stripped like ESC [', (t) => {
+  t.is(sanitizeLine('\x9b2Jhide-me@corp.com'), 'hide-me@corp.com');
 });
 
 test('tab is kept and DEL is dropped', (t) => {

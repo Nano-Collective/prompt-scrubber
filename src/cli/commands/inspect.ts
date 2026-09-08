@@ -50,7 +50,7 @@ export async function handleInspect(
 }
 
 export function simulateScrub(text: string, findings: Finding[]): string {
-  const session = new SessionManager();
+  const session = new SessionManager(undefined, {});
   let scrubbed = text;
 
   for (const finding of [...findings].reverse()) {

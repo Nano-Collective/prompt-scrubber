@@ -279,6 +279,15 @@ test.serial('CLI: diff rejects a non-integer --context', (t) => {
   t.true(result.stderr.includes('--context must be a non-negative integer'));
 });
 
+test.serial('CLI: diff reads a file path', (t) => {
+  fs.mkdirSync(tmpConfigDir, { recursive: true });
+  const file = path.join(tmpConfigDir, 'diff-input.txt');
+  fs.writeFileSync(file, 'Email me at alice@corp.com');
+  const result = runCli(['diff', '--no-color', file]);
+  t.is(result.status, 0);
+  t.is(result.stdout, '- Email me at alice@corp.com\n+ Email me at «Email_1»\n');
+});
+
 test.serial('CLI: sessions rm fails when session ID is missing without --all', (t) => {
   const result = runCli(['sessions', 'rm']);
   t.not(result.status, 0);

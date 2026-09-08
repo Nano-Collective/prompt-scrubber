@@ -1,8 +1,8 @@
 import type { Command } from 'commander';
 import { loadConfig } from '../../core/config.js';
 import { loadConfiguredRulePacks } from '../../core/rule-packs.js';
-import { CodeTellDetector } from '../../detectors/code-tell.js';
 import { getActiveDetectors, scrub } from '../../core/scrub.js';
+import { CodeTellDetector } from '../../detectors/code-tell.js';
 import { gcSessions } from '../../session/storage.js';
 import type { ScrubStats } from '../../types/index.js';
 import { addDetectorOptions, readInput } from '../io.js';

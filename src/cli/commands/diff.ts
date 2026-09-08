@@ -1,4 +1,6 @@
-import { InvalidArgumentError, type Command } from 'commander';
+import { type Command, InvalidArgumentError } from 'commander';
+import { SessionManager } from '../../session/session-manager.js';
+import type { Finding } from '../../types/index.js';
 import { addDetectorOptions, readInput } from '../io.js';
 import { sanitizeLine } from '../sanitize.js';
 import { handleInspect, simulateScrub } from './inspect.js';
@@ -6,14 +8,13 @@ import { handleInspect, simulateScrub } from './inspect.js';
 const RED = '\x1b[31m';
 const GREEN = '\x1b[32m';
 const RESET = '\x1b[0m';
-// LCS is n*m; skip the table when the trimmed middle is huge
-const LCS_CELL_BUDGET = 250_000;
 
 type DiffFormatOptions = {
   color?: boolean;
   sideBySide?: boolean;
   context?: number;
   width?: number;
+  findings?: Finding[];
 };
 
 type Edit = { type: 'eq' | 'del' | 'add'; line: string };
@@ -24,40 +25,71 @@ function splitLines(text: string): string[] {
   return lines;
 }
 
-function pairIndexWise(a: string[], b: string[]): Edit[] {
-  const n = Math.min(a.length, b.length);
-  const out: Edit[] = [];
+function lineIndexAt(text: string, offset: number): number {
+  let line = 0;
+  const n = Math.min(Math.max(0, offset), text.length);
   for (let i = 0; i < n; i++) {
-    if (a[i] === b[i]) out.push({ type: 'eq', line: a[i]! });
-    else {
-      out.push({ type: 'del', line: a[i]! });
-      out.push({ type: 'add', line: b[i]! });
-    }
+    if (text[i] === '\n') line++;
   }
-  for (let i = n; i < a.length; i++) out.push({ type: 'del', line: a[i]! });
-  for (let i = n; i < b.length; i++) out.push({ type: 'add', line: b[i]! });
-  return out;
+  return line;
 }
 
-function lcsDiff(a: string[], b: string[]): Edit[] {
-  const n = a.length;
-  const m = b.length;
-  const dp: number[][] = Array.from({ length: n + 1 }, () => Array<number>(m + 1).fill(0));
-  for (let i = n - 1; i >= 0; i--) {
-    for (let j = m - 1; j >= 0; j--) {
-      dp[i]![j] = a[i] === b[j] ? dp[i + 1]![j + 1]! + 1 : Math.max(dp[i + 1]![j]!, dp[i]![j + 1]!);
+function dirtyLines(text: string, spans: Array<[number, number]>): boolean[] {
+  const dirty = splitLines(text).map(() => false);
+  if (dirty.length === 0) return dirty;
+  for (const [start, end] of spans) {
+    const from = Math.min(lineIndexAt(text, start), dirty.length - 1);
+    const to = Math.min(lineIndexAt(text, Math.max(start, end - 1)), dirty.length - 1);
+    for (let i = from; i <= to; i++) dirty[i] = true;
+  }
+  return dirty;
+}
+
+function placeholderSpans(scrubbed: string, findings: Finding[]): Array<[number, number]> {
+  const session = new SessionManager(undefined, {});
+  const phs: string[] = [];
+  for (const finding of [...findings].reverse()) {
+    phs.push(session.createPlaceholder(finding.placeholderPrefix, finding.value));
+  }
+  const spans: Array<[number, number]> = [];
+  for (const ph of phs) {
+    let from = 0;
+    while (from <= scrubbed.length) {
+      const idx = scrubbed.indexOf(ph, from);
+      if (idx === -1) break;
+      spans.push([idx, idx + ph.length]);
+      from = idx + ph.length;
     }
   }
+  return spans;
+}
 
+function alignByFindings(
+  a: string[],
+  b: string[],
+  origDirty: boolean[],
+  scrubDirty: boolean[],
+): Edit[] {
   const out: Edit[] = [];
   let i = 0;
   let j = 0;
-  while (i < n && j < m) {
-    if (a[i] === b[j]) {
+  while (i < a.length || j < b.length) {
+    if (i < a.length && j < b.length && !origDirty[i] && !scrubDirty[j] && a[i] === b[j]) {
       out.push({ type: 'eq', line: a[i]! });
       i++;
       j++;
-    } else if (dp[i + 1]![j]! >= dp[i]![j + 1]!) {
+    } else if (i < a.length && origDirty[i]) {
+      out.push({ type: 'del', line: a[i]! });
+      i++;
+    } else if (j < b.length && scrubDirty[j]) {
+      out.push({ type: 'add', line: b[j]! });
+      j++;
+    } else if (i < a.length && j < b.length) {
+      out.push({ type: 'del', line: a[i]! });
+      out.push({ type: 'add', line: b[j]! });
+      i++;
+      j++;
+    } else if (i < a.length) {
       out.push({ type: 'del', line: a[i]! });
       i++;
     } else {
@@ -65,17 +97,11 @@ function lcsDiff(a: string[], b: string[]): Edit[] {
       j++;
     }
   }
-  while (i < n) {
-    out.push({ type: 'del', line: a[i]! });
-    i++;
-  }
-  while (j < m) {
-    out.push({ type: 'add', line: b[j]! });
-    j++;
-  }
   return out;
 }
 
+// Scrub never inserts lines, so equal-length middles can be paired by index.
+// Unequal middles dump as all dels then all adds — not a general-purpose diff.
 function diffLines(a: string[], b: string[]): Edit[] {
   let lo = 0;
   while (lo < a.length && lo < b.length && a[lo] === b[lo]) lo++;
@@ -86,24 +112,22 @@ function diffLines(a: string[], b: string[]): Edit[] {
     hiB--;
   }
 
-  const midA = a.slice(lo, hiA);
-  const midB = b.slice(lo, hiB);
-  const prefix = a.slice(0, lo).map((line) => ({ type: 'eq' as const, line }));
-  const suffix = a.slice(hiA).map((line) => ({ type: 'eq' as const, line }));
-
-  let mid: Edit[];
-  if (midA.length === midB.length) {
-    mid = pairIndexWise(midA, midB);
-  } else if (midA.length * midB.length > LCS_CELL_BUDGET) {
-    console.error(
-      'diff: input too large for a full line comparison; showing an index-wise pairing',
-    );
-    mid = pairIndexWise(midA, midB);
+  const out: Edit[] = [];
+  for (let i = 0; i < lo; i++) out.push({ type: 'eq', line: a[i]! });
+  if (hiA - lo === hiB - lo) {
+    for (let i = lo; i < hiA; i++) {
+      if (a[i] === b[i]) out.push({ type: 'eq', line: a[i]! });
+      else {
+        out.push({ type: 'del', line: a[i]! });
+        out.push({ type: 'add', line: b[i]! });
+      }
+    }
   } else {
-    mid = lcsDiff(midA, midB);
+    for (let i = lo; i < hiA; i++) out.push({ type: 'del', line: a[i]! });
+    for (let i = lo; i < hiB; i++) out.push({ type: 'add', line: b[i]! });
   }
-
-  return [...prefix, ...mid, ...suffix];
+  for (let i = hiA; i < a.length; i++) out.push({ type: 'eq', line: a[i]! });
+  return out;
 }
 
 function changeRanges(edits: Edit[], context: number): Array<[number, number]> {
@@ -154,13 +178,50 @@ function formatUnified(edits: Edit[], ranges: Array<[number, number]>, color: bo
   return out;
 }
 
-function wrap(text: string, width: number): string[] {
-  const chars = [...text];
-  if (chars.length === 0) return [''];
-  const parts: string[] = [];
-  for (let i = 0; i < chars.length; i += width) {
-    parts.push(chars.slice(i, i + width).join(''));
+function charWidth(cp: number): number {
+  if (cp < 32 || cp === 127) return 0;
+  if (cp < 127) return 1;
+  if (
+    (cp >= 0x1100 && cp <= 0x115f) ||
+    (cp >= 0x2329 && cp <= 0x232a) ||
+    (cp >= 0x2e80 && cp <= 0xa4cf && cp !== 0x303f) ||
+    (cp >= 0xac00 && cp <= 0xd7a3) ||
+    (cp >= 0xf900 && cp <= 0xfaff) ||
+    (cp >= 0xfe10 && cp <= 0xfe19) ||
+    (cp >= 0xfe30 && cp <= 0xfe6f) ||
+    (cp >= 0xff00 && cp <= 0xff60) ||
+    (cp >= 0xffe0 && cp <= 0xffe6) ||
+    (cp >= 0x1f300 && cp <= 0x1f64f) ||
+    (cp >= 0x1f900 && cp <= 0x1f9ff) ||
+    (cp >= 0x20000 && cp <= 0x3fffd)
+  ) {
+    return 2;
   }
+  return 1;
+}
+
+function displayWidth(text: string): number {
+  let w = 0;
+  for (const ch of text) w += charWidth(ch.codePointAt(0)!);
+  return w;
+}
+
+function wrap(text: string, width: number): string[] {
+  const col = Math.max(1, width);
+  const parts: string[] = [];
+  let cur = '';
+  let w = 0;
+  for (const ch of text) {
+    const cw = charWidth(ch.codePointAt(0)!);
+    if (cur && w + cw > col) {
+      parts.push(cur);
+      cur = '';
+      w = 0;
+    }
+    cur += ch;
+    w += cw;
+  }
+  if (cur || parts.length === 0) parts.push(cur);
   return parts;
 }
 
@@ -178,11 +239,8 @@ function sideBySideRows(
   for (let i = 0; i < n; i++) {
     const l = L[i] ?? '';
     const r = R[i] ?? '';
-    const lPad = Math.max(0, col - [...l].length);
-    const rPad = Math.max(0, col - [...r].length);
-    rows.push(
-      `${paint(l, leftColor)}${' '.repeat(lPad)} | ${paint(r, rightColor)}${' '.repeat(rPad)}`,
-    );
+    const lPad = Math.max(0, col - displayWidth(l));
+    rows.push(`${paint(l, leftColor)}${' '.repeat(lPad)} | ${paint(r, rightColor)}`);
   }
   return rows;
 }
@@ -234,6 +292,14 @@ function formatSideBySide(
   return `${rows.join('\n')}\n`;
 }
 
+export function shouldColor(
+  colorFlag: boolean | undefined,
+  isTTY: boolean,
+  noColorEnv: string | undefined,
+): boolean {
+  return colorFlag !== false && isTTY && !noColorEnv;
+}
+
 export function formatDiff(
   original: string,
   scrubbed: string,
@@ -241,7 +307,21 @@ export function formatDiff(
 ): string {
   const color = options.color === true;
   const context = options.context ?? 3;
-  const edits = diffLines(splitLines(original), splitLines(scrubbed));
+  const a = splitLines(original);
+  const b = splitLines(scrubbed);
+  const findings = options.findings;
+  const edits =
+    findings && findings.length > 0
+      ? alignByFindings(
+          a,
+          b,
+          dirtyLines(
+            original,
+            findings.map((f) => f.span),
+          ),
+          dirtyLines(scrubbed, placeholderSpans(scrubbed, findings)),
+        )
+      : diffLines(a, b);
   const ranges = changeRanges(edits, context);
   if (ranges.length === 0) return 'No changes.\n';
   if (options.sideBySide) {
@@ -278,14 +358,18 @@ export function setupDiffCommand(program: Command) {
 
       const findings = await handleInspect(input, options);
       const scrubbed = simulateScrub(input, findings);
-      const useColor =
-        options.color !== false && Boolean(process.stdout.isTTY) && !process.env.NO_COLOR;
+      const useColor = shouldColor(
+        options.color,
+        Boolean(process.stdout.isTTY),
+        process.env.NO_COLOR,
+      );
 
       process.stdout.write(
         formatDiff(input, scrubbed, {
           color: useColor,
           sideBySide: Boolean(options.sideBySide),
           context: options.context,
+          findings,
         }),
       );
     });

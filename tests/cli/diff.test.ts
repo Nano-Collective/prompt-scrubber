@@ -1,6 +1,11 @@
-import { Command } from 'commander';
 import test from 'ava';
-import { formatDiff, parseContext, setupDiffCommand } from '../../src/cli/commands/diff.js';
+import { Command } from 'commander';
+import {
+  formatDiff,
+  parseContext,
+  setupDiffCommand,
+  shouldColor,
+} from '../../src/cli/commands/diff.js';
 import { handleInspect, simulateScrub } from '../../src/cli/commands/inspect.js';
 
 test('formatDiff shows a minus/plus pair for a one-line change', (t) => {
@@ -110,6 +115,43 @@ test('parseContext accepts zero and rejects junk', (t) => {
   t.throws(() => parseContext('abc'));
   t.throws(() => parseContext('-5'));
   t.throws(() => parseContext('3.2'));
+});
+
+test('shouldColor is off when --no-color, not a TTY, or NO_COLOR is set', (t) => {
+  t.true(shouldColor(undefined, true, undefined));
+  t.false(shouldColor(false, true, undefined));
+  t.false(shouldColor(undefined, false, undefined));
+  t.false(shouldColor(undefined, true, '1'));
+});
+
+test('formatDiff --side-by-side pairs leftover dels with a blank right cell', (t) => {
+  const out = formatDiff('keep\nold\nline\nkeep', 'keep\nnew\nkeep', {
+    color: false,
+    sideBySide: true,
+    width: 40,
+    context: 0,
+  });
+  t.true(out.includes('old'));
+  t.true(out.includes('new'));
+  t.true(out.includes('line'));
+  t.true(out.includes('|'));
+  t.false(/ \| +$/m.test(out.trimEnd()));
+});
+
+test('formatDiff uses finding spans when an address crosses a newline', async (t) => {
+  const pad = Array.from({ length: 400 }, () => 'plain text here');
+  const original = ['first@corp.com', ...pad, '123 Main', 'Street', ...pad, 'last@corp.com'].join(
+    '\n',
+  );
+  const findings = await handleInspect(original, {});
+  const scrubbed = simulateScrub(original, findings);
+  const out = formatDiff(original, scrubbed, { color: false, context: 0, findings });
+  t.true(out.includes('- first@corp.com\n'));
+  t.true(out.includes('- last@corp.com\n'));
+  t.true(out.includes('- 123 Main\n'));
+  t.true(out.includes('- Street\n'));
+  t.true(out.includes('+ «Address_1»\n'));
+  t.false(out.includes('- plain text here\n'));
 });
 
 test.serial('diff command fails when file is unreadable', async (t) => {
