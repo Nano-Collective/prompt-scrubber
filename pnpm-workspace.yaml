@@ -3,3 +3,6 @@ packages:
 allowBuilds:
   esbuild: true
 auditConfig: { ignoreGhsas: null }
+blockExoticSubdeps: true
+minimumReleaseAge: 10080
+trustPolicy: no-downgrade
