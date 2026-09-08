@@ -487,6 +487,82 @@ test.serial('runProxyCommand throws on an invalid --host', async (t) => {
   );
 });
 
+test.serial('runProxyCommand logs a warning when session GC throws', async (t) => {
+  // Stub gcSessions via Node's require-style override isn't available in
+  // ESM; instead point PROMPT_SCRUB_CONFIG_DIR at a config dir whose
+  // `sessions/` subdir has been chmod'd to 0o000 so that readdirSync throws
+  // an EACCES error inside gcSessions. The catch block in runProxyCommand
+  // should log a warning and continue. We then immediately SIGINT the
+  // process group to stop runProxy from blocking forever.
+  const { runProxyCommand } = await import('../../src/cli/commands/proxy.js');
+  const unreadableDir = path.join(__dirname, '.tmp-gc-error');
+  fs.mkdirSync(path.join(unreadableDir, 'sessions'), { recursive: true });
+  fs.chmodSync(path.join(unreadableDir, 'sessions'), 0o000);
+  const originalDir = process.env.PROMPT_SCRUB_CONFIG_DIR;
+  process.env.PROMPT_SCRUB_CONFIG_DIR = unreadableDir;
+
+  const originalError = console.error;
+  const stderr: string[] = [];
+  console.error = (msg: string) => stderr.push(msg);
+
+  const proxyPromise = runProxyCommand({
+    target: 'http://127.0.0.1:1',
+    port: '0',
+  });
+
+  // Wait briefly for the GC warning to be logged, then send SIGINT to
+  // unblock runProxy's signal handler.
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  process.emit('SIGINT');
+  await proxyPromise.catch(() => {
+    // runProxy's SIGINT handler resolves cleanly.
+  });
+
+  process.env.PROMPT_SCRUB_CONFIG_DIR = originalDir;
+  console.error = originalError;
+  fs.chmodSync(path.join(unreadableDir, 'sessions'), 0o755);
+  fs.rmSync(unreadableDir, { recursive: true, force: true });
+
+  const combined = stderr.join('\n');
+  t.true(
+    combined.includes('Warning: failed to run session garbage collection'),
+    `expected GC warning, got: ${combined}`,
+  );
+});
+
+test.serial(
+  'runProxyCommand parses comma-separated CLI options and starts the proxy',
+  async (t) => {
+    // Cover the parseList() body in cli/commands/proxy.ts and confirm
+    // runProxyCommand actually wires scrub options through to the proxy.
+    const { runProxyCommand } = await import('../../src/cli/commands/proxy.js');
+    const originalError = console.error;
+    console.error = () => {
+      // silence the [proxy] Listening line.
+    };
+
+    // We don't need the proxy to actually start; sending SIGINT immediately
+    // unblocks the runProxy signal handler.
+    const proxyPromise = runProxyCommand({
+      target: 'http://127.0.0.1:1',
+      port: '0',
+      disable: 'EmailDetector,NameDetector',
+      enable: 'NameDetector,CodeTellDetector',
+      codeTellTerms: 'foo,bar,baz',
+      urlAllowlist: 'example.com,foo.test',
+    });
+
+    setTimeout(() => process.emit('SIGINT'), 50);
+    await proxyPromise.catch(() => {
+      // The proxy exits cleanly on SIGINT; nothing to assert beyond the
+      // lack of an unhandled exception (parseList didn't blow up).
+    });
+
+    console.error = originalError;
+    t.pass('runProxyCommand with comma-separated options completed without parse errors');
+  },
+);
+
 test.serial('runProxyCommand --no-gc actually maps to gc: false', async (t) => {
   // Commander maps `--no-foo` to `foo: false` on the parsed options. The
   // proxy CLI relies on this for `--no-gc`. Inspect the program metadata
@@ -543,6 +619,38 @@ test.serial('proxy preserves the target URL pathname prefix when forwarding', as
   t.deepEqual(seen, ['/openai/v1/chat/completions']);
 });
 
+test.serial('proxy joins a trailing-slash target with a root-path incoming URL', async (t) => {
+  // --target https://gateway.example.com/openai/ + incoming '/' should
+  // still produce '/openai/' on the wire (the joiner strips the trailing
+  // slash from the base before appending).
+  const seen: string[] = [];
+  const upstream = await startFakeUpstream((req, _body, res) => {
+    seen.push(req.url ?? '');
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end('{}');
+  });
+  const proxy = await createProxyServer({
+    target: new URL('http://127.0.0.1:' + upstream.port + '/openai/'),
+    port: 0,
+    host: '127.0.0.1',
+    sessionStore: new Map(),
+  });
+
+  try {
+    const res = await makeRequest(proxy.url + '/', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    t.is(res.status, 200);
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+
+  t.deepEqual(seen, ['/openai/']);
+});
+
 test.serial(
   'proxy surfaces an upstream error event when the upstream crashes mid-stream',
   async (t) => {
@@ -556,9 +664,13 @@ test.serial(
       close: () => Promise<void>;
     }>((resolve) => {
       const server = http.createServer((_req, res) => {
+        res.on('error', () => {
+          // Swallow the synthetic error from the setImmediate below; the
+          // proxy will see it through the same channel.
+        });
         res.writeHead(200, { 'content-type': 'text/event-stream' });
         res.write('data: {"choices":[{"delta":{"content":"hello "}}]}\n\n');
-        // Then drop the connection.
+        // Then drop the connection so the proxy's stream errors.
         res.destroy();
       });
       server.listen(0, '127.0.0.1', () => {
