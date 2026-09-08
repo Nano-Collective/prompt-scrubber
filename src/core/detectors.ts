@@ -6,9 +6,13 @@ export interface DetectorMetadata {
 
 const BUILT_IN_DETECTORS: DetectorMetadata[] = [
   { name: 'SecretDetector', source: 'built-in', defaultState: 'on' },
+  { name: 'CreditCardDetector', source: 'built-in', defaultState: 'on' },
+  { name: 'IbanDetector', source: 'built-in', defaultState: 'on' },
+  { name: 'SsnDetector', source: 'built-in', defaultState: 'on' },
   { name: 'EmailDetector', source: 'built-in', defaultState: 'on' },
   { name: 'UrlDetector', source: 'built-in', defaultState: 'on' },
   { name: 'PathDetector', source: 'built-in', defaultState: 'on' },
+  { name: 'IpAddressDetector', source: 'built-in', defaultState: 'on' },
   { name: 'PhoneDetector', source: 'built-in', defaultState: 'on' },
   { name: 'AddressDetector', source: 'built-in', defaultState: 'on' },
   { name: 'NameDetector', source: 'built-in', defaultState: 'off' },

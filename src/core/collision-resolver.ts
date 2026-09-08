@@ -3,13 +3,17 @@ import type { Finding } from '../types/index.js';
 // Priority table: lower number = higher priority (wins collisions)
 const DETECTOR_PRIORITY: Record<string, number> = {
   SecretDetector: 1,
-  EmailDetector: 2,
-  UrlDetector: 3,
-  PathDetector: 4,
-  PhoneDetector: 5,
-  AddressDetector: 6,
-  NameDetector: 7,
-  CodeTellDetector: 8,
+  CreditCardDetector: 2,
+  IbanDetector: 3,
+  SsnDetector: 4,
+  EmailDetector: 5,
+  UrlDetector: 6,
+  PathDetector: 7,
+  IpAddressDetector: 8,
+  PhoneDetector: 9,
+  AddressDetector: 10,
+  NameDetector: 11,
+  CodeTellDetector: 12,
 };
 
 function priorityOf(finding: Finding): number {

@@ -1,10 +1,14 @@
 import { CodeTellDetector } from '../detectors/code-tell.js';
+import { CreditCardDetector } from '../detectors/credit-card.js';
 import { EmailDetector } from '../detectors/email.js';
+import { IbanDetector } from '../detectors/iban.js';
+import { IpAddressDetector } from '../detectors/ip-address.js';
 import { NameDetector } from '../detectors/name.js';
 import { PathDetector } from '../detectors/path.js';
 import { PhoneDetector } from '../detectors/phone.js';
 import { PostalAddressDetector } from '../detectors/postal-address.js';
 import { SecretDetector } from '../detectors/secret.js';
+import { SsnDetector } from '../detectors/ssn.js';
 import { UrlDetector } from '../detectors/url.js';
 import { SessionManager } from '../session/session-manager.js';
 import type { Detector, Message, ScrubRequest, ScrubResult, ScrubStats } from '../types/index.js';
@@ -12,9 +16,13 @@ import { resolveCollisions } from './collision-resolver.js';
 
 const DEFAULT_DETECTORS: Detector[] = [
   new SecretDetector(),
+  new CreditCardDetector(),
+  new IbanDetector(),
+  new SsnDetector(),
   new EmailDetector(),
   new UrlDetector(),
   new PathDetector(),
+  new IpAddressDetector(),
   new PhoneDetector(),
   new PostalAddressDetector(),
 ];

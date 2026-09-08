@@ -37,6 +37,16 @@ test('handleScrub respects disabled detectors', async (t) => {
   t.is(result.scrubbedContent, 'Email alice@example.com'); // unscrubbed
 });
 
+test('handleScrub respects a comma-separated --disable list of the high-risk detectors', async (t) => {
+  const original = 'Card 4532-0150-0000-0007, SSN 123-45-6789, host 192.168.1.1';
+  const result = await handleScrub(original, {
+    sessionId: 'test-session-disable-pii',
+    // Mixed suffixed and bare names, as a user would type them.
+    disable: 'CreditCardDetector,Ssn,IpAddress',
+  });
+  t.is(result.scrubbedContent, original); // unscrubbed
+});
+
 test('handleScrub uses provided sessionId', async (t) => {
   const result = await handleScrub('Email alice@example.com', { sessionId: 'test-session-2' });
   t.is(result.sessionId, 'test-session-2');
