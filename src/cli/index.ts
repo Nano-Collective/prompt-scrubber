@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Command } from 'commander';
 import { setupConfigCommands } from './commands/config.js';
+import { setupDiffCommand } from './commands/diff.js';
 import { setupInspectCommand } from './commands/inspect.js';
 import { setupProxyCommand } from './commands/proxy.js';
 import { setupRehydrateCommand } from './commands/rehydrate.js';
@@ -40,6 +41,7 @@ program
 setupScrubCommand(program);
 setupRehydrateCommand(program);
 setupInspectCommand(program);
+setupDiffCommand(program);
 setupSessionsCommands(program);
 setupRulesCommands(program);
 setupConfigCommands(program);

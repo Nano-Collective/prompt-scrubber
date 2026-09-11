@@ -3,7 +3,7 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'ava';
 import { rehydrate } from '../../src/core/rehydrate.js';
-import { scrub } from '../../src/core/scrub.js';
+import { DEFAULT_CONFIDENCE, scrub } from '../../src/core/scrub.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -42,6 +42,87 @@ test('scrubs multiple finding types in one pass', (t) => {
   t.false(scrubbed.includes('https://api.example.com'));
   t.regex(scrubbed, /Email_\d/);
   t.regex(scrubbed, /Url_\d/);
+});
+
+test('a Windows path is redacted even when an email follows it on the same line', (t) => {
+  const result = scrub({
+    content: 'Config at C:\\app\\cfg.ini owner alice@corp.com',
+    sessionMap: {},
+  });
+  t.is(result.scrubbedContent, 'Config at «Path_1» owner «Email_1»');
+  t.is(result.sessionMap?.['«Path_1»'], 'C:\\app\\cfg.ini');
+});
+
+test('a Windows path ending in a space-bearing segment is redacted in full', (t) => {
+  const result = scrub({ content: 'User dir C:\\Users\\John Doe', sessionMap: {} });
+  t.is(result.scrubbedContent, 'User dir «Path_1»');
+  t.is(result.sessionMap?.['«Path_1»'], 'C:\\Users\\John Doe');
+});
+
+test('a space-bearing Windows path is redacted alongside a following email', (t) => {
+  const result = scrub({
+    content: 'Owner C:\\Users\\John Doe mailed alice@corp.com',
+    sessionMap: {},
+  });
+  t.is(result.scrubbedContent, 'Owner «Path_1» mailed «Email_1»');
+  t.is(result.sessionMap?.['«Path_1»'], 'C:\\Users\\John Doe');
+});
+
+test('an over-matched Windows path is narrowed against the email inside it', (t) => {
+  // The detector treats "alice@corp.com" as a filename and keeps going; the
+  // resolver narrows the Path back. Nothing reaches the model in cleartext.
+  const result = scrub({ content: 'C:\\Users\\John Doe alice@corp.com', sessionMap: {} });
+  t.is(result.scrubbedContent, '«Path_1» «Email_1»');
+  t.is(result.sessionMap?.['«Path_1»'], 'C:\\Users\\John Doe');
+  t.is(result.sessionMap?.['«Email_1»'], 'alice@corp.com');
+});
+
+// Lowercase space-bearing segments: these leaked a surname, employer or filename
+// in cleartext next to a placeholder before the detector was reworked.
+
+test('a Windows path with a lowercase space-bearing segment leaks nothing', (t) => {
+  const result = scrub({
+    content: 'Home C:\\Users\\john smith\\AppData\\creds.json',
+    sessionMap: {},
+  });
+  t.is(result.scrubbedContent, 'Home «Path_1»');
+  t.is(result.sessionMap?.['«Path_1»'], 'C:\\Users\\john smith\\AppData\\creds.json');
+});
+
+test('an employer name inside a Windows path is not left in cleartext', (t) => {
+  const result = scrub({ content: 'C:\\dev\\acme corp\\client list.csv', sessionMap: {} });
+  t.is(result.scrubbedContent, '«Path_1»');
+  t.is(result.sessionMap?.['«Path_1»'], 'C:\\dev\\acme corp\\client list.csv');
+});
+
+test('a project name inside a Windows path is not left in cleartext', (t) => {
+  const result = scrub({
+    content: 'Build failed in C:\\repos\\my project\\src\\config.ini',
+    sessionMap: {},
+  });
+  t.is(result.scrubbedContent, 'Build failed in «Path_1»');
+  t.is(result.sessionMap?.['«Path_1»'], 'C:\\repos\\my project\\src\\config.ini');
+});
+
+// A second drive spec on the same line (#127 follow-up): without a guard the
+// first path's match ran into the second path's drive letter, destroying its
+// "X:\" prefix so the tail ("\dest\bin") was left in cleartext next to a
+// placeholder that made the line look scrubbed.
+
+test('a copy command redacts both source and destination paths', (t) => {
+  // Replacement runs right-to-left (see the Address_2/Address_1 test above),
+  // so the rightmost finding is numbered first.
+  const result = scrub({ content: 'copy C:\\src\\bin D:\\dest\\bin', sessionMap: {} });
+  t.is(result.scrubbedContent, 'copy «Path_2» «Path_1»');
+  t.is(result.sessionMap?.['«Path_2»'], 'C:\\src\\bin');
+  t.is(result.sessionMap?.['«Path_1»'], 'D:\\dest\\bin');
+});
+
+test('a comma-separated list of paths redacts both entries, not the separator', (t) => {
+  const result = scrub({ content: 'Files: C:\\a\\b, D:\\c\\d', sessionMap: {} });
+  t.is(result.scrubbedContent, 'Files: «Path_2», «Path_1»');
+  t.is(result.sessionMap?.['«Path_2»'], 'C:\\a\\b');
+  t.is(result.sessionMap?.['«Path_1»'], 'D:\\c\\d');
 });
 
 test('scrubbing the same value twice generates the same placeholder', (t) => {
@@ -320,4 +401,401 @@ test('stats include categories contributed by custom detectors', (t) => {
 
   t.is(result.stats.totalEntities, 2);
   t.deepEqual(result.stats.byCategory, { Ticket: 1, Email: 1 });
+});
+
+test('a placeholder already present in the text is never reissued to a new value', (t) => {
+  const sessionMap: Record<string, string> = {};
+  const result = scrub({
+    content: 'the token «Email_1» is literal, contact a@b.com',
+    sessionMap,
+  });
+
+  t.is(result.scrubbedContent, 'the token «Email_1» is literal, contact «Email_2»');
+  t.deepEqual(sessionMap, { '«Email_2»': 'a@b.com' });
+  t.is(
+    rehydrate({ content: result.scrubbedContent as string, sessionMap }).content,
+    'the token «Email_1» is literal, contact a@b.com',
+    'the literal token survives and only the real value is restored',
+  );
+});
+
+test('the placeholder guard is order-independent across a Message[] payload', (t) => {
+  // The literal token is in the LAST message. Reserving per message would only
+  // protect against literals seen at or before the message being scrubbed, so
+  // message 1 would happily mint «Email_1» for a real address and both tokens
+  // would mean two different things.
+  const sessionMap: Record<string, string> = {};
+  const result = scrub({
+    content: [
+      { role: 'user', content: 'real x@y.com' },
+      { role: 'user', content: 'literal «Email_1» here' },
+    ],
+    sessionMap,
+  });
+
+  const messages = result.scrubbedContent as Message[];
+  t.is(messages[0]?.content, 'real «Email_2»');
+  t.is(messages[1]?.content, 'literal «Email_1» here');
+  t.deepEqual(sessionMap, { '«Email_2»': 'x@y.com' });
+
+  const back = rehydrate({ content: messages, sessionMap }).content as Message[];
+  t.is(back[0]?.content, 'real x@y.com');
+  t.is(back[1]?.content, 'literal «Email_1» here', 'the literal token is left alone');
+});
+
+test('the placeholder guard covers non-alphabetic rule-pack prefixes', (t) => {
+  // `placeholderPrefix` is free-form on the public extension surface, so a pack
+  // may mint «Ticket2_1». A guard that only recognised [A-Za-z]+ prefixes would
+  // leave exactly the collision it exists to prevent reachable for rule packs.
+  const ticketDetector = {
+    name: 'TicketDetector',
+    detect: (text: string) => {
+      const index = text.indexOf('TKT-99');
+      return index === -1
+        ? []
+        : [
+            {
+              category: 'Ticket2',
+              span: [index, index + 'TKT-99'.length] as [number, number],
+              value: 'TKT-99',
+              placeholderPrefix: 'Ticket2',
+            },
+          ];
+    },
+  };
+
+  const sessionMap: Record<string, string> = {};
+  const result = scrub({
+    content: 'literal «Ticket2_1» plus TKT-99',
+    sessionMap,
+    options: { customDetectors: [ticketDetector] },
+  });
+
+  t.is(result.scrubbedContent, 'literal «Ticket2_1» plus «Ticket2_2»');
+  t.deepEqual(sessionMap, { '«Ticket2_2»': 'TKT-99' });
+  t.is(
+    rehydrate({ content: result.scrubbedContent as string, sessionMap }).content,
+    'literal «Ticket2_1» plus TKT-99',
+    'and the value round-trips — a distinct token that never rehydrates is no fix',
+  );
+});
+
+test('a non-alphabetic prefix resumes its counter across a reused session', (t) => {
+  // rebuildCategoryCounts reads the prefix back off the map. A counter that
+  // cannot parse «Ticket2_5» restarts at 1 and hands out «Ticket2_1» — a name
+  // an earlier run may well have used for something else. The gap is the point:
+  // the `newPlaceholder in this.map` guard alone would not catch this, because
+  // «Ticket2_1» is genuinely absent from the map.
+  const sessionMap: Record<string, string> = { '«Ticket2_5»': 'TKT-5' };
+  const makeDetector = (value: string) => ({
+    name: 'TicketDetector',
+    detect: (text: string) => {
+      const index = text.indexOf(value);
+      return index === -1
+        ? []
+        : [
+            {
+              category: 'Ticket2',
+              span: [index, index + value.length] as [number, number],
+              value,
+              placeholderPrefix: 'Ticket2',
+            },
+          ];
+    },
+  });
+
+  const result = scrub({
+    content: 'next is TKT-2',
+    sessionMap,
+    options: { customDetectors: [makeDetector('TKT-2')] },
+  });
+
+  t.is(result.scrubbedContent, 'next is «Ticket2_6»');
+  t.deepEqual(sessionMap, { '«Ticket2_5»': 'TKT-5', '«Ticket2_6»': 'TKT-2' });
+});
+
+// --- Confidence Filtering ---
+
+// 'ask' stays lowercase: NameDetector would otherwise read 'Ask Alice' as one name.
+const NAME_AND_EMAIL = 'ask Alice about alice@example.com';
+
+test('every finding is scored by default, and nothing is filtered', (t) => {
+  const result = scrub({
+    content: NAME_AND_EMAIL,
+    options: { enabledDetectors: ['NameDetector'] },
+  });
+  t.is(result.scrubbedContent, 'ask «Name_1» about «Email_1»');
+});
+
+test('minConfidence drops findings scored below the threshold', (t) => {
+  // NameDetector scores 0.5, EmailDetector 0.95.
+  const result = scrub({
+    content: NAME_AND_EMAIL,
+    options: { enabledDetectors: ['NameDetector'], minConfidence: 0.8 },
+  });
+  t.is(result.scrubbedContent, 'ask Alice about «Email_1»');
+  t.is(result.stats.totalEntities, 1);
+  t.deepEqual(result.stats.byCategory, { Email: 1 });
+});
+
+test('a threshold above every score leaves the content untouched', (t) => {
+  const result = scrub({ content: NAME_AND_EMAIL, options: { minConfidence: 1 } });
+  t.is(result.scrubbedContent, NAME_AND_EMAIL);
+  t.is(result.stats.totalEntities, 0);
+  t.deepEqual(result.sessionMap, {});
+});
+
+test('minConfidence applies to every message in a Message[] payload', (t) => {
+  const result = scrub({
+    content: [
+      { role: 'user', content: 'ask Alice' },
+      { role: 'user', content: 'mail alice@example.com' },
+    ],
+    options: { enabledDetectors: ['NameDetector'], minConfidence: 0.8 },
+  });
+  t.deepEqual(result.scrubbedContent, [
+    { role: 'user', content: 'ask Alice' },
+    { role: 'user', content: 'mail «Email_1»' },
+  ]);
+});
+
+test('a detector that reports no confidence is scored as DEFAULT_CONFIDENCE', (t) => {
+  const unscored = {
+    name: 'UnscoredDetector',
+    detect: (text: string) => {
+      const index = text.indexOf('CustomToken');
+      return index === -1
+        ? []
+        : [
+            {
+              category: 'Custom',
+              span: [index, index + 'CustomToken'.length] as [number, number],
+              value: 'CustomToken',
+              placeholderPrefix: 'Custom',
+            },
+          ];
+    },
+  };
+
+  const kept = scrub({
+    content: 'Check CustomToken.',
+    options: { customDetectors: [unscored], minConfidence: DEFAULT_CONFIDENCE },
+  });
+  t.is(kept.scrubbedContent, 'Check «Custom_1».');
+
+  const dropped = scrub({
+    content: 'Check CustomToken.',
+    options: { customDetectors: [unscored], minConfidence: DEFAULT_CONFIDENCE + 0.1 },
+  });
+  t.is(dropped.scrubbedContent, 'Check CustomToken.');
+});
+
+test('a filtered-out finding cannot suppress the overlapping finding it outranks', (t) => {
+  // Secret beats Email in collision resolution, so unfiltered this fabricated
+  // low-confidence Secret swallows the address. Filtering runs first, so once
+  // it is below the threshold the Email is detected instead of being masked.
+  const weakSecret = {
+    name: 'WeakSecretDetector',
+    detect: (text: string) => {
+      const index = text.indexOf('alice@example.com');
+      return index === -1
+        ? []
+        : [
+            {
+              category: 'Secret',
+              span: [index, index + 'alice@example.com'.length] as [number, number],
+              value: 'alice@example.com',
+              placeholderPrefix: 'Secret',
+              confidence: 0.3,
+              method: 'entropy',
+            },
+          ];
+    },
+  };
+
+  const unfiltered = scrub({
+    content: 'mail alice@example.com',
+    options: { customDetectors: [weakSecret] },
+  });
+  t.is(unfiltered.scrubbedContent, 'mail «Secret_1»');
+
+  const filtered = scrub({
+    content: 'mail alice@example.com',
+    options: { customDetectors: [weakSecret], minConfidence: 0.8 },
+  });
+  t.is(filtered.scrubbedContent, 'mail «Email_1»');
+});
+
+// --- What a threshold suppressed -------------------------------------------
+//
+// Silent under-redaction is the dangerous direction for a redaction tool, so
+// the pipeline has to be able to say what a threshold cost the caller.
+
+test('stats.suppressed records what the threshold left in the clear', (t) => {
+  const result = scrub({
+    content: 'mail alice@example.com and call 555-123-4567',
+    options: { minConfidence: 0.9 },
+  });
+
+  t.is(result.scrubbedContent, 'mail «Email_1» and call 555-123-4567');
+  t.is(result.stats.totalEntities, 1);
+  t.deepEqual(result.stats.suppressed, { total: 1, byCategory: { Phone: 1 } });
+});
+
+test('stats.suppressed is populated even when nothing survived the threshold', (t) => {
+  // The worst case: the output is byte-identical to a prompt that never had a
+  // phone number in it, so the stats are the only thing that can say otherwise.
+  const result = scrub({ content: 'call 555-123-4567', options: { minConfidence: 0.95 } });
+
+  t.is(result.scrubbedContent, 'call 555-123-4567');
+  t.is(result.stats.totalEntities, 0);
+  t.deepEqual(result.stats.suppressed, { total: 1, byCategory: { Phone: 1 } });
+});
+
+test('stats.suppressed is absent when no threshold is set', (t) => {
+  const result = scrub({ content: 'mail alice@example.com and call 555-123-4567' });
+
+  t.is(result.stats.totalEntities, 2);
+  t.is(result.stats.suppressed, undefined);
+});
+
+test('stats.suppressed is absent when the threshold dropped nothing', (t) => {
+  const result = scrub({ content: 'mail alice@example.com', options: { minConfidence: 0.9 } });
+
+  t.is(result.stats.totalEntities, 1);
+  t.is(result.stats.suppressed, undefined);
+});
+
+test('a dropped finding that another finding still redacts is not reported', (t) => {
+  // The fabricated weak Secret covers exactly the same span as the Email that
+  // replaces it. The address is still redacted, so reporting it as suppressed
+  // would be crying wolf — and a summary that cries wolf gets ignored.
+  const weakSecret = {
+    name: 'WeakSecretDetector',
+    detect: (text: string) => {
+      const index = text.indexOf('alice@example.com');
+      return index === -1
+        ? []
+        : [
+            {
+              category: 'Secret',
+              span: [index, index + 'alice@example.com'.length] as [number, number],
+              value: 'alice@example.com',
+              placeholderPrefix: 'Secret',
+              confidence: 0.3,
+              method: 'entropy',
+            },
+          ];
+    },
+  };
+
+  const result = scrub({
+    content: 'mail alice@example.com',
+    options: { customDetectors: [weakSecret], minConfidence: 0.8 },
+  });
+
+  t.is(result.scrubbedContent, 'mail «Email_1»');
+  t.is(result.stats.suppressed, undefined);
+});
+
+test('a dropped finding only partly covered is reported', (t) => {
+  // Same shape, but the weak finding reaches past the email into text nothing
+  // else redacts. That tail really is left in the clear, so it must be named.
+  const wideWeak = {
+    name: 'WideWeakDetector',
+    detect: (text: string) => {
+      const index = text.indexOf('alice@example.com');
+      return index === -1
+        ? []
+        : [
+            {
+              category: 'Secret',
+              span: [index, text.length] as [number, number],
+              value: text.slice(index),
+              placeholderPrefix: 'Secret',
+              confidence: 0.3,
+              method: 'entropy',
+            },
+          ];
+    },
+  };
+
+  const result = scrub({
+    content: 'mail alice@example.com plus trailing text',
+    options: { customDetectors: [wideWeak], minConfidence: 0.8 },
+  });
+
+  t.is(result.scrubbedContent, 'mail «Email_1» plus trailing text');
+  t.deepEqual(result.stats.suppressed, { total: 1, byCategory: { Secret: 1 } });
+});
+
+test('suppressed counts accumulate across a Message[] payload', (t) => {
+  const result = scrub({
+    content: [
+      { role: 'user', content: 'call 555-123-4567' },
+      { role: 'assistant', content: 'or 555-987-6543' },
+      { role: 'user', content: 'mail alice@example.com' },
+    ],
+    options: { minConfidence: 0.9 },
+  });
+
+  t.is(result.stats.totalEntities, 1);
+  t.deepEqual(result.stats.suppressed, { total: 2, byCategory: { Phone: 2 } });
+});
+
+test('a non-finite minConfidence is clamped to 0 rather than dropping everything', (t) => {
+  // finding.confidence >= NaN is always false, so an unclamped NaN — e.g. from
+  // a library caller doing Number(process.env.MIN_CONF) on a bad value — would
+  // silently discard every finding. That is fail-open in exactly the direction
+  // this feature exists to prevent.
+  const result = scrub({
+    content: 'mail alice@example.com and key sk-abcdefghijklmnopqrstuvwxyz',
+    options: { minConfidence: Number.NaN },
+  });
+  t.is(result.scrubbedContent, 'mail «Email_1» and key «Secret_1»');
+  t.is(result.stats.totalEntities, 2);
+});
+
+test('an out-of-range minConfidence is clamped into 0-1', (t) => {
+  const tooHigh = scrub({ content: NAME_AND_EMAIL, options: { minConfidence: 2 } });
+  t.is(tooHigh.scrubbedContent, NAME_AND_EMAIL);
+
+  const tooLow = scrub({
+    content: NAME_AND_EMAIL,
+    options: { enabledDetectors: ['NameDetector'], minConfidence: -1 },
+  });
+  t.is(tooLow.scrubbedContent, 'ask «Name_1» about «Email_1»');
+});
+
+test('overlapping low-confidence findings collapse to one suppressed region', (t) => {
+  // Two weak detectors firing on the same span is one region left in the
+  // clear, not two, so the count reflects regions rather than detector hits.
+  const weakAt = (name: string, category: string) => ({
+    name,
+    detect: (text: string) => {
+      const index = text.indexOf('555-123-4567');
+      return index === -1
+        ? []
+        : [
+            {
+              category,
+              span: [index, index + '555-123-4567'.length] as [number, number],
+              value: '555-123-4567',
+              placeholderPrefix: category,
+              confidence: 0.2,
+              method: 'entropy',
+            },
+          ];
+    },
+  });
+
+  const result = scrub({
+    content: 'call 555-123-4567',
+    options: {
+      customDetectors: [weakAt('WeakA', 'Name'), weakAt('WeakB', 'CodeTell')],
+      minConfidence: 0.9,
+    },
+  });
+
+  t.is(result.stats.suppressed?.total, 1);
 });

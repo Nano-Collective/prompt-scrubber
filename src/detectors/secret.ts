@@ -1,8 +1,17 @@
-import type { Detector, Finding } from '../types/index.js';
+import type { Detector, Finding, ScoredFinding } from '../types/index.js';
+
+// Confidence per layer. A vendor prefix plus a characteristic length is as close
+// to certain as pattern matching gets; a suggestive key name is a good guess;
+// entropy alone is only ever a hint.
+const PREFIX_CONFIDENCE = 0.99;
+const BEARER_CONFIDENCE = 0.9;
+const KEY_NAME_CONFIDENCE = 0.7;
+const ENTROPY_CONFIDENCE = 0.6;
 
 // --- Layer 1: Known API key prefixes ---
 // These are high-precision patterns: specific vendor prefixes + characteristic lengths.
-const PREFIX_PATTERNS: { regex: RegExp; name: string }[] = [
+// `confidence` defaults to PREFIX_CONFIDENCE below; only Bearer overrides it.
+const PREFIX_PATTERNS: { regex: RegExp; name: string; confidence?: number }[] = [
   // OpenAI: sk-...48 alphanumeric chars (new format: sk-proj-..., sk-svcacct-...)
   {
     regex: /sk-(?:proj-|svcacct-|ant-api\d+-)?[A-Za-z0-9_-]{20,80}/g,
@@ -22,7 +31,11 @@ const PREFIX_PATTERNS: { regex: RegExp; name: string }[] = [
   // AWS Access Key ID
   { regex: /(?<![A-Z0-9])(AKIA[0-9A-Z]{16})(?![A-Z0-9])/g, name: 'AWS Access Key ID' },
   // Bearer token in Authorization header
-  { regex: /(?:Bearer|bearer)\s+([A-Za-z0-9\-._~+/]{20,}={0,2})/g, name: 'Bearer token' },
+  {
+    regex: /(?:Bearer|bearer)\s+([A-Za-z0-9\-._~+/]{20,}={0,2})/g,
+    name: 'Bearer token',
+    confidence: BEARER_CONFIDENCE,
+  },
 ];
 
 // --- Layer 2: Key-value heuristic ---
@@ -51,10 +64,10 @@ export class SecretDetector implements Detector {
   readonly name = 'SecretDetector';
 
   detect(text: string): Finding[] {
-    const raw: Finding[] = [];
+    const raw: ScoredFinding[] = [];
 
     // Layer 1: prefix-based patterns
-    for (const { regex } of PREFIX_PATTERNS) {
+    for (const { regex, confidence = PREFIX_CONFIDENCE } of PREFIX_PATTERNS) {
       regex.lastIndex = 0;
       let match: RegExpExecArray | null;
       while ((match = regex.exec(text)) !== null) {
@@ -69,6 +82,8 @@ export class SecretDetector implements Detector {
           span: [start, start + value.length],
           value,
           placeholderPrefix: 'Secret',
+          confidence,
+          method: 'exact-pattern',
         });
       }
     }
@@ -87,6 +102,8 @@ export class SecretDetector implements Detector {
         span: [valueStart, valueStart + value.length],
         value,
         placeholderPrefix: 'Secret',
+        confidence: KEY_NAME_CONFIDENCE,
+        method: 'key-name',
       });
     }
 
@@ -102,21 +119,36 @@ export class SecretDetector implements Detector {
         span: [valueStart, valueStart + value.length],
         value,
         placeholderPrefix: 'Secret',
+        confidence: ENTROPY_CONFIDENCE,
+        method: 'entropy',
       });
     }
 
     // Sort and deduplicate overlapping findings, keeping the longest match
     raw.sort((a, b) => a.span[0] - b.span[0]);
-    const findings: Finding[] = [];
+    const findings: ScoredFinding[] = [];
     for (const candidate of raw) {
       const overlapIdx = findings.findIndex(
         (existing) => candidate.span[0] < existing.span[1] && candidate.span[1] > existing.span[0],
       );
       if (overlapIdx === -1) {
         findings.push(candidate);
-      } else if (candidate.value.length > (findings[overlapIdx]?.value.length ?? 0)) {
-        findings[overlapIdx] = candidate;
+        continue;
       }
+
+      // The layers describe the same secret from different angles, so keep the
+      // widest span (nothing should leak past the placeholder) but report the
+      // strongest evidence for it. Without this, a loose key-name match that
+      // happens to run one character longer would downgrade a vendor-prefixed
+      // key to 0.7 and let `--min-confidence 0.8` drop a certain secret.
+      const existing = findings[overlapIdx]!;
+      const widest = candidate.value.length > existing.value.length ? candidate : existing;
+      const strongest = candidate.confidence > existing.confidence ? candidate : existing;
+      findings[overlapIdx] = {
+        ...widest,
+        confidence: strongest.confidence,
+        method: strongest.method,
+      };
     }
 
     return findings;

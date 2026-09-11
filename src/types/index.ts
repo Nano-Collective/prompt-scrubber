@@ -5,7 +5,17 @@ export interface Finding {
   span: [number, number];
   value: string;
   placeholderPrefix: string;
+  // How certain the detector is about this match, from 0.0 to 1.0. Optional so
+  // detectors written against the original interface (published rule packs)
+  // keep compiling; the pipeline scores those as DEFAULT_CONFIDENCE.
+  confidence?: number;
+  // How the match was made: 'exact-pattern', 'structural', 'key-name',
+  // 'entropy', 'heuristic', 'user-defined', or a rule pack's own label.
+  method?: string;
 }
+
+// A Finding once the pipeline has filled in the optional scoring fields.
+export type ScoredFinding = Finding & { confidence: number; method: string };
 
 export interface Detector {
   name: string;
@@ -35,11 +45,24 @@ export interface ScrubOptions {
   strictNameDetector?: boolean; // Enable stricter allowlisting for the NameDetector
   codeTellTerms?: string[]; // User-enumerated private identifiers (classes, variables)
   urlAllowlist?: string[]; // List of hostnames to pass-through in URLs
+  minConfidence?: number; // Discard findings scored below this threshold (0.0-1.0, default 0)
+}
+
+// Findings a `minConfidence` threshold discarded and which no surviving
+// finding covers — i.e. what the threshold actually left in the clear.
+export interface SuppressedStats {
+  total: number;
+  byCategory: Record<string, number>;
 }
 
 export interface ScrubStats {
   totalEntities: number;
   byCategory: Record<string, number>;
+  // Present only when a threshold actually dropped something. Reported so a
+  // caller can tell "there was no phone number" apart from "there was one and
+  // I filtered it out" — for a redaction tool, silent under-redaction is the
+  // dangerous direction.
+  suppressed?: SuppressedStats;
 }
 
 export interface ScrubResult {

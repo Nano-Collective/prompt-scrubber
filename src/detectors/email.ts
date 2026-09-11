@@ -5,6 +5,10 @@ import type { Detector, Finding } from '../types/index.js';
 // - Caps total length at 254 chars (RFC 5321 limit)
 const EMAIL_REGEX = /(?<![.\w])([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})(?![.\w])/g;
 
+// The full address shape is distinctive enough that a match is almost never
+// anything else; the residual doubt is placeholder text such as user@test.com.
+const EMAIL_CONFIDENCE = 0.95;
+
 export class EmailDetector implements Detector {
   readonly name = 'EmailDetector';
 
@@ -23,6 +27,8 @@ export class EmailDetector implements Detector {
         span: [match.index, match.index + value.length],
         value,
         placeholderPrefix: 'Email',
+        confidence: EMAIL_CONFIDENCE,
+        method: 'exact-pattern',
       });
     }
 
