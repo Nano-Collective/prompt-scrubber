@@ -58,3 +58,10 @@ test('does not fire on plain text', (t) => {
   const findings = detector.detect('I live down the street from here.');
   t.is(findings.length, 0);
 });
+
+test('does not treat long prose ending in a street suffix as an address', (t) => {
+  const findings = detector.detect(
+    'There are 42 things you should consider when walking down the st.',
+  );
+  t.is(findings.length, 0);
+});
