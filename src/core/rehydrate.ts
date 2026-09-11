@@ -45,6 +45,47 @@ function rehydrateString(
 }
 
 /**
+ * Lightweight rehydrate that only returns the rewritten text and the number
+ * of placeholder occurrences replaced. Used by the streaming proxy to avoid
+ * pulling in the full `RehydrateResult` shape (with `warnings`) on every
+ * SSE chunk.
+ *
+ * Hallucinated placeholders are silently left in place; that's acceptable
+ * for the proxy because the upstream never echoes a placeholder it didn't
+ * see in its own request.
+ */
+export function rehydrateText(
+  content: string,
+  sessionMap: Record<string, string>,
+): { content: string; replaced: number } {
+  const foundTokens = new Set<string>();
+  const re = new RegExp(PLACEHOLDER_REGEX.source, 'g');
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(content)) !== null) {
+    foundTokens.add(match[1]!);
+  }
+
+  if (foundTokens.size === 0) {
+    return { content, replaced: 0 };
+  }
+
+  const sortedTokens = [...foundTokens].sort((a, b) => b.length - a.length);
+  let result = content;
+  let replaced = 0;
+  for (const token of sortedTokens) {
+    const fullToken = `«${token}»`;
+    const value = sessionMap[fullToken];
+    if (typeof value !== 'string') continue;
+    const countRe = new RegExp(PLACEHOLDER_REGEX.source, 'g');
+    while ((match = countRe.exec(result)) !== null) {
+      if (match[0] === fullToken) replaced += 1;
+    }
+    result = result.split(fullToken).join(value);
+  }
+  return { content: result, replaced };
+}
+
+/**
  * Restores original values from placeholders in the given content,
  * using the session map identified by sessionId.
  *

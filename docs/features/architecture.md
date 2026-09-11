@@ -27,6 +27,11 @@ prompt-scrub
 │   │   ├── rehydrate.ts
 │   │   └── collision-resolver.ts
 │   │
+│   ├── proxy/
+│   │   ├── proxy-server.ts    # HTTP server + lifecycle
+│   │   ├── request-transform.ts   # Scrub OpenAI/Anthropic bodies
+│   │   └── response-transform.ts  # Rehydrate JSON + SSE responses
+│   │
 │   ├── cli/
 │   │   └── commands/
 │   │

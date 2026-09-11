@@ -321,6 +321,77 @@ test.serial('CLI: sessions rm fails gracefully with invalid session id', (t) => 
   t.true(result.stderr.includes('not found'));
 });
 
+test.serial('CLI: help lists the proxy command', (t) => {
+  const result = runCli(['--help']);
+  t.is(result.status, 0);
+  t.true(result.stdout.includes('proxy'));
+  t.true(result.stdout.includes('scrubs outgoing LLM'));
+});
+
+test.serial('CLI: proxy --help shows provider options and the session header', (t) => {
+  const result = runCli(['proxy', '--help']);
+  t.is(result.status, 0);
+  t.true(result.stdout.includes('--target'));
+  t.true(result.stdout.includes('--verbose'));
+  t.true(result.stdout.includes('--no-gc'));
+});
+
+test.serial('CLI: proxy refuses to start without --target', (t) => {
+  const result = runCli(['proxy', '--port', '0']);
+  t.not(result.status, 0);
+  t.true(result.stderr.includes('--target'));
+});
+
+test.serial('CLI: proxy refuses an invalid --target URL', (t) => {
+  const result = runCli(['proxy', '--target', 'not-a-url', '--port', '0']);
+  t.not(result.status, 0);
+  t.true(result.stderr.includes('Invalid --target URL'));
+});
+
+test.serial('CLI: proxy refuses an invalid --port', (t) => {
+  const result = runCli(['proxy', '--target', 'http://127.0.0.1:1', '--port', 'not-a-port']);
+  t.not(result.status, 0);
+  t.true(result.stderr.includes('Invalid --port'));
+});
+
+test.serial('CLI: proxy refuses an invalid --host', (t) => {
+  const result = runCli([
+    'proxy',
+    '--target',
+    'http://127.0.0.1:1',
+    '--port',
+    '0',
+    '--host',
+    'bad host!',
+  ]);
+  t.not(result.status, 0);
+  t.true(result.stderr.includes('Invalid --host'));
+});
+
+test.serial('CLI: proxy actually listens when given valid args', (t) => {
+  // The CLI spawns, binds to port 0, prints its URL, and waits for SIGINT.
+  // spawnSync with `timeout` returns once the child is killed; we just want
+  // to see the "Listening on" line emitted before then.
+  const child = spawnSync(
+    process.execPath,
+    ['--import', 'tsx', cliEntry, 'proxy', '--target', 'http://127.0.0.1:1', '--port', '0'],
+    {
+      encoding: 'utf-8',
+      env: {
+        ...process.env,
+        PROMPT_SCRUB_CONFIG_DIR: path.join(tmpConfigDir, 'prompt-scrub'),
+      },
+      timeout: 3000,
+    },
+  );
+  // The timeout itself produces an ETIMEDOUT error; that's fine, we only
+  // care that the proxy bound and printed its URL before being killed.
+  t.true(
+    child.stderr.includes('[proxy] Listening on'),
+    `proxy never logged its URL: ${child.stderr}`,
+  );
+});
+
 test('CLI: inspect prints the confidence and method of each entity', (t) => {
   const result = runCli(['inspect'], 'Contact me at alice@example.com');
   t.is(result.status, 0);

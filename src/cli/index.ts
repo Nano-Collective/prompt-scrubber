@@ -7,6 +7,7 @@ import { Command } from 'commander';
 import { setupConfigCommands } from './commands/config.js';
 import { setupDiffCommand } from './commands/diff.js';
 import { setupInspectCommand } from './commands/inspect.js';
+import { setupProxyCommand } from './commands/proxy.js';
 import { setupRehydrateCommand } from './commands/rehydrate.js';
 import { setupRulesCommands } from './commands/rules.js';
 import { setupScrubCommand } from './commands/scrub.js';
@@ -45,6 +46,7 @@ setupSessionsCommands(program);
 setupRulesCommands(program);
 setupConfigCommands(program);
 setupWatchCommand(program);
+setupProxyCommand(program);
 
 if (process.argv[1] === __filename) {
   program.parseAsync(process.argv).catch((err) => {
