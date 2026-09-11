@@ -22,7 +22,7 @@ It maps sensitive data (emails, secrets, paths, URLs, phone numbers) to stable p
 **What it does:**
 - Detects and replaces common identifying content (emails, paths, phone numbers, secrets, URLs) before your prompt leaves your machine.
 - Maps each value to a stable placeholder so the model's response can be rehydrated locally.
-- Gives you an `inspect` command so you can see exactly what was detected, with what confidence, and what was missed before you commit to sending.
+- Gives you `inspect` (table of detected entities with confidence and method), `diff` (visual before/after), and `--min-confidence <0-1>` on `scrub`/`inspect` to drop anything below a threshold — so you can see what was detected, what was missed, and exactly what will be sent before you commit to sending.
 
 **What it does not do:**
 - It does not make you anonymous. A semantically identifying question (a niche bug only you have, your private codebase, your financial situation) remains identifying after scrubbing.
@@ -70,7 +70,16 @@ Hash: 7e5eea933db987e10e10e259ebcfea9d3250d8a68925fd9360f515e3a4bfbba9
 
 Each entity carries the confidence the detector assigned it: an exact vendor key pattern scores 0.99, a capitalised-word name guess only 0.5. Pass `--min-confidence <0-1>` to `scrub` or `inspect` to drop everything below a threshold. See [Confidence & Tiered Detection](docs/features/detectors.md#confidence--tiered-detection).
 
-The hash is deterministic — the same prompt always produces the same hash, so you can verify cache stability across runs. Once you are satisfied with what `inspect` shows, proceed with `scrub`.
+The hash is deterministic — the same prompt always produces the same hash, so you can verify cache stability across runs. Once you are satisfied with what `inspect` shows, run `diff` to see the replacements in place, then proceed with `scrub`.
+
+```bash
+echo "My email is alice@acme.com" | prompt-scrub diff --no-color
+```
+
+```
+- My email is alice@acme.com
++ My email is «Email_1»
+```
 
 ## Usage Examples
 

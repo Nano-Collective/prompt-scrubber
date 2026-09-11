@@ -41,7 +41,7 @@ prompt-scrub
   - `scrub.ts`: Orchestrates the detection process, resolves collisions, applies replacements, and updates the session map.
   - `rehydrate.ts`: The reverse process; swaps placeholders back to their original values using the session map.
   - `collision-resolver.ts`: Logic to handle overlapping findings from different detectors (the more specific detector wins).
-- **CLI (`src/cli/`)**: Command-line interface wrapping the core library. Exposes commands like `scrub`, `rehydrate`, `inspect`, and session management.
+- **CLI (`src/cli/`)**: Command-line interface wrapping the core library. Exposes commands like `scrub`, `rehydrate`, `inspect`, `diff`, and session management.
 - **Types (`src/types/`)**: Shared TypeScript interfaces (e.g., `Message`, `Finding`, `SessionMap`).
 
 ## Data Flow: The `scrub()` Pipeline

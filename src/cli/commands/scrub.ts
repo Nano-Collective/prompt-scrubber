@@ -1,12 +1,11 @@
-import { readFileSync } from 'node:fs';
 import type { Command } from 'commander';
 import { loadConfig } from '../../core/config.js';
-
-import { CodeTellDetector } from '../../detectors/code-tell.js';
 import { loadConfiguredRulePacks } from '../../core/rule-packs.js';
 import { getActiveDetectors, scrub } from '../../core/scrub.js';
+import { CodeTellDetector } from '../../detectors/code-tell.js';
 import { gcSessions } from '../../session/storage.js';
 import type { ScrubStats } from '../../types/index.js';
+import { addDetectorOptions, readInput } from '../io.js';
 import { parseConfidence } from '../options.js';
 
 export async function handleScrub(
@@ -112,28 +111,13 @@ export function formatScrubSummary(stats: ScrubStats, minConfidence: number): st
 }
 
 export function setupScrubCommand(program: Command) {
-  program
-    .command('scrub')
-    .description('Scrub a file or stdin')
-    .argument('[file]', 'File to scrub. If omitted, reads from stdin.')
-    .option('--session-id <id>', 'Resume or target a specific session')
-    .option('--disable <detectors>', 'Comma-separated list of detector names to skip')
-    .option(
-      '--enable <detectors>',
-      'Comma-separated list of off-by-default detectors to enable (e.g., NameDetector)',
-    )
-    .option(
-      '--strict-name',
-      'Enable strict allowlisting for NameDetector to reduce false positives',
-    )
-    .option(
-      '--code-tell-terms <terms>',
-      'Comma-separated list of private identifiers to detect (enables CodeTellDetector)',
-    )
-    .option(
-      '--url-allowlist <hosts>',
-      'Comma-separated list of hostnames to pass-through in URLs (subdomains are implicitly allowed)',
-    )
+  addDetectorOptions(
+    program
+      .command('scrub')
+      .description('Scrub a file or stdin')
+      .argument('[file]', 'File to scrub. If omitted, reads from stdin.')
+      .option('--session-id <id>', 'Resume or target a specific session'),
+  )
     .option(
       '--min-confidence <value>',
       'Discard findings scored below this confidence (0-1)',
@@ -141,27 +125,8 @@ export function setupScrubCommand(program: Command) {
     )
     .option('-q, --quiet', 'Suppress the scrub summary printed to stderr')
     .action(async (file, options) => {
-      let input = '';
-
-      if (file) {
-        try {
-          input = readFileSync(file, 'utf8');
-        } catch (err: unknown) {
-          console.error(`Error reading file: ${(err as Error).message}`);
-          process.exit(1);
-          return;
-        }
-      } else {
-        // Read from stdin
-        try {
-          input = readFileSync(0, 'utf-8');
-        } catch {
-          console.error('No input provided.');
-          process.exit(1);
-          return;
-        }
-      }
-
+      const input = readInput(file);
+      if (input === undefined) return;
       if (!input) {
         process.exit(0);
         return;
@@ -203,10 +168,8 @@ export function setupScrubCommand(program: Command) {
 
       const result = await handleScrub(input, options);
 
-      // Print scrubbed content to stdout
       process.stdout.write(result.scrubbedContent as string);
 
-      // Print session ID to stderr
       if (result.scrubbedContent !== input) {
         console.error(`Session ID: ${result.sessionId}`);
       }
