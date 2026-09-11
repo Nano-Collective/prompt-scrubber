@@ -116,6 +116,37 @@ test('a winner inside the loser keeps the loser on both sides', (t) => {
   );
 });
 
+test('a narrowed fragment carries an attenuated confidence, not the original', (t) => {
+  // The fragment is weaker evidence than the full match that produced it: it
+  // only survives because a higher-priority finding contradicted the part
+  // that was dropped, not because anything re-confirmed this narrower span.
+  const text = 'C:\\app\\cfg.ini owner alice@corp.com';
+  const emailStart = text.indexOf('alice@corp.com');
+  const overBroadPath: Finding = {
+    ...makeFinding('Path', 0, text.length, text),
+    confidence: 0.7,
+  };
+  const email = makeFinding('Email', emailStart, text.length, text.slice(emailStart));
+
+  const result = resolveCollisions([overBroadPath, email]);
+
+  const narrowedPath = result.find((f) => f.category === 'Path');
+  t.is(narrowedPath?.value, 'C:\\app\\cfg.ini owner');
+  t.is(narrowedPath?.confidence, 0.7 * 0.8);
+});
+
+test('a narrowed fragment of a finding with no confidence gains none', (t) => {
+  const text = 'C:\\app\\cfg.ini owner alice@corp.com';
+  const emailStart = text.indexOf('alice@corp.com');
+  const overBroadPath = makeFinding('Path', 0, text.length, text); // no confidence field
+  const email = makeFinding('Email', emailStart, text.length, text.slice(emailStart));
+
+  const result = resolveCollisions([overBroadPath, email]);
+
+  const narrowedPath = result.find((f) => f.category === 'Path');
+  t.false('confidence' in (narrowedPath ?? {}), 'must not gain a key the loser never had');
+});
+
 test('a losing finding of the same category is dropped rather than narrowed', (t) => {
   // Rival readings of one entity — the leftover "10" must not become an Address
   const text = '10 Downing St, London';

@@ -2,7 +2,8 @@ import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { copyFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import type { Command } from 'commander';
-import { handleScrub, pluralize } from './scrub.js';
+import { parseConfidence } from '../options.js';
+import { formatSuppressionNotice, handleScrub, pluralize } from './scrub.js';
 
 /**
  * Every external process below is invoked through `spawnSync` with an argv
@@ -178,6 +179,7 @@ interface WatchStepOptions {
   strictName?: boolean;
   codeTellTerms?: string;
   urlAllowlist?: string;
+  minConfidence?: number;
   dryRun?: boolean;
   backup?: boolean;
   readClipboardFn?: () => string;
@@ -200,6 +202,12 @@ export async function watchClipboardStep(
     const result = await handleScrub(current, options);
     // Watch mode only handles string content
     const scrubbed = typeof result.scrubbedContent === 'string' ? result.scrubbedContent : current;
+    // Logged before the no-change return: when a threshold drops everything the
+    // clipboard is left untouched, which is exactly when silence is dangerous.
+    const notice = formatSuppressionNotice(result.stats, result.minConfidence);
+    if (notice) {
+      log(`[watch] ${notice} — left in the clipboard.`);
+    }
     if (scrubbed !== current) {
       const msg = formatNotificationMessage(result.stats.byCategory);
       if (options.dryRun) {
@@ -231,6 +239,12 @@ export async function watchFileStep(
     const result = await handleScrub(current, options);
     // Watch mode only handles string content
     const scrubbed = typeof result.scrubbedContent === 'string' ? result.scrubbedContent : current;
+    // Logged before the no-change return: when a threshold drops everything the
+    // file is left untouched, which is exactly when silence is dangerous.
+    const notice = formatSuppressionNotice(result.stats, result.minConfidence);
+    if (notice) {
+      log(`[watch] ${notice} — left in ${filePath}.`);
+    }
     if (scrubbed !== current) {
       const msg = formatNotificationMessage(result.stats.byCategory);
       if (options.dryRun) {
@@ -346,6 +360,11 @@ export function setupWatchCommand(program: Command) {
     .option('--strict-name', 'Enable strict allowlisting for NameDetector')
     .option('--code-tell-terms <terms>', 'Comma-separated list of private terms to detect')
     .option('--url-allowlist <hosts>', 'Comma-separated list of hostnames to pass-through')
+    .option(
+      '--min-confidence <value>',
+      'Discard findings scored below this confidence (0-1)',
+      parseConfidence,
+    )
     .action(async (options) => {
       try {
         await handleWatch(options);

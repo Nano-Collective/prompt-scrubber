@@ -65,7 +65,7 @@ test('formatDiff --side-by-side puts original and scrubbed on one row', (t) => {
 
 test('simulateScrub matches what inspect would replace', async (t) => {
   const text = 'Email me at alice@corp.com';
-  const findings = await handleInspect(text, {});
+  const { findings } = await handleInspect(text, {});
   t.is(simulateScrub(text, findings), 'Email me at «Email_1»');
 });
 
@@ -143,7 +143,7 @@ test('formatDiff uses finding spans when an address crosses a newline', async (t
   const original = ['first@corp.com', ...pad, '123 Main', 'Street', ...pad, 'last@corp.com'].join(
     '\n',
   );
-  const findings = await handleInspect(original, {});
+  const { findings } = await handleInspect(original, {});
   const scrubbed = simulateScrub(original, findings);
   const out = formatDiff(original, scrubbed, { color: false, context: 0, findings });
   t.true(out.includes('- first@corp.com\n'));

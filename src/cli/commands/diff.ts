@@ -356,7 +356,7 @@ export function setupDiffCommand(program: Command) {
         return;
       }
 
-      const findings = await handleInspect(input, options);
+      const { findings } = await handleInspect(input, options);
       const scrubbed = simulateScrub(input, findings);
       const useColor = shouldColor(
         options.color,
