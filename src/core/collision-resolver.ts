@@ -22,6 +22,14 @@ function overlaps(a: Finding, b: Finding): boolean {
   return a.span[0] < b.span[1] && a.span[1] > b.span[0];
 }
 
+// A narrowed fragment is weaker evidence than the match it came from: it is
+// the remainder of a span another, higher-priority finding has already
+// contradicted, not a full match for whatever pattern gave the original its
+// score. Attenuated by this factor so a filter downstream can tell the two
+// apart, rather than the fragment inheriting the original's confidence as if
+// nothing had happened to it.
+const NARROWED_CONFIDENCE_FACTOR = 0.8;
+
 /**
  * Splits `loser` into the parts `winner` does not cover, so an over-broad
  * finding is narrowed rather than dropped (dropping it would emit whatever it
@@ -33,12 +41,11 @@ function overlaps(a: Finding, b: Finding): boolean {
  * - the loser's value does not map 1:1 onto its span (e.g. a normalised value),
  *   since the text a part covers is then not recoverable here.
  *
- * A returned part is weaker evidence than the match it came from: it is the
- * remainder of a span another detector has already contradicted. Should
- * `Finding` gain a confidence or score field, attenuate it here rather than
- * letting the spread below copy the original match's value onto the fragment.
+ * A returned part's `confidence` (when the loser has one) is attenuated by
+ * `NARROWED_CONFIDENCE_FACTOR` rather than copied unchanged — see that
+ * constant's comment.
  */
-function subtract(loser: Finding, winner: Finding): Finding[] {
+function subtract<T extends Finding>(loser: T, winner: T): T[] {
   if (loser.category === winner.category || loser.value.length !== loser.span[1] - loser.span[0]) {
     return [];
   }
@@ -48,7 +55,7 @@ function subtract(loser: Finding, winner: Finding): Finding[] {
     [Math.max(loser.span[0], winner.span[1]), loser.span[1]],
   ];
 
-  const parts: Finding[] = [];
+  const parts: T[] = [];
   for (const [start, end] of bounds) {
     const slice = loser.value.slice(start - loser.span[0], end - loser.span[0]);
     const value = slice.trim();
@@ -56,7 +63,13 @@ function subtract(loser: Finding, winner: Finding): Finding[] {
       continue;
     }
     const offset = start + slice.indexOf(value);
-    parts.push({ ...loser, span: [offset, offset + value.length], value });
+    const part: T = { ...loser, span: [offset, offset + value.length], value };
+    // Only overwrite when the loser actually has a score, so a fragment of a
+    // Finding without one does not gain a `confidence` key it never had.
+    if (loser.confidence !== undefined) {
+      part.confidence = loser.confidence * NARROWED_CONFIDENCE_FACTOR;
+    }
+    parts.push(part);
   }
   return parts;
 }
@@ -76,7 +89,7 @@ function subtract(loser: Finding, winner: Finding): Finding[] {
  * Returns findings sorted by start position ascending, guaranteed pairwise
  * non-overlapping — `scrub` relies on that when it replaces right-to-left.
  */
-export function resolveCollisions(findings: Finding[]): Finding[] {
+export function resolveCollisions<T extends Finding>(findings: T[]): T[] {
   const byStart = (a: Finding, b: Finding) => a.span[0] - b.span[0];
 
   // A work queue rather than a single pass: narrowing can produce a part that
@@ -84,7 +97,7 @@ export function resolveCollisions(findings: Finding[]): Finding[] {
   // guaranteed to meet at most one accepted finding. Anything unsettled goes
   // back on the queue and is re-compared until it overlaps nothing.
   const queue = [...findings].sort(byStart);
-  const accepted: Finding[] = [];
+  const accepted: T[] = [];
 
   while (queue.length > 0) {
     const candidate = queue.shift()!;

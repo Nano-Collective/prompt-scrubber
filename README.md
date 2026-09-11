@@ -22,7 +22,7 @@ It maps sensitive data (emails, secrets, paths, URLs, phone numbers) to stable p
 **What it does:**
 - Detects and replaces common identifying content (emails, paths, phone numbers, secrets, URLs) before your prompt leaves your machine.
 - Maps each value to a stable placeholder so the model's response can be rehydrated locally.
-- Gives you an `inspect` command so you can see exactly what was detected and what was missed before you commit to sending.
+- Gives you an `inspect` command so you can see exactly what was detected, with what confidence, and what was missed before you commit to sending.
 
 **What it does not do:**
 - It does not make you anonymous. A semantically identifying question (a niche bug only you have, your private codebase, your financial situation) remains identifying after scrubbing.
@@ -60,13 +60,15 @@ echo "My email is alice@acme.com and I work at /Users/alice/projects. My phone i
 
 ```
 Detected entities:
-  [Email]    alice@acme.com                   → Email_1    (chars 12-26)
-  [Path]     /Users/alice/projects.           → Path_1     (chars 41-63)
-  [Phone]    +44-7700-900999                  → Phone_1    (chars 76-91)
+  [Email]    alice@acme.com                   → «Email_1»  (chars 12-26, confidence 0.95 exact-pattern)
+  [Path]     /Users/alice/projects.           → «Path_1»   (chars 41-63, confidence 0.80 structural)
+  [Phone]    +44-7700-900999                  → «Phone_1»  (chars 76-91, confidence 0.90 structural)
 
 No session written.
-Hash: 41beda4af0b83488fdf6eea9347775450a1c7c887a6ef377212340f36c445132
+Hash: 7e5eea933db987e10e10e259ebcfea9d3250d8a68925fd9360f515e3a4bfbba9
 ```
+
+Each entity carries the confidence the detector assigned it: an exact vendor key pattern scores 0.99, a capitalised-word name guess only 0.5. Pass `--min-confidence <0-1>` to `scrub` or `inspect` to drop everything below a threshold. See [Confidence & Tiered Detection](docs/features/detectors.md#confidence--tiered-detection).
 
 The hash is deterministic — the same prompt always produces the same hash, so you can verify cache stability across runs. Once you are satisfied with what `inspect` shows, proceed with `scrub`.
 
@@ -75,9 +77,12 @@ The hash is deterministic — the same prompt always produces the same hash, so 
 **CLI: Scrubbing text**
 ```bash
 echo "My email is user@example.com" | prompt-scrub scrub
-# stdout: My email is Email_1
+# stdout: My email is «Email_1»
 # stderr: Session ID: 6f1c2b90-...
 # stderr: Scrubbed: 1 entity (1 Email)   — pass -q/--quiet to suppress the summary
+
+# Only scrub what the detectors are confident about
+echo "My email is user@example.com" | prompt-scrub scrub --min-confidence 0.9
 ```
 
 **CLI: Watch clipboard**
@@ -113,7 +118,7 @@ console.log(content); // "I see your key is sk-12345"
 
 ## Configuration
 
-`prompt-scrub` reads an optional config file for extra rule packs and URL allowlisting. Create one pre-filled with the default schema:
+`prompt-scrub` reads an optional config file for extra rule packs, URL allowlisting, and a default confidence floor. Create one pre-filled with the default schema:
 
 ```bash
 prompt-scrub init
