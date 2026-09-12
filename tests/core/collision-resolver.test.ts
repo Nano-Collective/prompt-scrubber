@@ -293,6 +293,25 @@ test('a locale-scoped finding never wins on a partial (non-containing) overlap t
   }
 });
 
+test('a locale-scoped finding never wins a partial overlap even with a longer value', (t) => {
+  // generic [0,20] (len 20) vs locale [15,45] (len 30, localeScoped). The
+  // locale finding's value is longer than the generic one's, so the ordinary
+  // longest-value tie-break would pick it if the locale branch fell through
+  // to it - but the locale span does not cover the generic one, so preferring
+  // it would still expose characters 0-15 that the generic finding redacted.
+  const generic = makeFinding('Address', 0, 20, 'x'.repeat(20));
+  const locale = makeLocaleFinding('Address', 15, 45, 'x'.repeat(30));
+
+  for (const findings of [
+    [generic, locale],
+    [locale, generic],
+  ]) {
+    const result = resolveCollisions(findings);
+    t.is(result.length, 1);
+    t.deepEqual(result[0]?.span, [0, 20], 'the wider, non-locale finding must win');
+  }
+});
+
 test('a locale-scoped finding wins a partial overlap when it covers strictly more', (t) => {
   // The reverse of the case above: the locale finding's span is a superset of
   // the generic one's, so it legitimately covers more text and should win.

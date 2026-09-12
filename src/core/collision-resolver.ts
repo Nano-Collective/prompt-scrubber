@@ -70,6 +70,11 @@ function candidateWins(candidate: ResolvableFinding, existing: ResolvableFinding
     if (covers(preferred, other)) {
       return preferred === candidate;
     }
+    // Partial, non-containing overlap: the locale finding does not cover the
+    // finding it would displace, so it must lose outright rather than fall to
+    // the length tie-break below - a longer locale value could otherwise win
+    // and still expose the part of the other finding's span it does not cover.
+    return !candidate.localeScoped;
   }
 
   return candidate.value.length > existing.value.length;
