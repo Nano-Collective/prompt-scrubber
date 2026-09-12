@@ -6,7 +6,7 @@ sidebar_order: 1
 
 # CLI Reference
 
-The `prompt-scrub` package provides a command-line interface for manual inspection, scripting, and pipeline integration. 
+The `prompt-scrub` package provides a command-line interface for manual inspection, scripting, and pipeline integration.
 
 ## Core Commands
 
@@ -30,6 +30,8 @@ The summary counts replacements, not unique values: a value that appears three t
 - `--disable <detectors>`: Comma-separated list of detectors to disable (e.g. `EmailDetector,PhoneDetector`).
 - `--min-confidence <value>`: Discard findings scored below this confidence (`0`-`1`). Defaults to the configured `minConfidence`, or `0` (keep everything). Whatever the threshold discards is named in the summary, so a filtered run never quietly under-redacts. See [Confidence & Tiered Detection](../features/detectors.md#confidence--tiered-detection).
 - `-q, --quiet`: Suppress the summary. The `Session ID:` line is still printed, since scripts need it to rehydrate. A `--min-confidence` suppression notice is still printed too — `-q` is exactly the automated-workflow path that flag targets, so it must not be what hides what got dropped.
+- `--json`: Output result as structured JSON instead of text.
+- `--include-session-map`: Include `sessionMap` in JSON output (requires `--json`; contains sensitive values in plaintext — with this flag, raw values are written to stdout and will end up in CI logs).
 
 ### `prompt-scrub rehydrate [file]`
 Reads a scrubbed response from `stdin` or a file and prints the rehydrated response to `stdout`.
@@ -39,6 +41,7 @@ If the model hallucinates a placeholder that does not exist in the session map (
 
 **Options:**
 - `--session-id <id>` (Required): The session ID used during the `scrub` phase to restore original values.
+- `--json`: Output result as structured JSON instead of text.
 
 ### `prompt-scrub inspect [file]`
 Reads a message from `stdin` or a file and prints a table of detected entities (category, value, placeholder, span). Also prints a SHA-256 hash of the final byte-stable output for verifying prompt cache deterministic prefix stability.
@@ -62,6 +65,7 @@ Detected entities:
 - `--url-allowlist <hosts>`: Comma-separated list of hostnames to pass through.
 - `--min-confidence <value>`: Hide findings scored below this confidence (`0`-`1`). Anything dropped is listed under a `Suppressed below --min-confidence <value>:` heading rather than silently disappearing. The printed hash reflects the filtered output, matching what `scrub` would produce at the same threshold.
 - `--hash`: Print *only* the SHA-256 hash for scripting purposes.
+- `--json`: Output result as structured JSON instead of text.
 
 ### `prompt-scrub diff [file]`
 Reads a message from `stdin` or a file and prints a colorized line diff of the original text against what `scrub` would emit. Nothing is written to a session. Red lines are the original PII, green lines are the placeholders.
@@ -218,3 +222,52 @@ Prints the current version of the CLI.
 
 ### `prompt-scrub --help`
 Prints standard help documentation and available commands.
+
+## JSON Output Formats
+All three commands emit their primary payload under `content`.
+
+### scrub --json
+```json
+{
+  "content": "Email «Email_1» and «Email_2»",
+  "sessionId": "uuid-here",
+  "stats": {
+    "totalEntities": 2,
+    "byCategory": { "Email": 2 }
+  }
+}
+```
+`sessionId` is present only when something was scrubbed and a session was persisted — it is omitted (not empty) otherwise. `sessionMap` appears only when `--include-session-map` is passed, and contains the original sensitive values in plaintext: with that flag, raw PII is written to stdout and will end up in CI logs.
+
+### inspect --json
+```json
+{
+  "entities": [
+    {
+      "category": "Email",
+      "value": "alice@example.com",
+      "placeholder": "«Email_1»",
+      "span": [0, 20]
+    }
+  ],
+  "hash": "sha256-hex-here"
+}
+```
+### rehydrate --json
+```json
+{
+  "content": "Email alice@example.com and bob@example.com",
+  "sessionId": "uuid-here",
+  "warnings": []
+}
+```
+
+`warnings` is returned by `rehydrate` only, since it is the only command that can produce them.
+
+### Errors (stdin/file read failures only)
+
+If a file cannot be read or stdin is unavailable, commands running with `--json` print a JSON error envelope to **stderr** and exit with code `1`. Success JSON is written to **stdout**, so `prompt-scrubber scrub --json | jq` never sees error text mixed into the pipe.
+
+```json
+{ "error": "message describing what went wrong" }
+```

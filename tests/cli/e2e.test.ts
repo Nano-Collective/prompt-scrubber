@@ -3,11 +3,13 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'ava';
+import { computeHash } from '../../src/cli/commands/inspect.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const cliEntry = path.resolve(__dirname, '../../src/cli/index.ts');
 const tmpConfigDir = path.join(__dirname, '.tmp-config-e2e');
+const tmpFilesDir = path.join(__dirname, '.tmp-files-e2e');
 
 function runCli(args: string[], input?: string) {
   return spawnSync(process.execPath, ['--import', 'tsx', cliEntry, ...args], {
@@ -29,8 +31,10 @@ test.before(() => {
 });
 
 test.after.always(() => {
-  if (fs.existsSync(tmpConfigDir)) {
-    fs.rmSync(tmpConfigDir, { recursive: true, force: true });
+  for (const dir of [tmpConfigDir, tmpFilesDir]) {
+    if (fs.existsSync(dir)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   }
 });
 
@@ -321,6 +325,332 @@ test.serial('CLI: sessions rm fails gracefully with invalid session id', (t) => 
   t.true(result.stderr.includes('not found'));
 });
 
+test.serial('CLI: scrub --json returns structured output', (t) => {
+  const result = runCli(['scrub', '--json', '--include-session-map'], 'Contact alice@example.com');
+
+  t.is(result.status, 0);
+
+  const output = JSON.parse(result.stdout) as {
+    content: string;
+    sessionId: string;
+    sessionMap: Record<string, string>;
+    stats: { totalEntities: number };
+  };
+
+  t.is(output.content, 'Contact «Email_1»');
+  t.truthy(output.sessionId);
+  t.deepEqual(output.sessionMap, {
+    '«Email_1»': 'alice@example.com',
+  });
+  t.is(output.stats.totalEntities, 1);
+});
+
+test.serial('CLI: inspect --json returns entities and hash', (t) => {
+  const result = runCli(['inspect', '--json'], 'Contact alice@example.com');
+
+  t.is(result.status, 0);
+
+  const output = JSON.parse(result.stdout) as {
+    entities: Array<{
+      category: string;
+      value: string;
+      placeholder: string;
+      span: [number, number];
+    }>;
+    hash: string;
+  };
+
+  t.is(output.entities.length, 1);
+  t.is(output.entities[0]?.category, 'Email');
+  t.is(output.entities[0]?.value, 'alice@example.com');
+  t.is(output.entities[0]?.placeholder, '«Email_1»');
+  t.regex(output.hash, /^[a-f0-9]{64}$/);
+});
+
+test.serial('CLI: rehydrate --json returns restored content', (t) => {
+  const scrubResult = runCli(['scrub'], 'Contact alice@example.com');
+  const sessionId = scrubResult.stderr.match(/Session ID: (\S+)/)?.[1];
+
+  t.truthy(sessionId);
+
+  const result = runCli(['rehydrate', '--session-id', sessionId!, '--json'], 'Contact «Email_1»');
+
+  t.is(result.status, 0);
+
+  const output = JSON.parse(result.stdout) as {
+    content: string;
+    sessionId: string;
+    warnings: string[];
+  };
+
+  t.is(output.content, 'Contact alice@example.com');
+  t.is(output.sessionId, sessionId);
+  t.deepEqual(output.warnings, []);
+});
+
+test.serial('CLI: scrub --json dedupes repeated values to same placeholder', (t) => {
+  const input = 'Email alice@example.com and alice@example.com and bob@example.com';
+  const result = runCli(['scrub', '--json', '--include-session-map'], input);
+
+  t.is(result.status, 0);
+
+  const output = JSON.parse(result.stdout) as {
+    content: string;
+    sessionMap: Record<string, string>;
+  };
+
+  // Find placeholders for alice and bob
+  const alicePlaceholder = Object.entries(output.sessionMap).find(
+    ([_, value]) => value === 'alice@example.com',
+  )?.[0];
+  const bobPlaceholder = Object.entries(output.sessionMap).find(
+    ([_, value]) => value === 'bob@example.com',
+  )?.[0];
+
+  t.truthy(alicePlaceholder, 'alice placeholder not found');
+  t.truthy(bobPlaceholder, 'bob placeholder not found');
+  t.not(alicePlaceholder, bobPlaceholder); // They should be different
+
+  // Verify the scrubbed content uses the same placeholder for alice twice
+  const matches = output.content.match(/«Email_\d»/g);
+  t.is(matches?.[0], matches?.[1]); // First two should be identical (both alice)
+  t.not(matches?.[1], matches?.[2]); // Third should be different (bob)
+});
+
+test.serial('CLI: inspect --json dedupes repeated values to same placeholder', (t) => {
+  const input = 'Email alice@example.com and alice@example.com and bob@example.com';
+  const result = runCli(['inspect', '--json'], input);
+
+  t.is(result.status, 0);
+
+  const output = JSON.parse(result.stdout) as {
+    entities: Array<{ value: string; placeholder: string }>;
+  };
+
+  t.is(output.entities.length, 3);
+  // alice appears at indices 0 and 1
+  t.is(output.entities[0]?.value, 'alice@example.com');
+  t.is(output.entities[1]?.value, 'alice@example.com');
+  t.is(output.entities[2]?.value, 'bob@example.com');
+
+  // Both alice entities should have the SAME placeholder
+  t.is(output.entities[0]?.placeholder, output.entities[1]?.placeholder);
+  // Bob should have a DIFFERENT placeholder
+  t.not(output.entities[1]?.placeholder, output.entities[2]?.placeholder);
+});
+
+test.serial('CLI: scrub --json with empty input emits valid JSON', (t) => {
+  const result = runCli(['scrub', '--json'], '');
+
+  t.is(result.status, 0);
+  t.truthy(result.stdout);
+
+  const output = JSON.parse(result.stdout) as {
+    content: string;
+    stats: { totalEntities: number };
+  };
+
+  t.is(output.content, '');
+  t.is(output.stats.totalEntities, 0);
+});
+
+test.serial('CLI: inspect --json with empty input emits valid JSON', (t) => {
+  const result = runCli(['inspect', '--json'], '');
+
+  t.is(result.status, 0);
+  t.truthy(result.stdout);
+
+  const output = JSON.parse(result.stdout) as {
+    entities: unknown[];
+    hash: string;
+  };
+
+  t.deepEqual(output.entities, []);
+  t.is(output.hash, computeHash('', []));
+});
+
+test.serial('CLI: rehydrate --json with empty input emits valid JSON', (t) => {
+  const result = runCli(['rehydrate', '--session-id', 'dummy-id', '--json'], '');
+
+  t.is(result.status, 0);
+  t.truthy(result.stdout);
+
+  const output = JSON.parse(result.stdout) as {
+    content: string;
+    warnings: unknown[];
+  };
+
+  t.is(output.content, '');
+  t.deepEqual(output.warnings, []);
+});
+
+test.serial('CLI: scrub --json without --include-session-map omits sessionMap', (t) => {
+  const result = runCli(['scrub', '--json'], 'Contact alice@example.com');
+
+  t.is(result.status, 0);
+
+  const output = JSON.parse(result.stdout) as Record<string, unknown>;
+
+  t.falsy(output.sessionMap); // Should not be present
+  t.truthy(output.content);
+  t.truthy(output.sessionId);
+  t.truthy(output.stats);
+});
+
+test.serial('CLI: scrub --json with --include-session-map includes sessionMap', (t) => {
+  const result = runCli(['scrub', '--json', '--include-session-map'], 'Contact alice@example.com');
+
+  t.is(result.status, 0);
+
+  const output = JSON.parse(result.stdout) as {
+    sessionMap: Record<string, string>;
+  };
+
+  t.truthy(output.sessionMap);
+  t.true(Object.keys(output.sessionMap).length > 0);
+  t.true(Object.values(output.sessionMap).includes('alice@example.com'));
+});
+
+test.serial('CLI: scrub --json works with file argument', (t) => {
+  // Create a temp file
+  const tmpFile = path.join(tmpFilesDir, 'test-input.txt');
+  fs.mkdirSync(path.dirname(tmpFile), { recursive: true });
+  fs.writeFileSync(tmpFile, 'Contact alice@example.com');
+
+  const result = runCli(['scrub', '--json', tmpFile]);
+
+  t.is(result.status, 0);
+  t.truthy(result.stdout);
+
+  const output = JSON.parse(result.stdout) as {
+    content: string;
+  };
+
+  t.is(output.content, 'Contact «Email_1»');
+
+  fs.unlinkSync(tmpFile);
+});
+
+test.serial('CLI: inspect --json works with file argument', (t) => {
+  const tmpFile = path.join(tmpConfigDir, 'test-inspect.txt');
+  fs.mkdirSync(path.dirname(tmpFile), { recursive: true });
+  fs.writeFileSync(tmpFile, 'Contact alice@example.com');
+
+  const result = runCli(['inspect', '--json', tmpFile]);
+
+  t.is(result.status, 0);
+  t.truthy(result.stdout);
+
+  const output = JSON.parse(result.stdout) as {
+    entities: Array<{ value: string }>;
+  };
+
+  t.is(output.entities.length, 1);
+  t.is(output.entities[0]?.value, 'alice@example.com');
+
+  fs.unlinkSync(tmpFile);
+});
+
+test.serial('CLI: scrub --json file error goes to stderr with exit code 1', (t) => {
+  const result = runCli(['scrub', '--json', 'non-existent-file-xyz.txt']);
+
+  t.is(result.status, 1);
+  t.true(result.stderr.length > 0);
+  t.false(result.stdout.length > 0);
+
+  // Extract JSON from stderr (find content between first { and last })
+  const match = result.stderr.match(/\{[\s\S]*\}/);
+  t.truthy(match, 'No JSON error found in stderr');
+
+  const error = JSON.parse(match![0]!) as { error: string };
+  t.truthy(error.error);
+});
+
+test.serial('CLI: rehydrate --json file error goes to stderr with exit code 1', (t) => {
+  const result = runCli([
+    'rehydrate',
+    '--session-id',
+    'test-id',
+    '--json',
+    'non-existent-file-xyz.txt',
+  ]);
+
+  t.is(result.status, 1);
+  t.true(result.stderr.length > 0);
+  t.false(result.stdout.length > 0);
+
+  // Extract JSON from stderr (find content between first { and last })
+  const match = result.stderr.match(/\{[\s\S]*\}/);
+  t.truthy(match, 'No JSON error found in stderr');
+  const error = JSON.parse(match![0]!) as { error: string };
+  t.truthy(error.error);
+});
+
+test.serial('CLI: inspect --json file error goes to stderr with exit code 1', (t) => {
+  const result = runCli(['inspect', '--json', 'non-existent-file-xyz.txt']);
+
+  t.is(result.status, 1);
+  t.true(result.stderr.length > 0);
+  t.false(result.stdout.length > 0);
+
+  // Extract JSON from stderr (find content between first { and last })
+  const match = result.stderr.match(/\{[\s\S]*\}/);
+  t.truthy(match, 'No JSON error found in stderr');
+  const error = JSON.parse(match![0]!) as { error: string };
+  t.truthy(error.error);
+});
+
+test.serial('CLI: inspect --json placeholders match actual scrub output', (t) => {
+  const input = 'Email alice@example.com and alice@example.com and bob@example.com';
+
+  const scrubRes = runCli(['scrub', '--json'], input);
+  t.is(scrubRes.status, 0);
+  const scrubbed = (JSON.parse(scrubRes.stdout) as { content: string }).content;
+  const scrubPlaceholders = scrubbed.match(/«[^»]+»/g) ?? [];
+
+  const inspectRes = runCli(['inspect', '--json'], input);
+  t.is(inspectRes.status, 0);
+  const { entities } = JSON.parse(inspectRes.stdout) as {
+    entities: Array<{ placeholder: string }>;
+  };
+
+  t.deepEqual(entities.map((e) => e.placeholder), scrubPlaceholders);
+});
+
+test.serial('CLI: scrub --json then rehydrate --json round trip', (t) => {
+  const scrubRes = runCli(['scrub', '--json'], 'Contact alice@example.com');
+  t.is(scrubRes.status, 0);
+
+  const { content, sessionId } = JSON.parse(scrubRes.stdout) as {
+    content: string;
+    sessionId: string;
+  };
+  t.is(content, 'Contact «Email_1»');
+  t.truthy(sessionId);
+
+  const rehydrateRes = runCli(['rehydrate', '--session-id', sessionId, '--json'], content);
+  t.is(rehydrateRes.status, 0);
+
+  const { content: restored } = JSON.parse(rehydrateRes.stdout) as { content: string };
+  t.is(restored, 'Contact alice@example.com');
+});
+
+test.serial('CLI: scrub --json omits sessionId when nothing was scrubbed', (t) => {
+  const result = runCli(['scrub', '--json'], 'nothing sensitive here');
+  t.is(result.status, 0);
+
+  const output = JSON.parse(result.stdout) as Record<string, unknown>;
+  t.is(output.content, 'nothing sensitive here');
+  t.false('sessionId' in output);
+});
+
+test.serial('CLI: scrub --include-session-map without --json errors', (t) => {
+  const result = runCli(['scrub', '--include-session-map'], 'Contact alice@example.com');
+
+  t.is(result.status, 1);
+  t.true(result.stderr.includes('requires `--json`'));
+});
+
 test('CLI: inspect prints the confidence and method of each entity', (t) => {
   const result = runCli(['inspect'], 'Contact me at alice@example.com');
   t.is(result.status, 0);
@@ -416,4 +746,25 @@ test('CLI: scrub --min-confidence changes the inspect hash to match', (t) => {
   t.is(scrubbed.stdout, 'Call 555-123-4567 or mail «Email_1»');
   t.is(hash.stdout.trim().length, 64);
   t.not(hash.stdout.trim(), runCli(['inspect', '--hash'], input).stdout.trim());
+});
+
+test('CLI: inspect --json with --min-confidence reports suppressed findings', (t) => {
+  const result = runCli(
+    ['inspect', '--json', '--min-confidence', '0.9'],
+    'Call 555-123-4567 or mail alice@example.com',
+  );
+
+  t.is(result.status, 0);
+
+  const output = JSON.parse(result.stdout) as {
+    entities: Array<{ category: string; confidence: number }>;
+    suppressed: Array<{ category: string; confidence: number }>;
+    hash: string;
+  };
+
+  // The email survives the threshold; the phone is dropped from entities...
+  t.deepEqual(output.entities.map((e) => e.category), ['Email']);
+  // ...but is named as still in the clear rather than vanishing.
+  t.deepEqual(output.suppressed.map((s) => s.category), ['Phone']);
+  t.regex(output.hash, /^[a-f0-9]{64}$/);
 });

@@ -1,12 +1,13 @@
 import { readFileSync } from 'node:fs';
 import type { Command } from 'commander';
+import { emitError } from './output.js';
 
-export function readInput(file?: string): string | undefined {
+export function readInput(file?: string, useJson = false): string | undefined {
   if (file) {
     try {
       return readFileSync(file, 'utf8');
     } catch (err: unknown) {
-      console.error(`Error reading file: ${(err as Error).message}`);
+      emitError(`Error reading file: ${(err as Error).message}`, useJson);
       process.exit(1);
       return undefined;
     }
@@ -14,7 +15,7 @@ export function readInput(file?: string): string | undefined {
   try {
     return readFileSync(0, 'utf-8');
   } catch {
-    console.error('No input provided.');
+    emitError('No input provided.', useJson);
     process.exit(1);
     return undefined;
   }

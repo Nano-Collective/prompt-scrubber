@@ -4,10 +4,37 @@ import { loadConfig } from '../../core/config.js';
 import { loadConfiguredRulePacks } from '../../core/rule-packs.js';
 import { getActiveDetectors, runDetectors } from '../../core/scrub.js';
 import { SessionManager } from '../../session/session-manager.js';
-import type { Finding, ScoredFinding } from '../../types/index.js';
+import type { ScoredFinding } from '../../types/index.js';
+import { emitJson } from '../output.js';
 import { addDetectorOptions, readInput } from '../io.js';
 import { sanitizeLine } from '../sanitize.js';
 import { parseConfidence } from '../options.js';
+
+interface InspectJsonEntity {
+  category: string;
+  value: string;
+  placeholder: string;
+  span: [number, number];
+  confidence: number;
+  method: string;
+}
+
+interface InspectJsonSuppressed {
+  category: string;
+  value: string;
+  span: [number, number];
+  confidence: number;
+  method: string;
+}
+
+interface InspectJsonOutput {
+  entities: InspectJsonEntity[];
+
+  /** Findings the --min-confidence threshold discarded — still in the clear. */
+  suppressed: InspectJsonSuppressed[];
+
+  hash: string;
+}
 
 export async function handleInspect(
   text: string,
@@ -51,10 +78,11 @@ export async function handleInspect(
   return { ...runDetectors(text, detectors, minConfidence), minConfidence };
 }
 
-export function simulateScrub(text: string, findings: Finding[]): string {
+export function simulateScrub(text: string, findings: ScoredFinding[]): string {
   const session = new SessionManager(undefined, {});
   let scrubbed = text;
 
+  // Process findings in reverse order (right-to-left) as scrub does
   for (const finding of [...findings].reverse()) {
     const placeholder = session.createPlaceholder(finding.placeholderPrefix, finding.value);
     scrubbed = scrubbed.slice(0, finding.span[0]) + placeholder + scrubbed.slice(finding.span[1]);
@@ -63,8 +91,24 @@ export function simulateScrub(text: string, findings: Finding[]): string {
   return scrubbed;
 }
 
-export function computeHash(text: string, findings: Finding[]): string {
+export function computeHash(text: string, findings: ScoredFinding[]): string {
   return crypto.createHash('sha256').update(simulateScrub(text, findings)).digest('hex');
+}
+
+/**
+ * Placeholder per finding, in the same order the findings are reported in.
+ *
+ * Placeholders are minted right-to-left (matching scrub's replacement order)
+ * so the numbering matches what an actual scrub run would produce.
+ */
+function assignPlaceholders(findings: ScoredFinding[]): string[] {
+  const session = new SessionManager(undefined, {});
+  const placeholders = findings.map(() => '');
+  for (let i = findings.length - 1; i >= 0; i--) {
+    const finding = findings[i]!;
+    placeholders[i] = session.createPlaceholder(finding.placeholderPrefix, finding.value);
+  }
+  return placeholders;
 }
 
 /**
@@ -105,12 +149,7 @@ export function formatInspectOutput(
 
   let output = 'Detected entities:\n';
 
-  const session = new SessionManager(undefined, {});
-  const placeholders = findings.map(() => '');
-  for (let i = findings.length - 1; i >= 0; i--) {
-    const finding = findings[i]!;
-    placeholders[i] = session.createPlaceholder(finding.placeholderPrefix, finding.value);
-  }
+  const placeholders = assignPlaceholders(findings);
 
   for (let i = 0; i < findings.length; i++) {
     const finding = findings[i]!;
@@ -135,6 +174,35 @@ export function formatInspectOutput(
   return output;
 }
 
+function toInspectJson(
+  findings: ScoredFinding[],
+  hash: string,
+  suppressed: ScoredFinding[] = [],
+): InspectJsonOutput {
+  const placeholders = assignPlaceholders(findings);
+
+  return {
+    entities: findings.map((finding, i) => ({
+      category: finding.category,
+      value: sanitizeLine(finding.value),
+      placeholder: placeholders[i]!,
+      span: finding.span,
+      confidence: finding.confidence,
+      method: finding.method,
+    })),
+    // The same guarantee the text format gives: a filtered JSON report must not
+    // read as "nothing sensitive" while the dropped findings are still in the clear.
+    suppressed: suppressed.map((finding) => ({
+      category: finding.category,
+      value: sanitizeLine(finding.value),
+      span: finding.span,
+      confidence: finding.confidence,
+      method: finding.method,
+    })),
+    hash,
+  };
+}
+
 export function setupInspectCommand(program: Command) {
   addDetectorOptions(
     program
@@ -148,10 +216,14 @@ export function setupInspectCommand(program: Command) {
       parseConfidence,
     )
     .option('--hash', 'Print only the SHA-256 hash of the scrubbed output')
+    .option('--json', 'Output a structured JSON object instead of plain text')
     .action(async (file, options) => {
-      const input = readInput(file);
+      const input = readInput(file, options.json);
       if (input === undefined) return;
       if (!input) {
+        if (options.json) {
+          emitJson(toInspectJson([], computeHash('', [])));
+        }
         process.exit(0);
         return;
       }
@@ -159,13 +231,14 @@ export function setupInspectCommand(program: Command) {
       const { findings, suppressed, minConfidence } = await handleInspect(input, options);
       const hash = computeHash(input, findings);
 
-      if (options.hash) {
+      if (options.json) {
+        emitJson(toInspectJson(findings, hash, suppressed));
+      } else if (options.hash) {
         // --hash stays the scripting-stable surface: only the scrubbed text
         // feeds it, so the suppression report never perturbs it.
         process.stdout.write(`${hash}\n`);
       } else {
-        const output = formatInspectOutput(findings, hash, suppressed, minConfidence);
-        process.stdout.write(output);
+        process.stdout.write(formatInspectOutput(findings, hash, suppressed, minConfidence));
       }
     });
 }

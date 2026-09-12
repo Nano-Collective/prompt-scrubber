@@ -7,6 +7,7 @@ import { gcSessions } from '../../session/storage.js';
 import type { ScrubStats } from '../../types/index.js';
 import { addDetectorOptions, readInput } from '../io.js';
 import { parseConfidence } from '../options.js';
+import { emitError, emitJson } from '../output.js';
 
 export async function handleScrub(
   text: string,
@@ -119,15 +120,32 @@ export function setupScrubCommand(program: Command) {
       .option('--session-id <id>', 'Resume or target a specific session'),
   )
     .option(
+      '--include-session-map',
+      'Include the sessionMap in JSON output (requires --json; contains sensitive values)',
+    )
+    .option(
       '--min-confidence <value>',
       'Discard findings scored below this confidence (0-1)',
       parseConfidence,
     )
     .option('-q, --quiet', 'Suppress the scrub summary printed to stderr')
+    .option('--json', 'Output a structured JSON object instead of plain text')
     .action(async (file, options) => {
-      const input = readInput(file);
+      if (options.includeSessionMap && !options.json) {
+        emitError('`--include-session-map` requires `--json`.', false);
+        process.exit(1);
+        return;
+      }
+
+      const input = readInput(file, options.json);
       if (input === undefined) return;
       if (!input) {
+        if (options.json) {
+          emitJson({
+            content: '',
+            stats: { totalEntities: 0, byCategory: {} },
+          });
+        }
         process.exit(0);
         return;
       }
@@ -168,6 +186,24 @@ export function setupScrubCommand(program: Command) {
 
       const result = await handleScrub(input, options);
 
+      if (options.json) {
+        const output: Record<string, unknown> = {
+          content: result.scrubbedContent,
+          stats: result.stats,
+        };
+
+        if (Object.keys(result.sessionMap ?? {}).length > 0) {
+          output.sessionId = result.sessionId;
+        }
+
+        if (options.includeSessionMap) {
+          output.sessionMap = result.sessionMap;
+        }
+        emitJson(output);
+        return;
+      }
+
+      // Print scrubbed content to stdout
       process.stdout.write(result.scrubbedContent as string);
 
       if (result.scrubbedContent !== input) {
