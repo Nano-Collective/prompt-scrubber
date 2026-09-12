@@ -9,18 +9,18 @@ test('handleInspect finds entities without side effects', async (t) => {
 
 test('formatInspectOutput formats findings and includes hash', async (t) => {
   const findings = await handleInspect('My email is test@example.com', {});
-  const hashResult = computeHash('My email is test@example.com', findings);
-  const output = formatInspectOutput(findings, hashResult.hash, hashResult.placeholderMap);
+  const { hash, entities } = computeHash('My email is test@example.com', findings);
+  const output = formatInspectOutput(hash, entities);
   t.true(output.includes('test@example.com'));
   t.true(output.includes('«Email_1»'));
-  t.true(output.includes(`Hash: ${hashResult.hash}`));
+  t.true(output.includes(`Hash: ${hash}`));
 });
 
 test('formatInspectOutput handles empty findings and includes hash', (t) => {
-  const hashResult = computeHash('Hello', []);
-  const output = formatInspectOutput([], hashResult.hash, hashResult.placeholderMap);
+  const { hash, entities } = computeHash('Hello', []);
+  const output = formatInspectOutput(hash, entities);
   t.true(output.includes('No sensitive entities detected'));
-  t.true(output.includes(`Hash: ${hashResult.hash}`));
+  t.true(output.includes(`Hash: ${hash}`));
 });
 
 test('computeHash yields identical hash for identical scrubbed output (byte stability)', async (t) => {

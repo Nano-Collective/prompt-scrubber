@@ -7,7 +7,7 @@ import { loadConfiguredRulePacks } from '../../core/rule-packs.js';
 import { getActiveDetectors } from '../../core/scrub.js';
 import { SessionManager } from '../../session/session-manager.js';
 import type { Finding } from '../../types/index.js';
-import { emitError } from '../output.js';
+import { emitError, emitJson } from '../output.js';
 
 interface InspectJsonOutput {
   entities: Array<{
@@ -18,6 +18,11 @@ interface InspectJsonOutput {
   }>;
 
   hash: string;
+}
+
+export interface InspectEntity {
+  finding: Finding;
+  placeholder: string;
 }
 
 export async function handleInspect(
@@ -31,19 +36,15 @@ export async function handleInspect(
   },
 ) {
   const disabledDetectors = options.disable ? options.disable.split(',').map((s) => s.trim()) : [];
-
   const enabledDetectors = options.enable ? options.enable.split(',').map((s) => s.trim()) : [];
-
   const codeTellTerms = options.codeTellTerms
     ? options.codeTellTerms.split(',').map((s) => s.trim())
     : undefined;
-
   const cliUrlAllowlist = options.urlAllowlist
     ? options.urlAllowlist.split(',').map((s) => s.trim())
     : [];
 
   const config = loadConfig();
-
   const urlAllowlist = Array.from(new Set([...(config.urlAllowlist || []), ...cliUrlAllowlist]));
 
   const { detectors: rulePackDetectors } = await loadConfiguredRulePacks();
@@ -59,31 +60,22 @@ export async function handleInspect(
 
   const allFindings = detectors.flatMap((d) => d.detect(text));
   const findings = resolveCollisions(allFindings);
-
   return findings;
 }
 
-export function computeHash(
-  text: string,
-  findings: Finding[],
-): {
+export function computeHash(text: string, findings: Finding[]): {
   hash: string;
-  placeholderMap: Map<number, string>; // Map from finding index to placeholder
+  entities: InspectEntity[];
 } {
+  // Use a dummy session to simulate exactly what scrub does
   const session = new SessionManager();
-  const placeholderMap = new Map<number, string>();
+  const entities: InspectEntity[] = [];
   let scrubbedContent = text;
 
   // Process findings in reverse order (right-to-left) as scrub does
-  for (let i = findings.length - 1; i >= 0; i--) {
-    const finding = findings[i];
-
-    if (!finding) continue;
-
+  for (const finding of [...findings].reverse()) {
     const placeholder = session.createPlaceholder(finding.placeholderPrefix, finding.value);
-
-    placeholderMap.set(i, placeholder);
-
+    entities.push({ finding, placeholder });
     scrubbedContent =
       scrubbedContent.slice(0, finding.span[0]) +
       placeholder +
@@ -92,53 +84,33 @@ export function computeHash(
 
   const hash = crypto.createHash('sha256').update(scrubbedContent).digest('hex');
 
-  return { hash, placeholderMap };
+  // Restore left-to-right order for display
+  return { hash, entities: entities.reverse() };
 }
 
-function toInspectJson(
-  findings: Finding[],
-  hash: string,
-  placeholderMap: Map<number, string>,
-): InspectJsonOutput {
-  const entities = findings.map((finding, index) => {
-    const placeholder = placeholderMap.get(index) || '«UNKNOWN»';
-
-    return {
+function toInspectJson(hash: string, entities: InspectEntity[]): InspectJsonOutput {
+  return {
+    entities: entities.map(({ finding, placeholder }) => ({
       category: finding.category,
       value: finding.value,
       placeholder,
       span: finding.span,
-    };
-  });
-
-  return {
-    entities,
+    })),
     hash,
   };
 }
 
-export function formatInspectOutput(
-  findings: Finding[],
-  hash: string,
-  placeholderMap: Map<number, string>,
-): string {
-  if (findings.length === 0) {
+export function formatInspectOutput(hash: string, entities: InspectEntity[]): string {
+  if (entities.length === 0) {
     return `No sensitive entities detected.\nNo session written.\nHash: ${hash}\n`;
   }
 
   let output = 'Detected entities:\n';
 
-  for (let i = 0; i < findings.length; i++) {
-    const finding = findings[i];
-
-    if (!finding) continue;
-
-    const placeholder = placeholderMap.get(i) || '«UNKNOWN»';
-
+  for (const { finding, placeholder } of entities) {
     const catStr = `[${finding.category}]`.padEnd(10);
-
+    // Truncate very long values for display
     const valDisp = finding.value.length > 30 ? `${finding.value.slice(0, 27)}...` : finding.value;
-
     const valStr = valDisp.padEnd(32);
 
     output += `  ${catStr} ${valStr} → ${placeholder.padEnd(10)} (chars ${finding.span[0]}-${finding.span[1]})\n`;
@@ -177,6 +149,7 @@ export function setupInspectCommand(program: Command) {
 
       if (file) {
         try {
+          // Read from file
           input = readFileSync(file, 'utf8');
         } catch (err: unknown) {
           const message = `Error reading file: ${(err as Error).message}`;
@@ -186,6 +159,7 @@ export function setupInspectCommand(program: Command) {
         }
       } else {
         try {
+          // Read from stdin
           input = readFileSync(0, 'utf-8');
         } catch {
           const message = 'No input provided.';
@@ -197,33 +171,23 @@ export function setupInspectCommand(program: Command) {
 
       if (!input) {
         if (options.json) {
-          const output = toInspectJson(
-            [],
-            'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
-            new Map(),
-          );
-
-          process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+          const { hash, entities } = computeHash('', []);
+          emitJson(toInspectJson(hash, entities));
         }
-
         process.exit(0);
         return;
       }
 
       const findings = await handleInspect(input, options);
 
-      const hashResult = computeHash(input, findings);
+      const { hash, entities } = computeHash(input, findings);
 
       if (options.json) {
-        const output = toInspectJson(findings, hashResult.hash, hashResult.placeholderMap);
-
-        process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+        emitJson(toInspectJson(hash, entities));
       } else if (options.hash) {
-        process.stdout.write(`${hashResult.hash}\n`);
+        process.stdout.write(`${hash}\n`);
       } else {
-        const output = formatInspectOutput(findings, hashResult.hash, hashResult.placeholderMap);
-
-        process.stdout.write(output);
+        process.stdout.write(formatInspectOutput(hash, entities));
       }
     });
 }

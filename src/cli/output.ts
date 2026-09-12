@@ -5,3 +5,7 @@ export function emitError(message: string, useJson: boolean): void {
     console.error(message);
   }
 }
+
+export function emitJson(value: unknown): void {
+  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+}

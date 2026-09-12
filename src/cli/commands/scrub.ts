@@ -5,7 +5,7 @@ import { loadConfiguredRulePacks } from '../../core/rule-packs.js';
 import { scrub } from '../../core/scrub.js';
 import { gcSessions } from '../../session/storage.js';
 import type { ScrubStats } from '../../types/index.js';
-import { emitError } from '../output.js';
+import { emitError, emitJson } from '../output.js';
 
 export async function handleScrub(
   text: string,
@@ -93,7 +93,7 @@ export function setupScrubCommand(program: Command) {
     )
     .option(
       '--include-session-map',
-      'Include the sessionMap in JSON output (contains sensitive values)',
+      'Include the sessionMap in JSON output (requires --json; contains sensitive values)',
     )
     .option(
       '--code-tell-terms <terms>',
@@ -107,9 +107,15 @@ export function setupScrubCommand(program: Command) {
     .option('--json', 'Output a structured JSON object instead of plain text')
     .action(async (file, options) => {
       let input = '';
+      if (options.includeSessionMap && !options.json) {
+        emitError('`--include-session-map` requires `--json`.', false);
+        process.exit(1);
+        return;
+      }
 
       if (file) {
         try {
+          // Read from file
           input = readFileSync(file, 'utf8');
         } catch (err: unknown) {
           const message = `Error reading file: ${(err as Error).message}`;
@@ -119,6 +125,7 @@ export function setupScrubCommand(program: Command) {
         }
       } else {
         try {
+          // Read from stdin
           input = readFileSync(0, 'utf-8');
         } catch {
           const message = 'No input provided.';
@@ -130,12 +137,10 @@ export function setupScrubCommand(program: Command) {
 
       if (!input) {
         if (options.json) {
-          const output = {
-            scrubbedContent: '',
-            sessionId: '',
+          emitJson({
+            content: '',
             stats: { totalEntities: 0, byCategory: {} },
-          };
-          process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+          });
         }
         process.exit(0);
         return;
@@ -145,14 +150,18 @@ export function setupScrubCommand(program: Command) {
 
       if (options.json) {
         const output: Record<string, unknown> = {
-          scrubbedContent: result.scrubbedContent,
-          sessionId: result.sessionId,
+          content: result.scrubbedContent,
           stats: result.stats,
         };
+
+        if (Object.keys(result.sessionMap ?? {}).length > 0) {
+          output.sessionId = result.sessionId;
+        }
+
         if (options.includeSessionMap) {
           output.sessionMap = result.sessionMap;
         }
-        process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+        emitJson(output);
         return;
       }
 
