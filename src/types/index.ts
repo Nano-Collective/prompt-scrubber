@@ -19,6 +19,7 @@ export type ScoredFinding = Finding & { confidence: number; method: string };
 
 export interface Detector {
   name: string;
+  locales?: string[];
   detect(text: string): Finding[];
 }
 
@@ -45,6 +46,7 @@ export interface ScrubOptions {
   strictNameDetector?: boolean; // Enable stricter allowlisting for the NameDetector
   codeTellTerms?: string[]; // User-enumerated private identifiers (classes, variables)
   urlAllowlist?: string[]; // List of hostnames to pass-through in URLs
+  locale?: string;
   minConfidence?: number; // Discard findings scored below this threshold (0.0-1.0, default 0)
 }
 

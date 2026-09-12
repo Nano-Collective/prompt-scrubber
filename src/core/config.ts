@@ -1,12 +1,14 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { LOCALE_PATTERN } from './locale.js';
 
 export interface PromptScrubConfig {
   rulePacks?: string[];
   urlAllowlist?: string[];
   minConfidence?: number;
   sessionTtlDays?: number;
+  locale?: string;
 }
 
 export interface ConfigFileState {
@@ -23,6 +25,7 @@ export function createDefaultConfig(): Required<PromptScrubConfig> {
     // 0 keeps every finding, so an existing install behaves exactly as before.
     minConfidence: 0,
     sessionTtlDays: 7,
+    locale: '',
   };
 }
 
@@ -49,6 +52,15 @@ const VALIDATORS: Record<ConfigKey, (value: unknown) => string | null> = {
     typeof value === 'number' && Number.isFinite(value) && value > 0
       ? null
       : `"sessionTtlDays" must be a positive number, received ${describeType(value)}.`,
+  locale: (value) => {
+    if (typeof value !== 'string') {
+      return `"locale" must be a string, received ${describeType(value)}.`;
+    }
+    if (value.trim().length > 0 && !LOCALE_PATTERN.test(value.trim())) {
+      return `"locale" must be a BCP-47 language tag (e.g. "de-DE"), received "${value}".`;
+    }
+    return null;
+  },
 };
 
 const CONFIG_KEYS = Object.keys(VALIDATORS) as ConfigKey[];
@@ -97,6 +109,12 @@ function toStringArray(value: unknown): string[] {
   return Array.from(new Set(value.filter((item): item is string => typeof item === 'string')));
 }
 
+function toLocale(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  return LOCALE_PATTERN.test(trimmed) ? trimmed : '';
+}
+
 function isConfidence(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
 }
@@ -129,6 +147,7 @@ function validateConfig(data: unknown): string[] {
     const value = record[key];
     // An absent key falls back to its default; only a present one is checked.
     if (value === undefined) continue;
+
     const error = VALIDATORS[key](value);
     if (error) errors.push(error);
   }
@@ -173,6 +192,7 @@ export function readConfigFile(): ConfigFileState {
         record.sessionTtlDays > 0
           ? record.sessionTtlDays
           : 7,
+      locale: toLocale(record.locale),
     },
   };
 }

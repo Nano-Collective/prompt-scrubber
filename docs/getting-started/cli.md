@@ -28,6 +28,7 @@ The summary counts replacements, not unique values: a value that appears three t
 **Options:**
 - `--session-id <id>`: Reuse an existing session map. If omitted, a new UUID is generated.
 - `--disable <detectors>`: Comma-separated list of detectors to disable (e.g. `EmailDetector,PhoneDetector`).
+- `--locale <locale>`: BCP-47 tag (e.g. `de-DE`) that activates detectors scoped to that locale. Overrides `locale` in the configuration file. A malformed tag exits `1`; a well-formed tag that activates no detector warns on `stderr`, so a missing rule pack is never mistaken for a completed locale scrub.
 - `--min-confidence <value>`: Discard findings scored below this confidence (`0`-`1`). Defaults to the configured `minConfidence`, or `0` (keep everything). Whatever the threshold discards is named in the summary, so a filtered run never quietly under-redacts. See [Confidence & Tiered Detection](../features/detectors.md#confidence--tiered-detection).
 - `-q, --quiet`: Suppress the summary. The `Session ID:` line is still printed, since scripts need it to rehydrate. A `--min-confidence` suppression notice is still printed too — `-q` is exactly the automated-workflow path that flag targets, so it must not be what hides what got dropped.
 
@@ -60,6 +61,7 @@ Detected entities:
 - `--strict-name`: Enable strict allowlisting for `NameDetector`.
 - `--code-tell-terms <terms>`: Comma-separated list of private identifiers to detect.
 - `--url-allowlist <hosts>`: Comma-separated list of hostnames to pass through.
+- `--locale <locale>`: BCP-47 tag that activates detectors scoped to that locale.
 - `--min-confidence <value>`: Hide findings scored below this confidence (`0`-`1`). Anything dropped is listed under a `Suppressed below --min-confidence <value>:` heading rather than silently disappearing. The printed hash reflects the filtered output, matching what `scrub` would produce at the same threshold.
 - `--hash`: Print *only* the SHA-256 hash for scripting purposes.
 
@@ -122,6 +124,7 @@ Press `Ctrl-C` to stop watching; the poll loop is cleared and the process exits 
 - `--strict-name`: Enable strict allowlisting for `NameDetector`.
 - `--code-tell-terms <terms>`: Comma-separated list of private identifiers to detect.
 - `--url-allowlist <hosts>`: Comma-separated list of hostnames to pass through.
+- `--locale <locale>`: BCP-47 tag that activates detectors scoped to that locale, for this run only. Overrides `locale` in the configuration file. Validated once before the poll loop starts.
 - `--min-confidence <value>`: Discard findings scored below this confidence (`0`-`1`). Anything dropped is logged, including when it means the clipboard or file is left untouched.
 
 **Platform requirements:**
@@ -165,7 +168,8 @@ The generated file documents the supported schema:
   "rulePacks": [],
   "urlAllowlist": [],
   "minConfidence": 0,
-  "sessionTtlDays": 7
+  "sessionTtlDays": 7,
+  "locale": ""
 }
 ```
 
@@ -173,6 +177,7 @@ The generated file documents the supported schema:
 - `urlAllowlist`: hostnames the `UrlDetector` passes through unchanged. Subdomains are implicitly allowed.
 - `minConfidence`: findings scored below this threshold are discarded. `0` keeps everything; `--min-confidence` overrides it per run.
 - `sessionTtlDays`: number of days after which inactive sessions are automatically garbage collected. Default is 7.
+- `locale`: BCP-47 tag (e.g. `de-DE`) enabling locale-scoped detectors. Empty means English/locale-agnostic detection only.
 
 Fails if a config file already exists.
 
@@ -192,7 +197,9 @@ Config file: /home/alice/.config/prompt-scrub/config.json
   "urlAllowlist": [
     "example.com"
   ],
-  "minConfidence": 0.8
+  "minConfidence": 0.8,
+  "sessionTtlDays": 7,
+  "locale": "de-DE"
 }
 ```
 
@@ -201,12 +208,13 @@ Entries that do not match the schema are reported on `stderr` and the command ex
 ```bash
 $ prompt-scrub config show
 Config file: /home/alice/.config/prompt-scrub/config.json
-  error: Unknown key "rulePaks". Supported keys: rulePacks, urlAllowlist, minConfidence, sessionTtlDays.
+  error: Unknown key "rulePaks". Supported keys: rulePacks, urlAllowlist, minConfidence, sessionTtlDays, locale.
 {
   "rulePacks": [],
   "urlAllowlist": [],
   "minConfidence": 0,
-  "sessionTtlDays": 7
+  "sessionTtlDays": 7,
+  "locale": ""
 }
 Invalid entries are ignored at runtime.
 ```

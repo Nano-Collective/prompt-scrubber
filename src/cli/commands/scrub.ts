@@ -6,6 +6,7 @@ import { CodeTellDetector } from '../../detectors/code-tell.js';
 import { gcSessions } from '../../session/storage.js';
 import type { ScrubStats } from '../../types/index.js';
 import { addDetectorOptions, readInput } from '../io.js';
+import { resolveLocale, warnIfLocaleUnused } from '../locale.js';
 import { parseConfidence } from '../options.js';
 
 export async function handleScrub(
@@ -17,6 +18,7 @@ export async function handleScrub(
     strictName?: boolean;
     codeTellTerms?: string;
     urlAllowlist?: string;
+    locale?: string;
     minConfidence?: number;
   },
 ) {
@@ -31,6 +33,8 @@ export async function handleScrub(
     : [];
 
   const config = loadConfig();
+  // Validated before any side effect so a typo'd flag never garbage collects.
+  const locale = resolveLocale(options.locale, config.locale);
 
   try {
     gcSessions(config.sessionTtlDays ?? 7);
@@ -44,6 +48,8 @@ export async function handleScrub(
 
   const { detectors: rulePackDetectors } = await loadConfiguredRulePacks();
 
+  warnIfLocaleUnused(locale, rulePackDetectors);
+
   const result = scrub({
     content: text,
     ...(options.sessionId ? { sessionId: options.sessionId } : {}),
@@ -53,6 +59,7 @@ export async function handleScrub(
       ...(options.strictName !== undefined ? { strictNameDetector: options.strictName } : {}),
       ...(codeTellTerms !== undefined ? { codeTellTerms } : {}),
       ...(urlAllowlist.length > 0 ? { urlAllowlist } : {}),
+      ...(locale ? { locale } : {}),
       ...(minConfidence > 0 ? { minConfidence } : {}),
       customDetectors: rulePackDetectors,
     },
@@ -123,6 +130,10 @@ export function setupScrubCommand(program: Command) {
       'Discard findings scored below this confidence (0-1)',
       parseConfidence,
     )
+    .option(
+      '--locale <locale>',
+      'BCP-47 locale (e.g. de-DE) enabling detectors scoped to that locale',
+    )
     .option('-q, --quiet', 'Suppress the scrub summary printed to stderr')
     .action(async (file, options) => {
       const input = readInput(file);
@@ -166,7 +177,14 @@ export function setupScrubCommand(program: Command) {
         }
       }
 
-      const result = await handleScrub(input, options);
+      let result: Awaited<ReturnType<typeof handleScrub>>;
+      try {
+        result = await handleScrub(input, options);
+      } catch (err: unknown) {
+        console.error((err as Error).message);
+        process.exit(1);
+        return;
+      }
 
       process.stdout.write(result.scrubbedContent as string);
 

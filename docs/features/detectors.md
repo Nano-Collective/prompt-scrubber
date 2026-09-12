@@ -144,6 +144,8 @@ Priority is implicitly handled by a defined order of precedence:
 
 If `SecretDetector` and `UrlDetector` match the same string (e.g., a URL with a token), `SecretDetector` wins.
 
+Findings from locale-scoped detectors take precedence over the generic built-in of the same category, so a `de-DE` rule pack can override an English-shaped `AddressDetector` match on the same span. They still lose to higher-priority detectors such as `SecretDetector`, and the precedence never applies when it would redact less text than the finding it displaces — whether the locale finding sits strictly inside the built-in's span or only partially overlaps it, the finding that covers more is kept so nothing previously covered is left in the clear.
+
 The losing finding is not thrown away. It is narrowed to the part of its span the winner does not cover, so an over-broad match degrades to over-redaction rather than emitting the text it over-matched in cleartext. A narrowed part that still overlaps another finding is narrowed again, until nothing overlaps. Two exceptions, where the loser is dropped instead: findings of the same category are rival readings of one entity, so the winner's span is taken as authoritative; and a finding whose `value` does not map 1:1 onto its `span` cannot be re-sliced.
 
 The resolved findings are always non-overlapping and sorted by start position.
@@ -174,13 +176,18 @@ To use a rule pack:
 {
   "rulePacks": ["some-rule-pack"],
   "urlAllowlist": [],
-  "minConfidence": 0
+  "minConfidence": 0,
+  "locale": ""
 }
 ```
 
 Run `prompt-scrub config show` to confirm the tool picked it up.
 
 Once declared, the CLI will automatically discover, load, and merge these detectors into the active set on startup. They participate natively in collision resolution and can be inspected via `prompt-scrub rules list`.
+
+### Locale-Scoped Detectors
+
+The built-in detectors are shaped around English and US/UK formats. Locale-specific formats (German street shapes, Brazilian CPF numbers, Japanese postal codes) are distributed as rule packs that declare the locales they serve, so the core stays lean and non-English users can opt into the rules that fit them. See [Authoring Rule Packs](authoring-rule-packs.md#locale-scoped-rule-packs).
 
 For a guide on how to author your own rule pack, see [Authoring Rule Packs](./authoring-rule-packs.md).
 
@@ -193,3 +200,5 @@ npx prompt-scrub rules list
 ```
 
 This will print a list of all available detectors, indicating their source (e.g., `built-in`) and their default state (`on` or `off`). This allows you to verify which detectors will run by default before you pass any additional flags like `--disable` or `--enable`.
+
+When any loaded detector declares `locales`, two more columns appear: `Locales` (the tags it declares) and `Locale State` (`active`/`inactive` for the resolved locale, `-` for locale-agnostic detectors). Pass `--locale <tag>` to preview what a different locale would activate.

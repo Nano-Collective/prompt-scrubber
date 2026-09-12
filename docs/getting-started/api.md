@@ -81,6 +81,7 @@ export interface ScrubRequest {
 export interface ScrubOptions {
   customDetectors?: Detector[];
   disabledDetectors?: string[]; // Array of detector names to skip
+  locale?: string; // BCP-47 tag activating detectors scoped to that locale
   minConfidence?: number; // Discard findings scored below this threshold (0.0-1.0, default 0)
 }
 

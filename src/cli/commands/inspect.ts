@@ -6,8 +6,9 @@ import { getActiveDetectors, runDetectors } from '../../core/scrub.js';
 import { SessionManager } from '../../session/session-manager.js';
 import type { Finding, ScoredFinding } from '../../types/index.js';
 import { addDetectorOptions, readInput } from '../io.js';
-import { sanitizeLine } from '../sanitize.js';
+import { resolveLocale, warnIfLocaleUnused } from '../locale.js';
 import { parseConfidence } from '../options.js';
+import { sanitizeLine } from '../sanitize.js';
 
 export async function handleInspect(
   text: string,
@@ -17,6 +18,7 @@ export async function handleInspect(
     strictName?: boolean;
     codeTellTerms?: string;
     urlAllowlist?: string;
+    locale?: string;
     minConfidence?: number;
   },
 ) {
@@ -32,10 +34,13 @@ export async function handleInspect(
 
   const config = loadConfig();
   const urlAllowlist = Array.from(new Set([...(config.urlAllowlist || []), ...cliUrlAllowlist]));
+  const locale = resolveLocale(options.locale, config.locale);
   // An explicit flag overrides the configured floor; both default to 0.
   const minConfidence = options.minConfidence ?? config.minConfidence ?? 0;
 
   const { detectors: rulePackDetectors } = await loadConfiguredRulePacks();
+
+  warnIfLocaleUnused(locale, rulePackDetectors);
 
   const detectors = getActiveDetectors({
     disabledDetectors,
@@ -43,6 +48,7 @@ export async function handleInspect(
     ...(options.strictName !== undefined ? { strictNameDetector: options.strictName } : {}),
     ...(codeTellTerms !== undefined ? { codeTellTerms } : {}),
     ...(urlAllowlist.length > 0 ? { urlAllowlist } : {}),
+    ...(locale ? { locale } : {}),
     customDetectors: rulePackDetectors,
   });
 
@@ -147,6 +153,10 @@ export function setupInspectCommand(program: Command) {
       'Discard findings scored below this confidence (0-1)',
       parseConfidence,
     )
+    .option(
+      '--locale <locale>',
+      'BCP-47 locale (e.g. de-DE) enabling detectors scoped to that locale',
+    )
     .option('--hash', 'Print only the SHA-256 hash of the scrubbed output')
     .action(async (file, options) => {
       const input = readInput(file);
@@ -156,7 +166,17 @@ export function setupInspectCommand(program: Command) {
         return;
       }
 
-      const { findings, suppressed, minConfidence } = await handleInspect(input, options);
+      let findings: ScoredFinding[];
+      let suppressed: ScoredFinding[];
+      let minConfidence: number;
+      try {
+        ({ findings, suppressed, minConfidence } = await handleInspect(input, options));
+      } catch (err: unknown) {
+        console.error((err as Error).message);
+        process.exit(1);
+        return;
+      }
+
       const hash = computeHash(input, findings);
 
       if (options.hash) {

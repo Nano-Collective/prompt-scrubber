@@ -16,6 +16,7 @@ import type {
   ScrubStats,
 } from '../types/index.js';
 import { resolveCollisions } from './collision-resolver.js';
+import { matchesLocale } from './locale.js';
 
 const DEFAULT_DETECTORS: Detector[] = [
   new SecretDetector(),
@@ -70,6 +71,10 @@ export interface DetectionResult {
  * Filtering happens before collision resolution so a discarded low-confidence
  * finding can never suppress a higher-confidence one that overlaps it.
  *
+ * Each finding is also tagged `localeScoped` when its detector declares
+ * `locales`, which `resolveCollisions` uses to let a locale-scoped finding
+ * replace an English-shaped one of the same category.
+ *
  * Returns the dropped findings alongside the kept ones so callers can tell the
  * user what a threshold cost them instead of silently under-redacting.
  */
@@ -78,13 +83,16 @@ export function runDetectors(
   detectors: Detector[],
   minConfidence = 0,
 ): DetectionResult {
-  const scored: ScoredFinding[] = detectors.flatMap((d) =>
-    d.detect(text).map((finding) => ({
+  const scored = detectors.flatMap((d) => {
+    const localeScoped = Boolean(d.locales && d.locales.length > 0);
+    // Tagged on a copy so a rule pack's own finding objects are never mutated.
+    return d.detect(text).map((finding) => ({
       ...finding,
       confidence: finding.confidence ?? DEFAULT_CONFIDENCE,
       method: finding.method ?? DEFAULT_METHOD,
-    })),
-  );
+      ...(localeScoped ? { localeScoped } : {}),
+    }));
+  });
 
   if (minConfidence <= 0) {
     return { findings: resolveCollisions(scored), suppressed: [] };
@@ -184,7 +192,9 @@ export function getActiveDetectors(options?: ScrubRequest['options']): Detector[
     detectors.push(...options.customDetectors);
   }
 
-  return detectors;
+  return detectors.filter(
+    (d) => !d.locales || d.locales.length === 0 || matchesLocale(d.locales, options?.locale),
+  );
 }
 
 /**
