@@ -70,6 +70,27 @@ test.serial('CLI: scrub -q is the short form of --quiet', (t) => {
   t.false(result.stderr.includes('Scrubbed:'));
 });
 
+test.serial('CLI: scrub -q still reports what --min-confidence suppressed', (t) => {
+  // -q is exactly the automated-workflow path --min-confidence targets, so it
+  // must not be the thing that hides what got dropped — the dangerous
+  // direction for a redaction tool is silent under-redaction.
+  const result = runCli(
+    ['scrub', '-q', '--min-confidence', '0.9'],
+    'mail alice@example.com and call 555-123-4567',
+  );
+  t.is(result.status, 0);
+  t.is(result.stdout, 'mail «Email_1» and call 555-123-4567');
+  t.false(result.stderr.includes('Scrubbed:'));
+  t.true(result.stderr.includes('1 suppressed below --min-confidence 0.9 (1 Phone)'));
+});
+
+test.serial('CLI: scrub -q prints nothing when there is nothing to suppress', (t) => {
+  const result = runCli(['scrub', '-q', '--min-confidence', '0.9'], 'nothing sensitive here');
+  t.is(result.status, 0);
+  t.is(result.stdout, 'nothing sensitive here');
+  t.is(result.stderr, '');
+});
+
 test.serial('CLI: rehydrate reads from stdin and restores', (t) => {
   // Step 1: scrub
   const scrubRes = runCli(['scrub'], 'Secret: sk-abcdefghijklmnopqrstuvwxyz');
@@ -245,6 +266,49 @@ test.serial('CLI: inspect fails when reading from stdin with no input provided',
   t.is(result.stdout, '');
 });
 
+test.serial('CLI: diff prints original vs scrubbed and writes no session', (t) => {
+  const sessionsDir = path.join(tmpConfigDir, 'prompt-scrub', 'sessions');
+  if (fs.existsSync(sessionsDir)) {
+    fs.rmSync(sessionsDir, { recursive: true, force: true });
+  }
+
+  const result = runCli(['diff', '--no-color'], 'Email me at alice@corp.com');
+  t.is(result.status, 0);
+  t.is(result.stdout, '- Email me at alice@corp.com\n+ Email me at «Email_1»\n');
+
+  const listRes = runCli(['sessions', 'list']);
+  t.true(listRes.stdout.includes('No saved sessions.'));
+});
+
+test.serial('CLI: diff --side-by-side uses a two-column layout', (t) => {
+  const result = runCli(['diff', '--side-by-side', '--no-color'], 'Email me at alice@corp.com');
+  t.is(result.status, 0);
+  t.true(result.stdout.includes('|'));
+  t.true(result.stdout.includes('alice@corp.com'));
+  t.true(result.stdout.includes('«Email_1»'));
+});
+
+test.serial('CLI: help lists the diff command', (t) => {
+  const result = runCli(['--help']);
+  t.is(result.status, 0);
+  t.true(result.stdout.includes('Show a visual diff of original vs scrubbed text'));
+});
+
+test.serial('CLI: diff rejects a non-integer --context', (t) => {
+  const result = runCli(['diff', '--context', 'abc'], 'Email me at alice@corp.com');
+  t.not(result.status, 0);
+  t.true(result.stderr.includes('--context must be a non-negative integer'));
+});
+
+test.serial('CLI: diff reads a file path', (t) => {
+  fs.mkdirSync(tmpConfigDir, { recursive: true });
+  const file = path.join(tmpConfigDir, 'diff-input.txt');
+  fs.writeFileSync(file, 'Email me at alice@corp.com');
+  const result = runCli(['diff', '--no-color', file]);
+  t.is(result.status, 0);
+  t.is(result.stdout, '- Email me at alice@corp.com\n+ Email me at «Email_1»\n');
+});
+
 test.serial('CLI: sessions rm fails when session ID is missing without --all', (t) => {
   const result = runCli(['sessions', 'rm']);
   t.not(result.status, 0);
@@ -255,4 +319,101 @@ test.serial('CLI: sessions rm fails gracefully with invalid session id', (t) => 
   const result = runCli(['sessions', 'rm', 'invalid-id-xyz']);
   t.not(result.status, 0);
   t.true(result.stderr.includes('not found'));
+});
+
+test('CLI: inspect prints the confidence and method of each entity', (t) => {
+  const result = runCli(['inspect'], 'Contact me at alice@example.com');
+  t.is(result.status, 0);
+  t.true(result.stdout.includes('confidence 0.95 exact-pattern'));
+});
+
+test('CLI: inspect --min-confidence hides findings below the threshold', (t) => {
+  const input = 'Call 555-123-4567 or mail alice@example.com';
+
+  const all = runCli(['inspect'], input);
+  t.true(all.stdout.includes('[Phone]'));
+  t.true(all.stdout.includes('[Email]'));
+
+  const filtered = runCli(['inspect', '--min-confidence', '0.9'], input);
+  t.is(filtered.status, 0);
+  const [detected, suppressed] = filtered.stdout.split('Suppressed below');
+  // The phone drops out of what would be scrubbed...
+  t.false(detected?.includes('[Phone]'));
+  t.true(detected?.includes('[Email]'));
+  // ...and is named as still being in the clear rather than vanishing.
+  t.true(suppressed?.includes('[Phone]'));
+});
+
+test('CLI: scrub --min-confidence says what it suppressed', (t) => {
+  // The exact command from the review.
+  const result = runCli(
+    ['scrub', '--min-confidence', '0.9'],
+    'mail alice@example.com and call 555-123-4567',
+  );
+
+  t.is(result.status, 0);
+  t.is(result.stdout, 'mail «Email_1» and call 555-123-4567');
+  t.true(
+    result.stderr.includes(
+      'Scrubbed: 1 entity (1 Email); 1 suppressed below --min-confidence 0.9 (1 Phone)',
+    ),
+  );
+});
+
+test('CLI: a run where the threshold drops everything still says so', (t) => {
+  // stdout is byte-identical to a prompt with nothing sensitive in it, so the
+  // summary is the only thing standing between the user and a silent leak.
+  const result = runCli(['scrub', '--min-confidence', '0.95'], 'call 555-123-4567');
+
+  t.is(result.status, 0);
+  t.is(result.stdout, 'call 555-123-4567');
+  t.true(
+    result.stderr.includes(
+      'Scrubbed: 0 entities; 1 suppressed below --min-confidence 0.95 (1 Phone)',
+    ),
+  );
+});
+
+test('CLI: the summary is unchanged without a threshold', (t) => {
+  const result = runCli(['scrub'], 'mail alice@example.com and call 555-123-4567');
+
+  t.is(result.status, 0);
+  t.true(result.stderr.includes('Scrubbed: 2 entities (1 Email, 1 Phone)'));
+  t.false(result.stderr.includes('suppressed'));
+});
+
+test('CLI: -q still reports what a threshold suppressed, even when nothing survived', (t) => {
+  // The worst case for a redaction tool: the threshold drops everything, so
+  // stdout is byte-identical to a prompt that never had a phone number in it.
+  // -q must not be what makes that silence indistinguishable from safety.
+  const result = runCli(['scrub', '-q', '--min-confidence', '0.9'], 'call 555-123-4567');
+
+  t.is(result.status, 0);
+  t.is(result.stdout, 'call 555-123-4567');
+  t.false(result.stderr.includes('Scrubbed:'));
+  t.true(result.stderr.includes('1 suppressed below --min-confidence 0.9 (1 Phone)'));
+});
+
+test('CLI: --min-confidence rejects a value outside the 0-1 range', (t) => {
+  const result = runCli(['scrub', '--min-confidence', '2'], 'mail alice@example.com');
+  t.is(result.status, 1);
+  t.true(result.stderr.includes('Expected a number between 0 and 1.'));
+});
+
+test('CLI: --min-confidence rejects trailing garbage rather than truncating it', (t) => {
+  // parseFloat would read this as 0.9 and scrub at a threshold the user never
+  // typed. Failing loudly is the only safe reading.
+  const result = runCli(['scrub', '--min-confidence', '0.9zzz'], 'mail alice@example.com');
+  t.is(result.status, 1);
+  t.true(result.stderr.includes('Expected a number between 0 and 1.'));
+});
+
+test('CLI: scrub --min-confidence changes the inspect hash to match', (t) => {
+  const input = 'Call 555-123-4567 or mail alice@example.com';
+  const scrubbed = runCli(['scrub', '--min-confidence', '0.9'], input);
+  const hash = runCli(['inspect', '--min-confidence', '0.9', '--hash'], input);
+
+  t.is(scrubbed.stdout, 'Call 555-123-4567 or mail «Email_1»');
+  t.is(hash.stdout.trim().length, 64);
+  t.not(hash.stdout.trim(), runCli(['inspect', '--hash'], input).stdout.trim());
 });

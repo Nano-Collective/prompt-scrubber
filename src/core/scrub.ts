@@ -9,13 +9,13 @@ import { UrlDetector } from '../detectors/url.js';
 import { SessionManager } from '../session/session-manager.js';
 import type {
   Detector,
-  Finding,
   Message,
+  ScoredFinding,
   ScrubRequest,
   ScrubResult,
   ScrubStats,
 } from '../types/index.js';
-import { type ResolvableFinding, resolveCollisions } from './collision-resolver.js';
+import { resolveCollisions } from './collision-resolver.js';
 import { matchesLocale } from './locale.js';
 
 const DEFAULT_DETECTORS: Detector[] = [
@@ -27,6 +27,89 @@ const DEFAULT_DETECTORS: Detector[] = [
   new PostalAddressDetector(),
 ];
 
+// Confidence assumed for findings from detectors that do not report one.
+export const DEFAULT_CONFIDENCE = 0.5;
+
+// Method reported for findings from detectors that do not name one.
+const DEFAULT_METHOD = 'unspecified';
+
+/**
+ * Whether `span` is entirely covered by `kept`, which resolveCollisions has
+ * already left sorted ascending and non-overlapping.
+ *
+ * A below-threshold finding whose span another finding redacts anyway is not
+ * under-redaction, so it must not be reported as suppressed — a summary that
+ * cries wolf on every overlapping detector teaches users to ignore it.
+ */
+function isCovered(span: [number, number], kept: ScoredFinding[]): boolean {
+  let cursor = span[0];
+  for (const finding of kept) {
+    if (finding.span[1] <= cursor) continue;
+    // A gap before this finding starts means part of the span survives in the clear.
+    if (finding.span[0] > cursor) return false;
+    cursor = finding.span[1];
+    if (cursor >= span[1]) return true;
+  }
+  return cursor >= span[1];
+}
+
+export interface DetectionResult {
+  /** Findings that passed the threshold, with overlaps resolved. */
+  findings: ScoredFinding[];
+  /**
+   * Findings the threshold dropped that nothing else covers. Overlaps among
+   * these are resolved too, so this counts distinct regions left in the clear
+   * rather than raw detector hits.
+   */
+  suppressed: ScoredFinding[];
+}
+
+/**
+ * Runs every detector over `text`, drops findings scored below `minConfidence`,
+ * then resolves the remaining overlaps.
+ *
+ * Filtering happens before collision resolution so a discarded low-confidence
+ * finding can never suppress a higher-confidence one that overlaps it.
+ *
+ * Each finding is also tagged `localeScoped` when its detector declares
+ * `locales`, which `resolveCollisions` uses to let a locale-scoped finding
+ * replace an English-shaped one of the same category.
+ *
+ * Returns the dropped findings alongside the kept ones so callers can tell the
+ * user what a threshold cost them instead of silently under-redacting.
+ */
+export function runDetectors(
+  text: string,
+  detectors: Detector[],
+  minConfidence = 0,
+): DetectionResult {
+  const scored = detectors.flatMap((d) => {
+    const localeScoped = Boolean(d.locales && d.locales.length > 0);
+    // Tagged on a copy so a rule pack's own finding objects are never mutated.
+    return d.detect(text).map((finding) => ({
+      ...finding,
+      confidence: finding.confidence ?? DEFAULT_CONFIDENCE,
+      method: finding.method ?? DEFAULT_METHOD,
+      ...(localeScoped ? { localeScoped } : {}),
+    }));
+  });
+
+  if (minConfidence <= 0) {
+    return { findings: resolveCollisions(scored), suppressed: [] };
+  }
+
+  const passing: ScoredFinding[] = [];
+  const below: ScoredFinding[] = [];
+  for (const finding of scored) {
+    (finding.confidence >= minConfidence ? passing : below).push(finding);
+  }
+
+  const findings = resolveCollisions(passing);
+  const suppressed = resolveCollisions(below).filter((f) => !isCovered(f.span, findings));
+
+  return { findings, suppressed };
+}
+
 /**
  * Scrubs a single string, returning the scrubbed text.
  * All replacements are recorded in the provided SessionManager and counted into `stats`.
@@ -36,8 +119,17 @@ function scrubString(
   detectors: Detector[],
   session: SessionManager,
   stats: ScrubStats,
+  minConfidence: number,
 ): string {
-  const findings = detectFindings(text, detectors);
+  const { findings, suppressed } = runDetectors(text, detectors, minConfidence);
+
+  // Counted before the early return: a message where the threshold dropped
+  // everything still has something the caller needs to hear about.
+  for (const finding of suppressed) {
+    const bucket = (stats.suppressed ??= { total: 0, byCategory: {} });
+    bucket.total += 1;
+    bucket.byCategory[finding.category] = (bucket.byCategory[finding.category] ?? 0) + 1;
+  }
 
   if (findings.length === 0) {
     return text;
@@ -56,20 +148,6 @@ function scrubString(
   }
 
   return result;
-}
-
-export function detectFindings(text: string, detectors: Detector[]): Finding[] {
-  const allFindings: ResolvableFinding[] = [];
-
-  for (const detector of detectors) {
-    const localeScoped = Boolean(detector.locales && detector.locales.length > 0);
-    for (const finding of detector.detect(text)) {
-      // Tagged on a copy so a rule pack's own finding objects are never mutated.
-      allFindings.push(localeScoped ? { ...finding, localeScoped } : finding);
-    }
-  }
-
-  return resolveCollisions(allFindings);
 }
 
 export function getActiveDetectors(options?: ScrubRequest['options']): Detector[] {
@@ -135,6 +213,14 @@ export function scrub(request: ScrubRequest): ScrubResult {
   const session = new SessionManager(sessionId, sessionMap);
   const detectors = getActiveDetectors(options);
   const stats: ScrubStats = { totalEntities: 0, byCategory: {} };
+  // A library caller can pass anything through `minConfidence` (NaN from a bad
+  // parseFloat, 2, -1, ...). `finding.confidence >= NaN` is always false, so an
+  // unclamped NaN would silently drop every finding — fail-open in exactly the
+  // direction this feature exists to prevent. Clamp rather than trust the input.
+  const rawMinConfidence = options?.minConfidence ?? 0;
+  const minConfidence = Number.isFinite(rawMinConfidence)
+    ? Math.min(Math.max(rawMinConfidence, 0), 1)
+    : 0;
 
   // Claim every placeholder the request already carries BEFORE minting any, so
   // re-scrubbing scrubbed output cannot hand the same token to a second value.
@@ -148,7 +234,7 @@ export function scrub(request: ScrubRequest): ScrubResult {
 
   if (typeof content === 'string') {
     session.reservePlaceholdersIn(content);
-    scrubbedContent = scrubString(content, detectors, session, stats);
+    scrubbedContent = scrubString(content, detectors, session, stats, minConfidence);
   } else {
     for (const msg of content) {
       session.reservePlaceholdersIn(msg.content);
@@ -156,7 +242,7 @@ export function scrub(request: ScrubRequest): ScrubResult {
     // Message[] — scrub each message's content independently, preserve structure
     scrubbedContent = content.map((msg) => ({
       ...msg,
-      content: scrubString(msg.content, detectors, session, stats),
+      content: scrubString(msg.content, detectors, session, stats, minConfidence),
     }));
   }
 

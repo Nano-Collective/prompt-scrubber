@@ -6,6 +6,7 @@ import { LOCALE_PATTERN } from './locale.js';
 export interface PromptScrubConfig {
   rulePacks?: string[];
   urlAllowlist?: string[];
+  minConfidence?: number;
   sessionTtlDays?: number;
   locale?: string;
 }
@@ -21,13 +22,48 @@ export function createDefaultConfig(): Required<PromptScrubConfig> {
   return {
     rulePacks: [],
     urlAllowlist: [],
+    // 0 keeps every finding, so an existing install behaves exactly as before.
+    minConfidence: 0,
     sessionTtlDays: 7,
     locale: '',
   };
 }
 
-const CONFIG_SCHEMA = createDefaultConfig();
-const CONFIG_KEYS = Object.keys(CONFIG_SCHEMA);
+type ConfigKey = keyof Required<PromptScrubConfig>;
+
+/**
+ * One validator per config key, returning an error message or null.
+ *
+ * Typed as a total `Record<ConfigKey, …>` on purpose: adding a key to
+ * `PromptScrubConfig` without deciding how it is validated becomes a type
+ * error here, rather than a key that silently accepts anything. `CONFIG_KEYS`
+ * is derived from it so the "supported keys" list cannot drift either.
+ */
+const VALIDATORS: Record<ConfigKey, (value: unknown) => string | null> = {
+  rulePacks: (value) => validateStringArray('rulePacks', value),
+  urlAllowlist: (value) => validateStringArray('urlAllowlist', value),
+  minConfidence: (value) => {
+    if (isConfidence(value)) return null;
+    // Report an out-of-range number by value; anything else by its type.
+    const received = typeof value === 'number' ? `${value}` : describeType(value);
+    return `"minConfidence" must be a number between 0 and 1, received ${received}.`;
+  },
+  sessionTtlDays: (value) =>
+    typeof value === 'number' && Number.isFinite(value) && value > 0
+      ? null
+      : `"sessionTtlDays" must be a positive number, received ${describeType(value)}.`,
+  locale: (value) => {
+    if (typeof value !== 'string') {
+      return `"locale" must be a string, received ${describeType(value)}.`;
+    }
+    if (value.trim().length > 0 && !LOCALE_PATTERN.test(value.trim())) {
+      return `"locale" must be a BCP-47 language tag (e.g. "de-DE"), received "${value}".`;
+    }
+    return null;
+  },
+};
+
+const CONFIG_KEYS = Object.keys(VALIDATORS) as ConfigKey[];
 
 /**
  * Determines the base configuration directory based on the OS.
@@ -79,6 +115,20 @@ function toLocale(value: unknown): string {
   return LOCALE_PATTERN.test(trimmed) ? trimmed : '';
 }
 
+function isConfidence(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
+}
+
+function validateStringArray(key: string, value: unknown): string | null {
+  if (!Array.isArray(value)) {
+    return `"${key}" must be an array of strings, received ${describeType(value)}.`;
+  }
+  if (value.some((item) => typeof item !== 'string')) {
+    return `"${key}" must contain only strings.`;
+  }
+  return null;
+}
+
 function validateConfig(data: unknown): string[] {
   if (data === null || typeof data !== 'object' || Array.isArray(data)) {
     return [`Expected a JSON object, received ${describeType(data)}.`];
@@ -88,38 +138,18 @@ function validateConfig(data: unknown): string[] {
   const record = data as Record<string, unknown>;
 
   for (const key of Object.keys(record)) {
-    if (!CONFIG_KEYS.includes(key)) {
+    if (!(CONFIG_KEYS as string[]).includes(key)) {
       errors.push(`Unknown key "${key}". Supported keys: ${CONFIG_KEYS.join(', ')}.`);
     }
   }
 
   for (const key of CONFIG_KEYS) {
     const value = record[key];
+    // An absent key falls back to its default; only a present one is checked.
     if (value === undefined) continue;
 
-    const expected = CONFIG_SCHEMA[key as keyof PromptScrubConfig];
-
-    if (Array.isArray(expected)) {
-      if (!Array.isArray(value)) {
-        errors.push(`"${key}" must be an array of strings, received ${describeType(value)}.`);
-      } else if (value.some((item) => typeof item !== 'string')) {
-        errors.push(`"${key}" must contain only strings.`);
-      }
-      continue;
-    }
-
-    if (typeof expected === 'number') {
-      if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
-        errors.push(`"${key}" must be a positive number, received ${describeType(value)}.`);
-      }
-      continue;
-    }
-
-    if (typeof value !== 'string') {
-      errors.push(`"${key}" must be a string, received ${describeType(value)}.`);
-    } else if (key === 'locale' && value.trim().length > 0 && !LOCALE_PATTERN.test(value.trim())) {
-      errors.push(`"locale" must be a BCP-47 language tag (e.g. "de-DE"), received "${value}".`);
-    }
+    const error = VALIDATORS[key](value);
+    if (error) errors.push(error);
   }
 
   return errors;
@@ -155,6 +185,7 @@ export function readConfigFile(): ConfigFileState {
     config: {
       rulePacks: toStringArray(record.rulePacks),
       urlAllowlist: toStringArray(record.urlAllowlist),
+      minConfidence: isConfidence(record.minConfidence) ? record.minConfidence : 0,
       sessionTtlDays:
         typeof record.sessionTtlDays === 'number' &&
         Number.isFinite(record.sessionTtlDays) &&

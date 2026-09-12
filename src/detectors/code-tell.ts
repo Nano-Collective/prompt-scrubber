@@ -48,6 +48,10 @@ export interface CodeTellDiagnostics {
   overflowed: string[];
 }
 
+// The terms are enumerated by the user, so a match is what they asked for.
+// Held just below certainty because a generic term can still fire in prose.
+const CODE_TELL_CONFIDENCE = 0.95;
+
 export class CodeTellDetector implements Detector {
   readonly name = 'CodeTellDetector';
   private terms: string[] = [];
@@ -109,6 +113,8 @@ export class CodeTellDetector implements Detector {
           span: [start, endIdx],
           value: text.slice(start, endIdx),
           placeholderPrefix: 'CodeTell',
+          confidence: CODE_TELL_CONFIDENCE,
+          method: 'user-defined',
         });
         cursor = endIdx;
       } else {
