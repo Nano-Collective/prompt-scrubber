@@ -8,6 +8,11 @@ const FULL_URL_REGEX = /https?:\/\/(?:[a-zA-Z0-9\-._~:/?#[\]@!$&'()*+,;=%]+)/g;
 const BARE_API_REGEX =
   /(?<![/\w])([a-zA-Z0-9][a-zA-Z0-9-]*\.[a-zA-Z]{2,}(?:\.[a-zA-Z]{2,})?\/[a-zA-Z0-9\-._~:/?#[\]@!$&'()*+,;=%]+)/g;
 
+// A scheme makes the match unambiguous; a bare host/path has to guess from a
+// dot and a slash, which also describes plenty of file paths and prose.
+const FULL_URL_CONFIDENCE = 0.95;
+const BARE_URL_CONFIDENCE = 0.7;
+
 export class UrlDetector implements Detector {
   readonly name = 'UrlDetector';
 
@@ -38,6 +43,8 @@ export class UrlDetector implements Detector {
         span: [match.index, match.index + value.length],
         value,
         placeholderPrefix: 'Url',
+        confidence: FULL_URL_CONFIDENCE,
+        method: 'exact-pattern',
       });
     }
 
@@ -55,6 +62,8 @@ export class UrlDetector implements Detector {
           span: [start, start + value.length],
           value,
           placeholderPrefix: 'Url',
+          confidence: BARE_URL_CONFIDENCE,
+          method: 'heuristic',
         });
       }
     }

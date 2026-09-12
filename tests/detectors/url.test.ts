@@ -119,3 +119,15 @@ test('detects URL when allowlisted domain is a substring but not a parent domain
   t.is(findings.length, 1);
   t.is(findings[0]?.value, 'https://myexample.com/path');
 });
+
+// --- Confidence ---
+
+test('scores a scheme-qualified URL above a bare host/path', (t) => {
+  const full = detector.detect('See https://api.example.com/v1/users');
+  t.is(full[0]?.confidence, 0.95);
+  t.is(full[0]?.method, 'exact-pattern');
+
+  const bare = detector.detect('See api.example.com/v1/users');
+  t.is(bare[0]?.confidence, 0.7);
+  t.is(bare[0]?.method, 'heuristic');
+});

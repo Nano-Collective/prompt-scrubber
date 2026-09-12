@@ -28,7 +28,8 @@ The summary counts replacements, not unique values: a value that appears three t
 **Options:**
 - `--session-id <id>`: Reuse an existing session map. If omitted, a new UUID is generated.
 - `--disable <detectors>`: Comma-separated list of detectors to disable (e.g. `EmailDetector,PhoneDetector`).
-- `-q, --quiet`: Suppress the summary. The `Session ID:` line is still printed, since scripts need it to rehydrate.
+- `--min-confidence <value>`: Discard findings scored below this confidence (`0`-`1`). Defaults to the configured `minConfidence`, or `0` (keep everything). Whatever the threshold discards is named in the summary, so a filtered run never quietly under-redacts. See [Confidence & Tiered Detection](../features/detectors.md#confidence--tiered-detection).
+- `-q, --quiet`: Suppress the summary. The `Session ID:` line is still printed, since scripts need it to rehydrate. A `--min-confidence` suppression notice is still printed too — `-q` is exactly the automated-workflow path that flag targets, so it must not be what hides what got dropped.
 - `--json`: Output result as structured JSON instead of text.
 - `--include-session-map`: Include `sessionMap` in JSON output (requires `--json`; contains sensitive values in plaintext — with this flag, raw values are written to stdout and will end up in CI logs).
 
@@ -43,12 +44,52 @@ If the model hallucinates a placeholder that does not exist in the session map (
 - `--json`: Output result as structured JSON instead of text.
 
 ### `prompt-scrub inspect [file]`
-Reads a message from `stdin` or a file and prints a human-readable diff of the transformations the scrubber will apply. Also prints a SHA-256 hash of the final byte-stable output for verifying prompt cache deterministic prefix stability.
+Reads a message from `stdin` or a file and prints a table of detected entities (category, value, placeholder, span). Also prints a SHA-256 hash of the final byte-stable output for verifying prompt cache deterministic prefix stability.
+
+Every entity is listed with the confidence the detector assigned it and the method
+that produced the match, so you can see what a `--min-confidence` threshold would
+drop before you commit to one:
+
+```bash
+$ echo "My email is alice@acme.com and I work at /Users/alice/projects." | prompt-scrub inspect
+Detected entities:
+  [Email]    alice@acme.com                   → «Email_1»  (chars 12-26, confidence 0.95 exact-pattern)
+  [Path]     /Users/alice/projects.           → «Path_1»   (chars 41-63, confidence 0.80 structural)
+```
 
 **Options:**
 - `--disable <detectors>`: Comma-separated list of detectors to disable.
+- `--enable <detectors>`: Comma-separated list of off-by-default detectors to enable (e.g. `NameDetector`).
+- `--strict-name`: Enable strict allowlisting for `NameDetector`.
+- `--code-tell-terms <terms>`: Comma-separated list of private identifiers to detect.
+- `--url-allowlist <hosts>`: Comma-separated list of hostnames to pass through.
+- `--min-confidence <value>`: Hide findings scored below this confidence (`0`-`1`). Anything dropped is listed under a `Suppressed below --min-confidence <value>:` heading rather than silently disappearing. The printed hash reflects the filtered output, matching what `scrub` would produce at the same threshold.
 - `--hash`: Print *only* the SHA-256 hash for scripting purposes.
 - `--json`: Output result as structured JSON instead of text.
+
+### `prompt-scrub diff [file]`
+Reads a message from `stdin` or a file and prints a colorized line diff of the original text against what `scrub` would emit. Nothing is written to a session. Red lines are the original PII, green lines are the placeholders.
+
+```bash
+echo "Email me at alice@corp.com" | prompt-scrub diff --no-color
+```
+
+```
+- Email me at alice@corp.com
++ Email me at «Email_1»
+```
+
+Colors are on when stdout is a TTY. Pass `--no-color` or set `NO_COLOR` to pipe the output into a file.
+
+**Options:**
+- `--side-by-side`: Two-column layout (`original | scrubbed`). Long lines wrap; they are not truncated.
+- `--context <n>`: Unchanged lines kept around each change (default `3`). Must be a non-negative integer.
+- `--no-color`: Disable ANSI colors.
+- `--disable <detectors>`: Comma-separated list of detectors to disable.
+- `--enable <detectors>`: Comma-separated list of off-by-default detectors to enable (e.g. `NameDetector`).
+- `--strict-name`: Enable strict allowlisting for `NameDetector`.
+- `--code-tell-terms <terms>`: Comma-separated list of private identifiers to detect.
+- `--url-allowlist <hosts>`: Comma-separated list of hostnames to pass through.
 
 ## Watch Mode
 
@@ -68,6 +109,8 @@ prompt-scrub watch --file prompt.txt notes.md --interval 500
 prompt-scrub watch --file prompt.txt --dry-run --once
 ```
 
+A single session is used for the whole run, so placeholders keep counting up across ticks and two different values can never share one token. The session ID is printed on start-up (`[watch] Session ID: <id>`) - pass it to `prompt-scrub rehydrate --session-id <id>` to restore the originals. Use `--session-id` to keep watching into an existing session instead.
+
 Press `Ctrl-C` to stop watching; the poll loop is cleared and the process exits cleanly.
 
 **Options:**
@@ -83,6 +126,7 @@ Press `Ctrl-C` to stop watching; the poll loop is cleared and the process exits 
 - `--strict-name`: Enable strict allowlisting for `NameDetector`.
 - `--code-tell-terms <terms>`: Comma-separated list of private identifiers to detect.
 - `--url-allowlist <hosts>`: Comma-separated list of hostnames to pass through.
+- `--min-confidence <value>`: Discard findings scored below this confidence (`0`-`1`). Anything dropped is logged, including when it means the clipboard or file is left untouched.
 
 **Platform requirements:**
 
@@ -124,12 +168,14 @@ The generated file documents the supported schema:
 {
   "rulePacks": [],
   "urlAllowlist": [],
+  "minConfidence": 0,
   "sessionTtlDays": 7
 }
 ```
 
 - `rulePacks`: npm package names to load extra detectors from. See [Authoring Rule Packs](../features/authoring-rule-packs.md).
 - `urlAllowlist`: hostnames the `UrlDetector` passes through unchanged. Subdomains are implicitly allowed.
+- `minConfidence`: findings scored below this threshold are discarded. `0` keeps everything; `--min-confidence` overrides it per run.
 - `sessionTtlDays`: number of days after which inactive sessions are automatically garbage collected. Default is 7.
 
 Fails if a config file already exists.
@@ -149,7 +195,8 @@ Config file: /home/alice/.config/prompt-scrub/config.json
   ],
   "urlAllowlist": [
     "example.com"
-  ]
+  ],
+  "minConfidence": 0.8
 }
 ```
 
@@ -158,10 +205,12 @@ Entries that do not match the schema are reported on `stderr` and the command ex
 ```bash
 $ prompt-scrub config show
 Config file: /home/alice/.config/prompt-scrub/config.json
-  error: Unknown key "rulePaks". Supported keys: rulePacks, urlAllowlist.
+  error: Unknown key "rulePaks". Supported keys: rulePacks, urlAllowlist, minConfidence, sessionTtlDays.
 {
   "rulePacks": [],
-  "urlAllowlist": []
+  "urlAllowlist": [],
+  "minConfidence": 0,
+  "sessionTtlDays": 7
 }
 Invalid entries are ignored at runtime.
 ```

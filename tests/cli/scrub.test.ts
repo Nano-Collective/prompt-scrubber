@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'ava';
 import { formatScrubSummary, handleScrub } from '../../src/cli/commands/scrub.js';
+import { parseConfidence } from '../../src/cli/options.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -118,17 +119,17 @@ test.serial('scrub command fails when no stdin is provided', async (t) => {
 });
 
 test('formatScrubSummary renders counts, plurals and the empty case', (t) => {
-  t.is(formatScrubSummary({ totalEntities: 0, byCategory: {} }), 'Scrubbed: 0 entities');
+  t.is(formatScrubSummary({ totalEntities: 0, byCategory: {} }, 0), 'Scrubbed: 0 entities');
   t.is(
-    formatScrubSummary({ totalEntities: 1, byCategory: { Email: 1 } }),
+    formatScrubSummary({ totalEntities: 1, byCategory: { Email: 1 } }, 0),
     'Scrubbed: 1 entity (1 Email)',
   );
   t.is(
-    formatScrubSummary({ totalEntities: 3, byCategory: { Email: 1, Secret: 2 } }),
+    formatScrubSummary({ totalEntities: 3, byCategory: { Email: 1, Secret: 2 } }, 0),
     'Scrubbed: 3 entities (1 Email, 2 Secrets)',
   );
   t.is(
-    formatScrubSummary({ totalEntities: 4, byCategory: { Address: 2, Identity: 2 } }),
+    formatScrubSummary({ totalEntities: 4, byCategory: { Address: 2, Identity: 2 } }, 0),
     'Scrubbed: 4 entities (2 Addresses, 2 Identities)',
   );
 });
@@ -137,4 +138,259 @@ test('handleScrub returns stats alongside the scrubbed content', async (t) => {
   const result = await handleScrub('Mail alice@example.com and bob@example.com', {});
   t.is(result.stats.totalEntities, 2);
   t.deepEqual(result.stats.byCategory, { Email: 2 });
+});
+
+test('handleScrub applies minConfidence before scrubbing', async (t) => {
+  const text = 'ask Alice about alice@example.com';
+
+  const all = await handleScrub(text, { enable: 'NameDetector' });
+  t.is(all.scrubbedContent, 'ask «Name_1» about «Email_1»');
+
+  const filtered = await handleScrub(text, { enable: 'NameDetector', minConfidence: 0.8 });
+  t.is(filtered.scrubbedContent, 'ask Alice about «Email_1»');
+});
+
+test('parseConfidence accepts the 0-1 range and rejects anything else', (t) => {
+  t.is(parseConfidence('0'), 0);
+  t.is(parseConfidence('0.85'), 0.85);
+  t.is(parseConfidence('1'), 1);
+  // Forms Number() handles that parseFloat also handled — no regression.
+  t.is(parseConfidence('.85'), 0.85);
+  t.is(parseConfidence('9e-1'), 0.9);
+  t.is(parseConfidence(' 0.5 '), 0.5);
+
+  // '0.9zzz' is the important one: parseFloat stops at the first invalid
+  // character and would silently run at 0.9, which is exactly the quiet
+  // reinterpretation this parser exists to prevent.
+  for (const bad of ['-0.1', '1.1', 'high', '', '0.9zzz', '0.5 0.6', 'NaN', 'Infinity']) {
+    t.throws(() => parseConfidence(bad), { message: 'Expected a number between 0 and 1.' });
+  }
+});
+
+test('formatScrubSummary reports what a threshold suppressed', (t) => {
+  // The dangerous case: nothing was scrubbed, but something WAS found and
+  // dropped. Without the second clause this is indistinguishable from a clean
+  // prompt.
+  t.is(
+    formatScrubSummary(
+      { totalEntities: 0, byCategory: {}, suppressed: { total: 1, byCategory: { Phone: 1 } } },
+      0.95,
+    ),
+    'Scrubbed: 0 entities; 1 suppressed below --min-confidence 0.95 (1 Phone)',
+  );
+
+  // The example from the review, verbatim.
+  t.is(
+    formatScrubSummary(
+      {
+        totalEntities: 1,
+        byCategory: { Email: 1 },
+        suppressed: { total: 1, byCategory: { Phone: 1 } },
+      },
+      0.9,
+    ),
+    'Scrubbed: 1 entity (1 Email); 1 suppressed below --min-confidence 0.9 (1 Phone)',
+  );
+
+  // Plurals apply to the suppressed breakdown too.
+  t.is(
+    formatScrubSummary(
+      {
+        totalEntities: 1,
+        byCategory: { Email: 1 },
+        suppressed: { total: 3, byCategory: { Phone: 2, Address: 1 } },
+      },
+      0.9,
+    ),
+    'Scrubbed: 1 entity (1 Email); 3 suppressed below --min-confidence 0.9 (2 Phones, 1 Address)',
+  );
+});
+
+test('formatScrubSummary is unchanged when nothing was suppressed', (t) => {
+  // No threshold in play, and a threshold that cost nothing, both produce the
+  // exact string the tool printed before this feature existed.
+  t.is(
+    formatScrubSummary({ totalEntities: 1, byCategory: { Email: 1 } }, 0),
+    'Scrubbed: 1 entity (1 Email)',
+  );
+  t.is(
+    formatScrubSummary({ totalEntities: 1, byCategory: { Email: 1 } }, 0.9),
+    'Scrubbed: 1 entity (1 Email)',
+  );
+  t.is(
+    formatScrubSummary(
+      { totalEntities: 1, byCategory: { Email: 1 }, suppressed: { total: 0, byCategory: {} } },
+      0.9,
+    ),
+    'Scrubbed: 1 entity (1 Email)',
+  );
+});
+
+test('handleScrub reports the phone the threshold dropped', async (t) => {
+  // The exact command from the review.
+  const result = await handleScrub('mail alice@example.com and call 555-123-4567', {
+    minConfidence: 0.9,
+  });
+
+  t.is(result.scrubbedContent, 'mail «Email_1» and call 555-123-4567');
+  t.is(result.minConfidence, 0.9);
+  t.is(
+    formatScrubSummary(result.stats, result.minConfidence),
+    'Scrubbed: 1 entity (1 Email); 1 suppressed below --min-confidence 0.9 (1 Phone)',
+  );
+});
+
+test('handleScrub reports suppression even when nothing survived', async (t) => {
+  const result = await handleScrub('call 555-123-4567', { minConfidence: 0.95 });
+
+  t.is(result.scrubbedContent, 'call 555-123-4567');
+  t.is(
+    formatScrubSummary(result.stats, result.minConfidence),
+    'Scrubbed: 0 entities; 1 suppressed below --min-confidence 0.95 (1 Phone)',
+  );
+});
+
+test('handleScrub leaves stats.suppressed absent without a threshold', async (t) => {
+  const result = await handleScrub('mail alice@example.com and call 555-123-4567', {});
+
+  t.is(result.stats.suppressed, undefined);
+  t.is(
+    formatScrubSummary(result.stats, result.minConfidence),
+    'Scrubbed: 2 entities (1 Email, 1 Phone)',
+  );
+});
+
+test('scrub runs the diagnostics walk with --enable set', async (t) => {
+  const program = new Command();
+  setupScrubCommand(program);
+
+  const originalError = console.error;
+  const errorOutput: string[] = [];
+  console.error = (msg: string) => {
+    errorOutput.push(msg);
+  };
+
+  const originalExit = process.exit;
+  process.exit = (() => {}) as unknown as typeof process.exit;
+
+  const tmpFile = path.join(__dirname, '.tmp-with-enable.txt');
+  fs.writeFileSync(tmpFile, 'plain text with no detector matches', 'utf8');
+
+  try {
+    await program.parseAsync(['node', 'test', 'scrub', tmpFile, '--enable', 'CodeTellDetector']);
+  } finally {
+    process.exit = originalExit;
+    console.error = originalError;
+    fs.rmSync(tmpFile, { force: true });
+  }
+
+  // The diagnostic walk runs without throwing even when CodeTellDetector
+  // is in --enable but no --code-tell-terms is provided.
+  t.pass('diagnostics walk did not throw');
+});
+
+test('scrub runs the diagnostics walk without --disable or --enable set', async (t) => {
+  const program = new Command();
+  setupScrubCommand(program);
+
+  const originalError = console.error;
+  const errorOutput: string[] = [];
+  console.error = (msg: string) => {
+    errorOutput.push(msg);
+  };
+
+  const originalExit = process.exit;
+  process.exit = (() => {}) as unknown as typeof process.exit;
+
+  const tmpFile = path.join(__dirname, '.tmp-no-disable-enable.txt');
+  fs.writeFileSync(tmpFile, 'plain text with no detector matches', 'utf8');
+
+  try {
+    await program.parseAsync(['node', 'test', 'scrub', tmpFile]);
+  } finally {
+    process.exit = originalExit;
+    console.error = originalError;
+    fs.rmSync(tmpFile, { force: true });
+  }
+
+  // No CodeTell warnings expected when --code-tell-terms is absent.
+  const combined = errorOutput.join('\n');
+  t.false(
+    combined.includes('CodeTellDetector dropped'),
+    `expected no CodeTell warnings, got: ${combined}`,
+  );
+});
+
+test('scrub warns on stderr when a configured CodeTell term exceeds MAX_TERM_LENGTH', async (t) => {
+  const program = new Command();
+  setupScrubCommand(program);
+
+  const originalError = console.error;
+  const errorOutput: string[] = [];
+  console.error = (msg: string) => {
+    errorOutput.push(msg);
+  };
+
+  // 80 chars is over the 64-char cap and triggers the warning.
+  const oversized = 'a'.repeat(80);
+  const originalExit = process.exit;
+  process.exit = (() => {}) as unknown as typeof process.exit;
+
+  // Write a tiny input file so the CLI has something to scrub.
+  const tmpFile = path.join(__dirname, '.tmp-codetell-warning.txt');
+  fs.writeFileSync(tmpFile, 'plain text with no detector matches', 'utf8');
+
+  try {
+    await program.parseAsync(['node', 'test', 'scrub', tmpFile, '--code-tell-terms', oversized]);
+  } finally {
+    process.exit = originalExit;
+    console.error = originalError;
+    fs.rmSync(tmpFile, { force: true });
+  }
+
+  const combined = errorOutput.join('\n');
+  t.true(
+    combined.includes('CodeTellDetector dropped 1 term(s) longer than 64 chars'),
+    `expected oversized-term warning, got: ${combined}`,
+  );
+});
+
+test('scrub warns on stderr when more than 64 CodeTell terms are configured', async (t) => {
+  const program = new Command();
+  setupScrubCommand(program);
+
+  const originalError = console.error;
+  const errorOutput: string[] = [];
+  console.error = (msg: string) => {
+    errorOutput.push(msg);
+  };
+
+  // 80 short terms pushes 16 past the 64-term cap.
+  const terms = Array.from({ length: 80 }, (_, i) => `t${i}`);
+  const originalExit = process.exit;
+  process.exit = (() => {}) as unknown as typeof process.exit;
+
+  const tmpFile = path.join(__dirname, '.tmp-codetell-overflow.txt');
+  fs.writeFileSync(tmpFile, 'plain text with no detector matches', 'utf8');
+
+  try {
+    await program.parseAsync([
+      'node',
+      'test',
+      'scrub',
+      tmpFile,
+      '--code-tell-terms',
+      terms.join(','),
+    ]);
+  } finally {
+    process.exit = originalExit;
+    console.error = originalError;
+    fs.rmSync(tmpFile, { force: true });
+  }
+
+  const combined = errorOutput.join('\n');
+  t.true(
+    combined.includes('CodeTellDetector dropped 16 term(s) past the 64-term cap'),
+    `expected overflow warning, got: ${combined}`,
+  );
 });
