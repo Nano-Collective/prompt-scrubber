@@ -76,14 +76,33 @@ test('rejects bare 9-digit runs without an SSN label', (t) => {
   t.is(detector.detect('Invoice 987654321 is overdue').length, 0);
 });
 
-// Known limitation of the delimited pattern: a space is an accepted separator, so an
-// unlabelled 3-2-4 run of space-separated digits still matches. Pinned so the behaviour
-// is visible rather than incidental. Requiring a hyphen here would close it, at the cost
-// of missing unlabelled space-separated SSNs.
-test('space-separated digit groups still match without a label', (t) => {
-  const findings = detector.detect('qty 100 20 3000 units');
+// The unlabelled pattern is hyphen-only. An unlabelled 3-2-4 run of space-separated
+// digits is overwhelmingly a table row or a measurement, and real SSNs are written with
+// hyphens, so the space form is only accepted alongside a label.
+test('unlabelled space-separated digit groups do not match', (t) => {
+  t.is(detector.detect('qty 100 20 3000 units').length, 0);
+  t.is(detector.detect('Latency was 100 20 3000 ms across runs').length, 0);
+});
+
+test('unlabelled newline- or mixed-separated digit groups do not match', (t) => {
+  t.is(detector.detect('123\n45\n6789').length, 0);
+  t.is(detector.detect('123-45 6789').length, 0);
+});
+
+test('a labelled space-separated SSN still matches', (t) => {
+  const text = 'Tax ID: 456 78 9012 on record';
+  const findings = detector.detect(text);
   t.is(findings.length, 1);
-  t.is(findings[0]?.value, '100 20 3000');
+  t.is(findings[0]?.value, '456 78 9012');
+  const [start, end] = findings[0]!.span;
+  t.is(text.slice(start, end), '456 78 9012');
+});
+
+// A labelled hyphenated SSN satisfies both patterns at the same span.
+test('a labelled hyphenated SSN yields exactly one finding', (t) => {
+  const findings = detector.detect('Employee SSN is 123-45-6789.');
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, '123-45-6789');
 });
 
 test('span excludes the label on a contextual match', (t) => {

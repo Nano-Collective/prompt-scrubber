@@ -976,6 +976,20 @@ test('ip address scrubbing and round-tripping works correctly', (t) => {
   t.is(rehydrated.content, original);
 });
 
+// The worst failure mode for this project is partial disclosure that looks scrubbed:
+// before the IPv4-embedded IPv6 branches existed, this emitted "«IpAddress_1».0.2.1".
+test('an IPv4-mapped IPv6 address scrubs whole, leaving no digits behind', (t) => {
+  const original = 'mapped ::ffff:192.0.2.1 here';
+  const scrubResult = scrub({ content: original });
+  t.is(scrubResult.scrubbedContent, 'mapped «IpAddress_1» here');
+
+  const rehydrated = rehydrate({
+    content: scrubResult.scrubbedContent,
+    sessionMap: scrubResult.sessionMap,
+  });
+  t.is(rehydrated.content, original);
+});
+
 test('credit card scrubbing and round-tripping works correctly', (t) => {
   const original = 'Visa: 4532-0150-0000-0007, Amex: 3782 822463 10005';
   const scrubResult = scrub({ content: original });
@@ -1056,6 +1070,8 @@ const NEGATIVE_CORPUS = [
   'Namespace std::vector and a :: b in prose',
   'Tracking 1Z999AA10123456784 delivered',
   'Zip 90210-1234 and phone extension 4567',
+  'Latency was 100 20 3000 ms across runs',
+  'Rows 402 55 1234 and 100 20 3000 in the table',
 ];
 
 for (const sample of NEGATIVE_CORPUS) {
