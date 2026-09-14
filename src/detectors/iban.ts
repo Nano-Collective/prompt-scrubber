@@ -1,8 +1,19 @@
 import type { Detector, Finding } from '../types/index.js';
 
-// Matches candidate IBANs (2 uppercase letters + 2 digits + alphanumeric characters up to 34 chars)
+// Matches candidate IBANs (2 uppercase letters + 2 digits + alphanumeric characters up to 34 chars).
+// The trailing guard has to separate "the number continues" from "an uppercase word
+// follows". A plain `(?![ ]?[0-9A-Z])` cannot: on `GB82 WEST 1234 5698 7654 32 NOW` it
+// forces backtracking to shorter candidates, every one of which fails the length check,
+// so the IBAN is dropped with no trace. `IBAN ... PLEASE PAY` is ordinary payment-email
+// phrasing, which made that miss both silent and common.
+//
+// A following chunk carrying a digit is treated as a continuation and still blocks the
+// match, so `... 7654 32 1111 2222 3333 4444` is rejected rather than scrubbed down to
+// its first 22 characters. An all-letter chunk is treated as prose: every country has
+// one registered length, so a candidate that already reached it cannot legitimately
+// continue, and `ASAP` or `PLEASE` can only be a word.
 const IBAN_REGEX =
-  /(?<![a-zA-Z0-9])([A-Z]{2}[0-9]{2}(?:[ ]?[0-9A-Z]{4}){2,7}(?:[ ]?[0-9A-Z]{1,4})?|[A-Z]{2}[0-9]{2}[0-9A-Z]{11,30})(?![ ]?[0-9A-Z])/g;
+  /(?<![a-zA-Z0-9])([A-Z]{2}[0-9]{2}(?:[ ]?[0-9A-Z]{4}){2,7}(?:[ ]?[0-9A-Z]{1,4})?|[A-Z]{2}[0-9]{2}[0-9A-Z]{11,30})(?![ ][0-9A-Z]{0,3}[0-9])(?![0-9A-Z])/g;
 
 // Registry of IBAN-issuing countries and their fixed total length (ISO 13616).
 // MOD-97 alone accepts ~1.1% of random 22-char uppercase tokens; gating on a known

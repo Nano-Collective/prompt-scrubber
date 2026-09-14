@@ -57,6 +57,30 @@ test('rejects invalid length or formatting', (t) => {
   t.is(findings.length, 0);
 });
 
+// "IBAN ... PLEASE PAY" is ordinary payment-email phrasing. A trailing guard that cannot
+// tell an uppercase word from a continuing token forces backtracking to candidates that
+// all fail the length check, and the IBAN is dropped with no trace.
+test('detects an IBAN followed by an uppercase word', (t) => {
+  t.deepEqual(
+    detector.detect('Wire to GB82 WEST 1234 5698 7654 32 NOW').map((f) => f.value),
+    ['GB82 WEST 1234 5698 7654 32'],
+  );
+  t.deepEqual(
+    detector.detect('acct DE89370400440532013000 ASAP').map((f) => f.value),
+    ['DE89370400440532013000'],
+  );
+  t.deepEqual(
+    detector.detect('IBAN DE89 3704 0044 0532 0130 00 PLEASE PAY').map((f) => f.value),
+    ['DE89 3704 0044 0532 0130 00'],
+  );
+});
+
+test('span excludes a following uppercase word', (t) => {
+  const text = 'Wire to GB82 WEST 1234 5698 7654 32 NOW';
+  const [start, end] = detector.detect(text)[0]!.span;
+  t.is(text.slice(start, end), 'GB82 WEST 1234 5698 7654 32');
+});
+
 test('returns empty for clean text', (t) => {
   const findings = detector.detect('No bank accounts mentioned.');
   t.is(findings.length, 0);
