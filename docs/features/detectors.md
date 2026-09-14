@@ -43,8 +43,8 @@ export interface Detector {
 - `AddressDetector`: Detects unambiguous postal addresses (e.g., street shapes).
 - `CreditCardDetector`: Detects 16-digit (Visa, Mastercard, Discover) and 15-digit (American Express) card numbers, validated with the Luhn (Mod-10) checksum so barcodes and serial numbers are rejected.
 - `IbanDetector`: Detects International Bank Account Numbers, validated against the ISO 13616 country registry (code and exact length) and the ISO 7064 MOD-97 checksum.
-- `SsnDetector`: Detects US Social Security Numbers, rejecting values that break SSA structural rules (area of `000`, `666`, or `900-999`; group of `00`; serial of `0000`). The delimited `AAA-GG-SSSS` form (hyphen or space) matches on its own. The continuous form requires a nearby `SSN`, `social security`, or `tax id` label, because an unlabelled 9-digit run is more often an order ID or error code than an SSN.
-- `IpAddressDetector`: Detects IPv4 (with strict 0-255 octet bounds and an optional CIDR suffix) and IPv6 addresses in full and compressed notation.
+- `SsnDetector`: Detects US Social Security Numbers, rejecting values that break SSA structural rules (area of `000`, `666`, or `900-999`; group of `00`; serial of `0000`). Only the hyphenated `AAA-GG-SSSS` form matches on its own. The space-separated and continuous forms require a nearby `SSN`, `social security`, or `tax id` label, because an unlabelled `100 20 3000` or `123456789` is more often a table row, a measurement, or an order ID than an SSN.
+- `IpAddressDetector`: Detects IPv4 (with strict 0-255 octet bounds and an optional CIDR suffix) and IPv6 addresses in full, compressed, and IPv4-mapped (`::ffff:192.0.2.1`) notation. A bare four-component version string such as `1.2.3.4` is indistinguishable from an IPv4 address by shape and is scrubbed as one; write it as `v1.2.3.4` to keep it intact.
 
 ### Opt-in Detectors (Off by Default)
 
