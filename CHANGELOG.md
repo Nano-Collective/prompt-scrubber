@@ -2,14 +2,13 @@
 
 # 1.4.0
 
-- feat: encrypt local session files at rest
+- Encrypt local session files at rest. A session file holds the placeholder -> original-value map, which is the most sensitive thing `prompt-scrub` writes to disk, and it sat there as plain JSON protected only by `0600` file permissions - so a stolen laptop, a synced backup or any other process running as the same user got the mappings in the clear. Setting `"encryptionEnabled": true` in the config file now makes every session write an AES-256-GCM envelope with a per-file random salt and IV, a 32-byte key derived through scrypt (`N=16384, r=8, p=1`), and a GCM auth tag that makes tampering detectable rather than silently decodable.
 
-Adds AES-256-GCM with scrypt-derived keys for session files on disk, plus a
-new `sessions encrypt` command for migrating existing plaintext sessions.
-Keys are supplied through `PROMPT_SCRUB_KEY`, an interactive TTY prompt, or
-the new `setCachedEncryptionKey()` API for library users. A typed
-`SessionDecryptionError` distinguishes "wrong key" / "tampered file" from
-the historical silent-quarantine behaviour.
+Keys are resolved in a fixed order - the in-process cache, then `PROMPT_SCRUB_KEY`, then an interactive prompt with the input muted - and the prompt refuses to run when stdin or stdout is redirected, so a piped or CI invocation fails with a clear message instead of hanging on a TTY that is not there. Enabling encryption for the first time asks twice and aborts on a mismatch, because a typo at that point would permanently lock the session. Library callers get `getEncryptionKey()`, `setCachedEncryptionKey()`, `getCachedKey()` and `clearCachedEncryptionKey()` exported from the package root, alongside `encryptSession()`, `decryptSession()`, `isEncryptedEnvelope()` and `SessionDecryptionError`. Derived keys are cached per `(passphrase, salt, KDF params)` so `scrub`/`rehydrate` do not pay the deliberately expensive scrypt cost on every read and write, and `clearCachedEncryptionKey()` wipes the passphrase and that derived material together.
+
+`prompt-scrub sessions encrypt [id]` migrates sessions that are already on disk, with `--rekey` to rotate the passphrase over files that are already encrypted. It refuses to run unless `encryptionEnabled` is set, never fabricates a file for a session ID that does not exist, and reports how many sessions it encrypted, skipped and could not find. `sessions list` and `sessions show` ask for a key only when a file they are about to read is actually encrypted, so turning the flag on does not start demanding a passphrase for plaintext sessions, and an undecryptable session in `list` is reported on that row rather than aborting the whole listing.
+
+**Behaviour change:** reading an encrypted session that cannot be decrypted now throws the typed `SessionDecryptionError` - distinguishing "wrong key", "tampered file" and "no key available" - instead of quarantining the file and returning an empty map, which previously looked identical to a session that had simply expired. Silent quarantine is still the behaviour for genuinely unparseable JSON. Writes will not downgrade: once a session file on disk is encrypted, later writes to it stay encrypted even if `encryptionEnabled` is toggled back off, so flipping the flag cannot quietly rewrite a protected map as plaintext. Encryption is off by default and existing plaintext sessions keep working untouched. Thanks to @akramcodez. Closes #94.
 
 # 1.3.0
 
