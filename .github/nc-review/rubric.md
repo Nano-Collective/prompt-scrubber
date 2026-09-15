@@ -42,7 +42,11 @@ few characters. That either leaves part of the original in place (a leak) or
 eats a neighbouring character (corruption). See the phone detector's history.
 
 When a diff touches span or index computation, work the arithmetic yourself
-against a concrete example before accepting it.
+against a concrete example before accepting it — then report only the example
+and what it produced. Keep the derivation out of your output: the example, the
+expected span and the actual span are what a maintainer can check. Stepping
+through a regex match by match is how a review spends its entire output budget
+and ends without a verdict, which helps nobody.
 
 ### Overlapping matches between detectors
 
