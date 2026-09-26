@@ -3,7 +3,7 @@ import type { Detector, Finding } from '../types/index.js';
 // Conservative matching only: number + word(s) + street suffix.
 // Examples: 123 Main Street, 45 Oak Road, 1600 Pennsylvania Ave., 10 Downing St, 221B Baker St.
 const ADDRESS_REGEX =
-  /\b\d{1,6}[A-Za-z]?\s+[A-Za-z0-9\s.,'-]+?\b(?:street|st|road|rd|avenue|ave|boulevard|blvd|lane|ln|drive|dr|court|ct|place|pl|square|sq|terrace|ter)\b\.?/gi;
+  /\b\d{1,6}[A-Za-z]?(?:\s+(?!\d+\b)[A-Za-z0-9.'-]+){1,4}\s+(?:street|st|road|rd|avenue|ave|boulevard|blvd|lane|ln|drive|dr|court|ct|place|pl|square|sq|terrace|ter)\b\.?/gi;
 
 // Street-suffix matching is a heuristic: "5 Church St" is an address, but so is
 // the shape of "12 Monkeys Ave" in prose. Deliberately below the 0.8 mark.
