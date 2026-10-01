@@ -963,3 +963,149 @@ test('overlapping low-confidence findings collapse to one suppressed region', (t
 
   t.is(result.stats.suppressed?.total, 1);
 });
+
+test('ip address scrubbing and round-tripping works correctly', (t) => {
+  const original = 'Server at 192.168.1.1 and ipv6 2001:db8::1';
+  const scrubResult = scrub({ content: original });
+  t.is(scrubResult.scrubbedContent, 'Server at «IpAddress_2» and ipv6 «IpAddress_1»');
+
+  const rehydrated = rehydrate({
+    content: scrubResult.scrubbedContent,
+    sessionMap: scrubResult.sessionMap,
+  });
+  t.is(rehydrated.content, original);
+});
+
+// The worst failure mode for this project is partial disclosure that looks scrubbed:
+// before the IPv4-embedded IPv6 branches existed, this emitted "«IpAddress_1».0.2.1".
+test('an IPv4-mapped IPv6 address scrubs whole, leaving no digits behind', (t) => {
+  const original = 'mapped ::ffff:192.0.2.1 here';
+  const scrubResult = scrub({ content: original });
+  t.is(scrubResult.scrubbedContent, 'mapped «IpAddress_1» here');
+
+  const rehydrated = rehydrate({
+    content: scrubResult.scrubbedContent,
+    sessionMap: scrubResult.sessionMap,
+  });
+  t.is(rehydrated.content, original);
+});
+
+test('credit card scrubbing and round-tripping works correctly', (t) => {
+  const original = 'Visa: 4532-0150-0000-0007, Amex: 3782 822463 10005';
+  const scrubResult = scrub({ content: original });
+  t.is(scrubResult.scrubbedContent, 'Visa: «CreditCard_2», Amex: «CreditCard_1»');
+
+  const rehydrated = rehydrate({
+    content: scrubResult.scrubbedContent,
+    sessionMap: scrubResult.sessionMap,
+  });
+  t.is(rehydrated.content, original);
+});
+
+test('ssn scrubbing and round-tripping works correctly', (t) => {
+  const original = 'User SSN is 123-45-6789.';
+  const scrubResult = scrub({ content: original });
+  t.is(scrubResult.scrubbedContent, 'User SSN is «Ssn_1».');
+
+  const rehydrated = rehydrate({
+    content: scrubResult.scrubbedContent,
+    sessionMap: scrubResult.sessionMap,
+  });
+  t.is(rehydrated.content, original);
+});
+
+test('iban scrubbing and round-tripping works correctly', (t) => {
+  const original = 'Wire to GB82 WEST 1234 5698 7654 32 today';
+  const scrubResult = scrub({ content: original });
+  t.is(scrubResult.scrubbedContent, 'Wire to «Iban_1» today');
+
+  const rehydrated = rehydrate({
+    content: scrubResult.scrubbedContent,
+    sessionMap: scrubResult.sessionMap,
+  });
+  t.is(rehydrated.content, original);
+});
+
+test('disabledDetectors suppresses the high-risk PII detectors', (t) => {
+  const original = 'Card 4532-0150-0000-0007, SSN 123-45-6789, IBAN GB82 WEST 1234 5698 7654 32';
+  const result = scrub({
+    content: original,
+    options: {
+      disabledDetectors: ['CreditCardDetector', 'SsnDetector', 'IbanDetector'],
+    },
+  });
+
+  t.is(result.scrubbedContent, original);
+  t.is(result.stats.totalEntities, 0);
+});
+
+test('disabledDetectors normalises IpAddressDetector without the Detector suffix', (t) => {
+  const result = scrub({
+    content: 'Server at 192.168.1.1',
+    options: { disabledDetectors: ['IpAddress'] },
+  });
+
+  t.is(result.scrubbedContent, 'Server at 192.168.1.1');
+});
+
+test('an IP inside a URL resolves to the higher-priority Url finding', (t) => {
+  const result = scrub({ content: 'Admin at http://192.168.1.1:8080/admin now' });
+
+  t.is(result.scrubbedContent, 'Admin at «Url_1» now');
+  t.deepEqual(result.stats.byCategory, { Url: 1 });
+});
+
+// CreditCard (priority 2) outranks Url (priority 6), so a card-shaped token
+// inside a URL query string is pulled out as its own finding and the URL is
+// narrowed around it. Pinned here so a future reorder of the priority table
+// cannot silently re-leak the card number behind a redacted URL fragment.
+test('a credit-card-shaped token inside a URL query is pulled out as its own finding', (t) => {
+  const result = scrub({
+    content: 'Pay at https://example.com/checkout?card=4532-0150-0000-0007&amount=10',
+  });
+
+  // The exact two-Url + one-CreditCard breakdown is the consequence of
+  // collision-resolver narrowing the Url around the higher-priority card.
+  t.is(result.scrubbedContent, 'Pay at «Url_2»«CreditCard_1»«Url_1»');
+  t.deepEqual(result.stats.byCategory, { Url: 2, CreditCard: 1 });
+});
+
+// IbanDetector (priority 3) outranks UrlDetector (priority 6), so an IBAN in
+// a URL path is pulled out and the URL is narrowed around it. The IBAN itself
+// is Luhn-style validated, so a fake IBAN in the URL would stay inside the
+// Url finding — the test uses the canonical valid GB IBAN to pin the split.
+test('an IBAN inside a URL path is pulled out as its own finding', (t) => {
+  const result = scrub({
+    content: 'Send receipt to https://example.com/wire/GB82WEST12345698765432/ref',
+  });
+
+  t.is(result.scrubbedContent, 'Send receipt to «Url_2»«Iban_1»«Url_1»');
+  t.deepEqual(result.stats.byCategory, { Url: 2, Iban: 1 });
+});
+
+// Realistic non-PII strings that the high-risk detectors must leave untouched.
+// The four detectors added for #89 all sit above Email/Url/Path/Phone in the
+// priority table, so a false positive here silently mangles ordinary content.
+const NEGATIVE_CORPUS = [
+  'Order number 123456789 shipped.',
+  'Error code 402551234 returned.',
+  'Invoice 987654321 is overdue',
+  'Upgrade from 1.2.3 to 2.0.0',
+  'Release 10.15.7 build 4532015000000007x',
+  'Timestamp 1735689600000 recorded',
+  'Device MAC: 00:1A:2B:3C:4D:5E on eth0',
+  'Commit 9f2b4c1a8e3d5f7b0c2a4e6d8b1f3a5c7e9d0b2f landed',
+  'Namespace std::vector and a :: b in prose',
+  'Tracking 1Z999AA10123456784 delivered',
+  'Zip 90210-1234 and phone extension 4567',
+  'Latency was 000 12 3456 ms across runs',
+  'Rows 402 00 1234 and 666 20 3000 in the table',
+];
+
+for (const sample of NEGATIVE_CORPUS) {
+  test(`negative corpus: leaves "${sample}" untouched`, (t) => {
+    const result = scrub({ content: sample });
+    t.is(result.scrubbedContent, sample);
+    t.is(result.stats.totalEntities, 0);
+  });
+}

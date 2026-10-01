@@ -1,10 +1,14 @@
 import { CodeTellDetector } from '../detectors/code-tell.js';
+import { CreditCardDetector } from '../detectors/credit-card.js';
 import { EmailDetector } from '../detectors/email.js';
+import { IbanDetector } from '../detectors/iban.js';
+import { IpAddressDetector } from '../detectors/ip-address.js';
 import { NameDetector } from '../detectors/name.js';
 import { PathDetector } from '../detectors/path.js';
 import { PhoneDetector } from '../detectors/phone.js';
 import { PostalAddressDetector } from '../detectors/postal-address.js';
 import { SecretDetector } from '../detectors/secret.js';
+import { SsnDetector } from '../detectors/ssn.js';
 import { UrlDetector } from '../detectors/url.js';
 import { SessionManager } from '../session/session-manager.js';
 import type {
@@ -20,9 +24,13 @@ import { matchesLocale } from './locale.js';
 
 const DEFAULT_DETECTORS: Detector[] = [
   new SecretDetector(),
+  new CreditCardDetector(),
+  new IbanDetector(),
+  new SsnDetector(),
   new EmailDetector(),
   new UrlDetector(),
   new PathDetector(),
+  new IpAddressDetector(),
   new PhoneDetector(),
   new PostalAddressDetector(),
 ];
@@ -180,12 +188,14 @@ export function getActiveDetectors(options?: ScrubRequest['options']): Detector[
 
   let detectors = activeDetectors;
   if (options?.disabledDetectors) {
-    const disabledSet = new Set(
-      options.disabledDetectors.map((d) => d.toLowerCase().replace('detector', '')),
-    );
-    detectors = detectors.filter(
-      (d) => !disabledSet.has(d.name.toLowerCase().replace('detector', '')),
-    );
+    // Strip the trailing `Detector` suffix rather than the first substring
+    // match — the substring form silently turned `IPDetector` into `ip` and
+    // accepted `EmailDetectorExtra` as `emailextra`, both of which happen to
+    // never collide today but couple the normalisation to a coincidental naming
+    // pattern rather than a documented rule.
+    const normalise = (name: string) => name.toLowerCase().replace(/detector$/, '');
+    const disabledSet = new Set(options.disabledDetectors.map(normalise));
+    detectors = detectors.filter((d) => !disabledSet.has(normalise(d.name)));
   }
 
   if (options?.customDetectors) {
