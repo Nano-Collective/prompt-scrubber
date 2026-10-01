@@ -96,3 +96,31 @@ test('rejects a valid country code at the wrong length', (t) => {
   // GB IBANs are exactly 22 characters.
   t.is(detector.detect('Ref GB82WEST123456987654321 today').length, 0);
 });
+
+// The trailing guard `(?![0-9A-Z])` is the boundary that tells the IBAN
+// `GB82 WEST 1234 5698 7654 32` from a following `REF`. It works because
+// punctuation and non-Latin scripts are not in `[0-9A-Z]`, so a Cyrillic
+// letter or em-dash after the IBAN closes the match. Without that pin a
+// future tweak to the guard would silently grow or shrink the match.
+test('terminates an IBAN at non-Latin punctuation and Cyrillic', (t) => {
+  t.deepEqual(
+    detector.detect('Wire to GB82 WEST 1234 5698 7654 32 — REF').map((f) => f.value),
+    ['GB82 WEST 1234 5698 7654 32'],
+  );
+  t.deepEqual(
+    detector.detect('acct DE89370400440532013000 — REF').map((f) => f.value),
+    ['DE89370400440532013000'],
+  );
+  t.deepEqual(
+    detector.detect('Wire GB82 WEST 1234 5698 7654 32Ж').map((f) => f.value),
+    ['GB82 WEST 1234 5698 7654 32'],
+  );
+});
+
+test('span excludes the trailing em-dash or Cyrillic letter', (t) => {
+  const text = 'Wire to GB82 WEST 1234 5698 7654 32 — REF';
+  const findings = detector.detect(text);
+  t.is(findings.length, 1);
+  const [start, end] = findings[0]!.span;
+  t.is(text.slice(start, end), 'GB82 WEST 1234 5698 7654 32');
+});

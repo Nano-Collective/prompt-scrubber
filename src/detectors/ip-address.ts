@@ -48,11 +48,32 @@ const IPV6_REGEX = new RegExp(
 );
 
 // A 4-part version is shaped exactly like an IPv4 address, so a match led by
-// a version keyword is skipped. v-prefixed forms never reach here: \b fails
+// a version keyword, a version-constraint operator, or sitting inside a
+// `from X to Y` range is skipped. v-prefixed forms never reach here: \b fails
 // between v and a digit.
+//
+// The `from X to Y` check has to see *something* on both sides to tell a
+// version range from a real `transfer 192.168.1.1 to 192.168.1.2` — so a bare
+// "from 192.168.1.1" without a closing 4-segment range still matches, and a
+// "192.168.1.1 to 192.168.1.2" without a leading `from` still matches too.
 function isVersionContext(text: string, start: number): boolean {
   const before = text.slice(Math.max(0, start - 24), start);
-  return /(?:\bv\b|version|release|build|bump\w*|assembly)[\s:]*$/i.test(before);
+  if (/(?:\bv\b|version|release|build|bump\w*|assembly|[~^]|>=|<=|=>|==)[\s:=]*$/i.test(before)) {
+    return true;
+  }
+  // First endpoint of `from X to Y`: `from` precedes, `to <4-segment>` follows.
+  if (/\bfrom\s*$/i.test(before)) {
+    const after = text.slice(start, start + 60);
+    if (/^\d+(?:\.\d+){2,3}\s+to\s+\d+\.\d+\.\d+\.\d+\b/i.test(after)) {
+      return true;
+    }
+  }
+  // Second endpoint of `X to Y`: a 4-segment dotted number precedes with `to `
+  // after it. This is the symmetric case for the upper bound.
+  if (/\d+\.\d+\.\d+\.\d+\s+to\s*$/i.test(before)) {
+    return true;
+  }
+  return false;
 }
 
 export class IpAddressDetector implements Detector {

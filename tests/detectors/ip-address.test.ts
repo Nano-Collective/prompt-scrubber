@@ -121,16 +121,35 @@ test('does not match an IPv4-shaped version led by a version keyword', (t) => {
   t.is(detector.detect('build 2.10.3.1 passed').length, 0);
 });
 
-// A bare 4-component address without a version keyword is indistinguishable from
-// an IPv4 address by shape, and 1.2.3.4 really is a valid address. Pinned so the
-// trade-off stays visible; it is also called out in docs/features/detectors.md.
-test('a bare 4-component version is treated as an IPv4 address', (t) => {
-  const findings = detector.detect('Upgrade from 1.2.3.4 to 2.0.0.0');
-  t.is(findings.length, 2);
-  t.deepEqual(
-    findings.map((f) => f.value),
-    ['1.2.3.4', '2.0.0.0'],
-  );
+test('does not match an IPv4-shaped version led by a constraint operator', (t) => {
+  t.is(detector.detect('pin to ^1.2.3.4 only').length, 0);
+  t.is(detector.detect('depends on >= 1.2.3.4').length, 0);
+  t.is(detector.detect('range <= 2.0.0.0 released').length, 0);
+});
+
+// `from 1.2.3.4 to 2.0.0.0` is a version range, not an IP transfer. The detector
+// only treats it as such when it sees the closing version-shaped `to <digits>`
+// after the current match — `transfer 192.168.1.1 to 192.168.1.2` (where the
+// `to` tail is not 4 dotted segments) is still an IP transfer.
+test('does not match an IPv4-shaped version inside a "from X to Y" range', (t) => {
+  t.is(detector.detect('Upgrade from 1.2.3.4 to 2.0.0.0').length, 0);
+  t.is(detector.detect('Bump from 1.2.3.4 to 2.0.0.0').length, 0);
+});
+
+// A bare "from 192.168.1.1" with no `to <4-segment>` after still matches: the
+// closing-endpoint check is what tells a version range from a real IP, and
+// without the closing endpoint the heuristic has no signal to act on.
+test('still matches a bare "from X" IP without a closing range', (t) => {
+  t.is(detector.detect('from 192.168.1.1 logged').length, 1);
+});
+
+// A bare 4-component number with no version context is indistinguishable from
+// an IPv4 address by shape — the closing endpoint in the range is the only
+// signal — so a changelog line that lacks `from`/`to` keywords still matches.
+test('a bare 4-component number with no version context is treated as an IPv4 address', (t) => {
+  const findings = detector.detect('connect to 1.2.3.4 now');
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, '1.2.3.4');
 });
 
 test('absorbs a CIDR suffix instead of leaving a dangling mask', (t) => {

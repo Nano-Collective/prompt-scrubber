@@ -188,12 +188,14 @@ export function getActiveDetectors(options?: ScrubRequest['options']): Detector[
 
   let detectors = activeDetectors;
   if (options?.disabledDetectors) {
-    const disabledSet = new Set(
-      options.disabledDetectors.map((d) => d.toLowerCase().replace('detector', '')),
-    );
-    detectors = detectors.filter(
-      (d) => !disabledSet.has(d.name.toLowerCase().replace('detector', '')),
-    );
+    // Strip the trailing `Detector` suffix rather than the first substring
+    // match — the substring form silently turned `IPDetector` into `ip` and
+    // accepted `EmailDetectorExtra` as `emailextra`, both of which happen to
+    // never collide today but couple the normalisation to a coincidental naming
+    // pattern rather than a documented rule.
+    const normalise = (name: string) => name.toLowerCase().replace(/detector$/, '');
+    const disabledSet = new Set(options.disabledDetectors.map(normalise));
+    detectors = detectors.filter((d) => !disabledSet.has(normalise(d.name)));
   }
 
   if (options?.customDetectors) {

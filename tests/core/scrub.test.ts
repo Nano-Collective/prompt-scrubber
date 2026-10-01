@@ -1055,6 +1055,34 @@ test('an IP inside a URL resolves to the higher-priority Url finding', (t) => {
   t.deepEqual(result.stats.byCategory, { Url: 1 });
 });
 
+// CreditCard (priority 2) outranks Url (priority 6), so a card-shaped token
+// inside a URL query string is pulled out as its own finding and the URL is
+// narrowed around it. Pinned here so a future reorder of the priority table
+// cannot silently re-leak the card number behind a redacted URL fragment.
+test('a credit-card-shaped token inside a URL query is pulled out as its own finding', (t) => {
+  const result = scrub({
+    content: 'Pay at https://example.com/checkout?card=4532-0150-0000-0007&amount=10',
+  });
+
+  // The exact two-Url + one-CreditCard breakdown is the consequence of
+  // collision-resolver narrowing the Url around the higher-priority card.
+  t.is(result.scrubbedContent, 'Pay at «Url_2»«CreditCard_1»«Url_1»');
+  t.deepEqual(result.stats.byCategory, { Url: 2, CreditCard: 1 });
+});
+
+// IbanDetector (priority 3) outranks UrlDetector (priority 6), so an IBAN in
+// a URL path is pulled out and the URL is narrowed around it. The IBAN itself
+// is Luhn-style validated, so a fake IBAN in the URL would stay inside the
+// Url finding — the test uses the canonical valid GB IBAN to pin the split.
+test('an IBAN inside a URL path is pulled out as its own finding', (t) => {
+  const result = scrub({
+    content: 'Send receipt to https://example.com/wire/GB82WEST12345698765432/ref',
+  });
+
+  t.is(result.scrubbedContent, 'Send receipt to «Url_2»«Iban_1»«Url_1»');
+  t.deepEqual(result.stats.byCategory, { Url: 2, Iban: 1 });
+});
+
 // Realistic non-PII strings that the high-risk detectors must leave untouched.
 // The four detectors added for #89 all sit above Email/Url/Path/Phone in the
 // priority table, so a false positive here silently mangles ordinary content.
