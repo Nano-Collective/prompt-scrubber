@@ -25,6 +25,10 @@ test('CLI: rules list outputs header and built-in detectors', (t) => {
   t.true(output.includes('SecretDetector'));
   t.true(output.includes('PhoneDetector'));
   t.true(output.includes('AddressDetector'));
+  t.true(output.includes('CreditCardDetector'));
+  t.true(output.includes('SsnDetector'));
+  t.true(output.includes('IbanDetector'));
+  t.true(output.includes('IpAddressDetector'));
 });
 
 test('CLI: rules list correctly reports NameDetector as off by default', (t) => {
