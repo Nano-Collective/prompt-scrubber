@@ -59,6 +59,13 @@ test('does not fire on plain text', (t) => {
   t.is(findings.length, 0);
 });
 
+test('does not treat a numbered sentence ending in st as an address', (t) => {
+  const findings = detector.detect(
+    'There are 42 things you should consider when walking down the st.',
+  );
+  t.is(findings.length, 0);
+});
+
 // --- Confidence ---
 
 test('scores an address as a heuristic match', (t) => {
