@@ -1,5 +1,11 @@
 # @nanocollective/prompt-scrub
 
+# 1.5.0
+
+- feat: add built-in detectors for Credit Cards, SSN, IBAN, and IP Addresses (closes #89)
+
+> **Note:** Collision priority for shared shapes has shifted. CreditCard / IBAN / SSN / IPAddress detectors are inserted above Email / Url / Path / Phone / Address, so e.g. an IP embedded in a URL is now part of the Url finding (Url wins by span length) rather than a separate IpAddress entity.
+
 # 1.4.0
 
 - Encrypt local session files at rest. A session file holds the placeholder -> original-value map, which is the most sensitive thing `prompt-scrub` writes to disk, and it sat there as plain JSON protected only by `0600` file permissions - so a stolen laptop, a synced backup or any other process running as the same user got the mappings in the clear. Setting `"encryptionEnabled": true` in the config file now makes every session write an AES-256-GCM envelope with a per-file random salt and IV, a 32-byte key derived through scrypt (`N=16384, r=8, p=1`), and a GCM auth tag that makes tampering detectable rather than silently decodable.
