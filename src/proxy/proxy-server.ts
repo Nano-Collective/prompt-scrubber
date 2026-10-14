@@ -5,6 +5,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { loadConfiguredRulePacks } from '../core/rule-packs.js';
 import { scrub } from '../core/scrub.js';
 import type { ScrubOptions } from '../types/index.js';
+import { AuditLog } from './audit-log.js';
+import { ProxyMetrics } from './metrics.js';
 import { detectProvider, scrubChatBody } from './request-transform.js';
 import { createSseRehydrator, rehydrateJsonBody } from './response-transform.js';
 import type {
@@ -32,6 +34,53 @@ const HOP_BY_HOP = new Set([
 export const SESSION_HEADER = 'x-prompt-scrub-session';
 
 const DEFAULT_MAX_BODY_BYTES = 10 * 1024 * 1024;
+const UPSTREAM_TIMEOUT_MS = 30_000;
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
+
+type ErrorKind = NonNullable<Extract<ProxyEvent, { type: 'response' }>['errorKind']>;
+
+type Sessions = Map<string, Record<string, string>>;
+
+/** Failure talking to the upstream provider. `kind` feeds metrics and the audit log. */
+class UpstreamFailure extends Error {
+  readonly kind: 'upstream_timeout' | 'upstream_error';
+
+  constructor(message: string, kind: 'upstream_timeout' | 'upstream_error') {
+    super(message);
+    this.name = 'UpstreamFailure';
+    this.kind = kind;
+  }
+}
+
+/** Client body exceeded `maxBodyBytes`. */
+class BodyTooLargeError extends Error {
+  constructor(maxBodyBytes: number) {
+    super(`request body exceeded ${maxBodyBytes} bytes`);
+    this.name = 'BodyTooLargeError';
+  }
+}
+
+/**
+ * Per-request bookkeeping. Created once per client request and finished
+ * exactly once, which emits the `response` event.
+ */
+interface RequestTrace {
+  requestId: string;
+  sessionId: string;
+  method: string;
+  /** Raw request target, including any query string. Only forwarded, never recorded. */
+  url: string;
+  /** Request path without the query string. Safe to record. */
+  path: string;
+  provider: ProxyProvider;
+  start: number;
+  streaming: boolean;
+  entities: number;
+  byCategory: Record<string, number>;
+  rehydrated: number;
+  passthroughReason: string | undefined;
+  finished: boolean;
+}
 
 export async function createProxyServer(
   options: ProxyOptions,
@@ -39,23 +88,47 @@ export async function createProxyServer(
 ): Promise<ProxyHandle> {
   const log = options.log ?? console.error;
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
-  const sessions = options.sessionStore ?? new Map<string, Record<string, string>>();
+  const sessions: Sessions = options.sessionStore ?? new Map<string, Record<string, string>>();
+  const serveObservability = options.metrics !== false;
+  const version = options.version ?? 'unknown';
 
   // Load rule pack detectors once at startup so each request stays sync.
   const { detectors: rulePackDetectors } = await loadConfiguredRulePacks();
   const baseScrubOptions = buildBaseScrubOptions(options.scrubOptions, rulePackDetectors);
 
+  // Opened before listening so an unwritable --audit-log fails startup.
+  const metrics = new ProxyMetrics(version);
+  const audit =
+    options.auditLog === undefined
+      ? undefined
+      : AuditLog.open(options.auditLog, {
+          log,
+          onDrop: () => metrics.recordAuditDropped(),
+        });
+
   const emit = (event: ProxyEvent) => {
     if (options.verbose) {
       log(`[proxy] ${JSON.stringify(event)}`);
+    }
+    metrics.observe(event);
+    if (event.type === 'response') {
+      audit?.write({ ts: new Date().toISOString(), ...event });
     }
     listener?.(event);
   };
 
   const server = http.createServer((req, res) => {
+    const route = serveObservability ? observabilityRoute(req) : undefined;
+    if (route) {
+      respondObservability(req, res, route, metrics, version);
+      return;
+    }
+
+    const trace = createTrace(req, sessions);
     handleClientRequest(
       req,
       res,
+      trace,
       options,
       sessions,
       baseScrubOptions,
@@ -73,12 +146,15 @@ export async function createProxyServer(
       } catch {
         // Connection may already be torn down by the upstream error.
       }
+      const kind = err instanceof UpstreamFailure ? err.kind : 'internal';
+      finishTrace(trace, emit, res.statusCode, kind);
     });
   });
 
   return new Promise((resolve, reject) => {
     const onError = (err: Error) => {
       server.removeListener('error', onError);
+      void audit?.close();
       reject(err);
     };
     server.once('error', onError);
@@ -89,15 +165,31 @@ export async function createProxyServer(
       const address = server.address();
       const boundPort = typeof address === 'object' && address ? address.port : options.port;
       const url = `http://${host}:${boundPort}`;
+
+      let closing: Promise<void> | undefined;
       const handle: ProxyHandle = {
         url,
         port: boundPort,
-        close: () =>
-          new Promise<void>((closeResolve, closeReject) => {
+        close: () => {
+          closing ??= new Promise<void>((closeResolve, closeReject) => {
             server.close((err) => (err ? closeReject(err) : closeResolve()));
-          }),
+          }).finally(() => audit?.close());
+          return closing;
+        },
       };
+
       log(`[proxy] Listening on ${url} → ${options.target.href}`);
+      if (options.auditLog !== undefined) {
+        log(`[proxy] Audit log: ${options.auditLog}`);
+      }
+      if (serveObservability) {
+        log(`[proxy] Metrics: ${url}/metrics  Health: ${url}/healthz`);
+        if (!LOOPBACK_HOSTS.has(host)) {
+          log(
+            `[proxy] Warning: ${host} is not a loopback address. /metrics and /healthz are unauthenticated.`,
+          );
+        }
+      }
       resolve(handle);
     });
   });
@@ -157,16 +249,7 @@ export async function runProxy(options: ProxyOptions): Promise<void> {
   });
 }
 
-async function handleClientRequest(
-  req: IncomingMessage,
-  res: ServerResponse,
-  options: ProxyOptions,
-  sessions: Map<string, Record<string, string>>,
-  baseScrubOptions: ScrubOptions,
-  emit: (event: ProxyEvent) => void,
-  log: (msg: string) => void,
-  maxBodyBytes: number,
-): Promise<void> {
+function createTrace(req: IncomingMessage, sessions: Sessions): RequestTrace {
   const inboundSession = readSessionHeader(req.headers[SESSION_HEADER]);
   // Only accept client-supplied session IDs that match a UUID — the proxy
   // generates a fresh one when the client omits the header. This caps the
@@ -176,12 +259,80 @@ async function handleClientRequest(
   const sessionId = inboundSession && isUuid(inboundSession) ? inboundSession : crypto.randomUUID();
   if (!sessions.has(sessionId)) sessions.set(sessionId, {});
 
-  const incomingUrl = req.url ?? '/';
-  const provider = detectProvider(parsePath(incomingUrl));
+  const url = req.url ?? '/';
+  const path = parsePath(url);
+  return {
+    requestId: crypto.randomUUID(),
+    sessionId,
+    method: req.method ?? 'GET',
+    url,
+    path,
+    provider: detectProvider(path),
+    start: performance.now(),
+    streaming: false,
+    entities: 0,
+    byCategory: {},
+    rehydrated: 0,
+    passthroughReason: undefined,
+    finished: false,
+  };
+}
+
+/**
+ * Emit the `response` event for a request. Safe to call from several
+ * completion paths; only the first call has any effect.
+ */
+function finishTrace(
+  trace: RequestTrace,
+  emit: (event: ProxyEvent) => void,
+  status: number,
+  errorKind?: ErrorKind,
+): void {
+  if (trace.finished) return;
+  trace.finished = true;
+
+  const outcome = errorKind
+    ? errorKind === 'body_too_large'
+      ? 'rejected'
+      : 'error'
+    : trace.passthroughReason !== undefined
+      ? 'passthrough'
+      : 'ok';
+
+  emit({
+    type: 'response',
+    requestId: trace.requestId,
+    sessionId: trace.sessionId,
+    method: trace.method,
+    path: trace.path,
+    provider: trace.provider,
+    status,
+    durationMs: Number((performance.now() - trace.start).toFixed(3)),
+    streaming: trace.streaming,
+    outcome,
+    entities: trace.entities,
+    byCategory: trace.byCategory,
+    rehydrated: trace.rehydrated,
+    ...(errorKind ? { errorKind } : {}),
+  });
+}
+
+async function handleClientRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  trace: RequestTrace,
+  options: ProxyOptions,
+  sessions: Sessions,
+  baseScrubOptions: ScrubOptions,
+  emit: (event: ProxyEvent) => void,
+  log: (msg: string) => void,
+  maxBodyBytes: number,
+): Promise<void> {
+  const { sessionId, provider, url: incomingUrl } = trace;
 
   emit({
     type: 'request',
-    method: req.method ?? 'GET',
+    method: trace.method,
     path: incomingUrl,
     provider,
     sessionId,
@@ -196,6 +347,12 @@ async function handleClientRequest(
       res.writeHead(413, { 'content-type': 'text/plain; charset=utf-8' });
       res.end(`prompt-scrub proxy: request body too large or unreadable: ${message}\n`);
       emit({ type: 'error', message: `request body: ${message}` });
+      finishTrace(
+        trace,
+        emit,
+        413,
+        err instanceof BodyTooLargeError ? 'body_too_large' : 'client_aborted',
+      );
       // Tear the client socket down rather than letting it finish uploading
       // a body we'll only discard — surfaces as ECONNRESET to the caller
       // instead of a silent hang on a half-closed connection.
@@ -216,6 +373,7 @@ async function handleClientRequest(
     try {
       parsed = JSON.parse(bodyBuf.toString('utf8'));
     } catch {
+      trace.passthroughReason = 'non-json body';
       emit({ type: 'passthrough', reason: 'non-json body' });
     }
     if (parsed !== undefined) {
@@ -224,15 +382,19 @@ async function handleClientRequest(
       // placeholders for values it has seen before, so round-trips from the
       // client (which sends placeholders) and fresh PII both end up
       // referencing the same map without an explicit rehydrate step.
-      const outcome = scrubChatBody(provider, parsed, (text) =>
-        scrubTextSync(text, sessionId, map, baseScrubOptions),
-      );
+      const outcome = scrubChatBody(provider, parsed, (text) => {
+        const scrubbed = scrubTextSync(text, sessionId, map, baseScrubOptions);
+        mergeCounts(trace.byCategory, scrubbed.byCategory);
+        return scrubbed;
+      });
+      trace.entities = outcome.entities;
       upstreamBody = Buffer.from(JSON.stringify(outcome.body), 'utf8');
       if (outcome.entities > 0) {
         emit({ type: 'scrubbed', sessionId, entities: outcome.entities });
       }
     }
   } else if (provider === 'unknown') {
+    trace.passthroughReason = 'unknown provider';
     emit({ type: 'passthrough', reason: 'unknown provider' });
   }
 
@@ -240,7 +402,7 @@ async function handleClientRequest(
   upstreamHeaders[SESSION_HEADER] = sessionId;
 
   const upstreamResponse = await dispatchUpstream(options.target, {
-    method: req.method ?? 'GET',
+    method: trace.method,
     path: joinTargetPath(options.target, incomingUrl),
     headers: upstreamHeaders,
     ...(upstreamBody !== undefined ? { body: upstreamBody } : {}),
@@ -249,51 +411,60 @@ async function handleClientRequest(
   const responseHeaders = filterResponseHeaders(upstreamResponse.headers);
   responseHeaders[SESSION_HEADER] = sessionId;
 
+  const status = upstreamResponse.statusCode ?? 502;
   const contentType = upstreamResponse.headers['content-type'] ?? '';
   const isStreaming = contentType.toLowerCase().includes('text/event-stream');
+  trace.streaming = isStreaming;
 
   if (isStreaming) {
-    res.writeHead(upstreamResponse.statusCode ?? 502, responseHeaders);
+    res.writeHead(status, responseHeaders);
     pipeStreamingResponse(
       upstreamResponse,
       res,
       provider,
       sessions.get(sessionId) ?? {},
-      sessionId,
+      trace,
       emit,
       log,
     );
-  } else {
-    const chunks: Buffer[] = [];
+    return;
+  }
+
+  const chunks: Buffer[] = [];
+  try {
     for await (const chunk of upstreamResponse.body) {
       chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     }
-    let payload = Buffer.concat(chunks);
-    const map = sessions.get(sessionId) ?? {};
-    // Only attempt to rehydrate if this session actually has mappings. A
-    // 4xx error body from the upstream carries no placeholders — running
-    // it through the rehydrator is a no-op, but skipping the path entirely
-    // is faster and avoids surprising the client with re-serialised
-    // whitespace from upstream's compact JSON.
-    const shouldRehydrate =
-      payload.length > 0 &&
-      contentType.toLowerCase().includes('application/json') &&
-      Object.keys(map).length > 0;
-    if (shouldRehydrate) {
-      try {
-        const parsed = JSON.parse(payload.toString('utf8'));
-        const { body, placeholders } = rehydrateJsonBody(provider, parsed, map);
-        payload = Buffer.from(JSON.stringify(body), 'utf8');
-        if (placeholders > 0) {
-          emit({ type: 'rehydrated', sessionId, placeholders });
-        }
-      } catch {
-        // Not JSON despite the header — forward unchanged.
-      }
-    }
-    res.writeHead(upstreamResponse.statusCode ?? 502, responseHeaders);
-    res.end(payload);
+  } catch (err) {
+    throw toUpstreamFailure(err);
   }
+  let payload = Buffer.concat(chunks);
+  const map = sessions.get(sessionId) ?? {};
+  // Only attempt to rehydrate if this session actually has mappings. A
+  // 4xx error body from the upstream carries no placeholders — running
+  // it through the rehydrator is a no-op, but skipping the path entirely
+  // is faster and avoids surprising the client with re-serialised
+  // whitespace from upstream's compact JSON.
+  const shouldRehydrate =
+    payload.length > 0 &&
+    contentType.toLowerCase().includes('application/json') &&
+    Object.keys(map).length > 0;
+  if (shouldRehydrate) {
+    try {
+      const parsed = JSON.parse(payload.toString('utf8'));
+      const { body, placeholders } = rehydrateJsonBody(provider, parsed, map);
+      payload = Buffer.from(JSON.stringify(body), 'utf8');
+      trace.rehydrated = placeholders;
+      if (placeholders > 0) {
+        emit({ type: 'rehydrated', sessionId, placeholders });
+      }
+    } catch {
+      // Not JSON despite the header — forward unchanged.
+    }
+  }
+  res.writeHead(status, responseHeaders);
+  res.end(payload);
+  finishTrace(trace, emit, status);
 }
 
 /**
@@ -307,7 +478,7 @@ function scrubTextSync(
   sessionId: string,
   sessionMap: Record<string, string>,
   baseOptions: ScrubOptions,
-): { content: string; entities: number } {
+): { content: string; entities: number; byCategory: Record<string, number> } {
   const result = scrub({
     content: text,
     sessionId,
@@ -315,7 +486,17 @@ function scrubTextSync(
     options: baseOptions,
   });
   const scrubbed = typeof result.scrubbedContent === 'string' ? result.scrubbedContent : text;
-  return { content: scrubbed, entities: result.stats.totalEntities };
+  return {
+    content: scrubbed,
+    entities: result.stats.totalEntities,
+    byCategory: result.stats.byCategory,
+  };
+}
+
+function mergeCounts(into: Record<string, number>, from: Record<string, number>): void {
+  for (const [key, count] of Object.entries(from)) {
+    into[key] = (into[key] ?? 0) + count;
+  }
 }
 
 function readBody(req: IncomingMessage, maxBodyBytes: number): Promise<Buffer> {
@@ -339,7 +520,7 @@ function readBody(req: IncomingMessage, maxBodyBytes: number): Promise<Buffer> {
       if (total > maxBodyBytes) {
         // Stop accumulating. We let the request finish streaming so we can
         // return a proper 413 instead of yanking the socket.
-        rejectOnce(new Error(`request body exceeded ${maxBodyBytes} bytes`));
+        rejectOnce(new BodyTooLargeError(maxBodyBytes));
         return;
       }
       chunks.push(chunk);
@@ -372,6 +553,45 @@ function hasMeaningfulBody(req: IncomingMessage): boolean {
 function parsePath(url: string): string {
   const q = url.indexOf('?');
   return q === -1 ? url : url.slice(0, q);
+}
+
+/** Returns the observability route for this request, if it targets one. */
+function observabilityRoute(req: IncomingMessage): '/healthz' | '/metrics' | undefined {
+  const path = parsePath(req.url ?? '/');
+  return path === '/healthz' || path === '/metrics' ? path : undefined;
+}
+
+function respondObservability(
+  req: IncomingMessage,
+  res: ServerResponse,
+  route: '/healthz' | '/metrics',
+  metrics: ProxyMetrics,
+  version: string,
+): void {
+  const method = req.method ?? 'GET';
+  if (method !== 'GET' && method !== 'HEAD') {
+    res.writeHead(405, { allow: 'GET, HEAD', 'content-type': 'text/plain; charset=utf-8' });
+    res.end('method not allowed\n');
+    return;
+  }
+
+  if (route === '/healthz') {
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ status: 'ok', uptimeSeconds: metrics.uptimeSeconds(), version }));
+    return;
+  }
+
+  const url = new URL(req.url ?? '/', 'http://localhost');
+  const wantsJson =
+    url.searchParams.get('format') === 'json' ||
+    (req.headers.accept ?? '').includes('application/json');
+  if (wantsJson) {
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify(metrics.toJSON()));
+    return;
+  }
+  res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4; charset=utf-8' });
+  res.end(metrics.renderPrometheus());
 }
 
 function readSessionHeader(value: string | string[] | undefined): string | undefined {
@@ -438,6 +658,11 @@ interface UpstreamResponse {
   body: AsyncIterable<Buffer>;
 }
 
+function toUpstreamFailure(err: unknown): UpstreamFailure {
+  if (err instanceof UpstreamFailure) return err;
+  return new UpstreamFailure(err instanceof Error ? err.message : String(err), 'upstream_error');
+}
+
 function dispatchUpstream(target: URL, req: DispatchRequest): Promise<UpstreamResponse> {
   const client = target.protocol === 'https:' ? https : http;
   return new Promise((resolve, reject) => {
@@ -449,7 +674,7 @@ function dispatchUpstream(target: URL, req: DispatchRequest): Promise<UpstreamRe
         method: req.method,
         path: req.path,
         headers: req.headers,
-        timeout: 30_000,
+        timeout: UPSTREAM_TIMEOUT_MS,
       },
       (res) => {
         resolve({
@@ -459,9 +684,14 @@ function dispatchUpstream(target: URL, req: DispatchRequest): Promise<UpstreamRe
         });
       },
     );
-    upstreamReq.on('error', reject);
+    upstreamReq.on('error', (err) => reject(toUpstreamFailure(err)));
     upstreamReq.on('timeout', () => {
-      upstreamReq.destroy(new Error('upstream timeout after 30s'));
+      upstreamReq.destroy(
+        new UpstreamFailure(
+          `upstream timeout after ${UPSTREAM_TIMEOUT_MS / 1000}s`,
+          'upstream_timeout',
+        ),
+      );
     });
     if (req.body && req.body.length > 0) {
       upstreamReq.write(req.body);
@@ -489,7 +719,7 @@ function pipeStreamingResponse(
   downstream: ServerResponse,
   provider: ProxyProvider,
   sessionMap: Record<string, string>,
-  sessionId: string,
+  trace: RequestTrace,
   emit: (event: ProxyEvent) => void,
   log: (msg: string) => void,
 ): void {
@@ -504,29 +734,33 @@ function pipeStreamingResponse(
       const tail = rehydrator.flush();
       if (tail.length > 0) downstream.write(tail);
       downstream.end();
+      trace.rehydrated = totalRehydrated;
       if (totalRehydrated > 0) {
-        emit({ type: 'rehydrated', sessionId, placeholders: totalRehydrated });
+        emit({ type: 'rehydrated', sessionId: trace.sessionId, placeholders: totalRehydrated });
       }
+      finishTrace(trace, emit, downstream.statusCode);
     } catch (err) {
       log(`[proxy] error flushing tail: ${(err as Error).message}`);
+      finishTrace(trace, emit, downstream.statusCode, 'internal');
     }
   };
 
   const stream = upstream.body as unknown as NodeJS.ReadableStream;
 
   const onError = (err: unknown) => {
-    const message = err instanceof Error ? err.message : String(err);
-    emit({ type: 'error', message });
-    log(`[proxy] upstream stream error: ${message}`);
+    const failure = toUpstreamFailure(err);
+    emit({ type: 'error', message: failure.message });
+    log(`[proxy] upstream stream error: ${failure.message}`);
     if (!downstream.headersSent) {
       downstream.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' });
     }
     try {
-      downstream.end(`prompt-scrub proxy: upstream stream error: ${message}\n`);
+      downstream.end(`prompt-scrub proxy: upstream stream error: ${failure.message}\n`);
     } catch {
       // Already torn down.
     }
     closed = true;
+    finishTrace(trace, emit, downstream.statusCode, failure.kind);
   };
 
   const onData = (chunk: Buffer | Uint8Array) => {
@@ -559,5 +793,7 @@ function pipeStreamingResponse(
     stream.removeListener('error', onError);
     const maybeDestroy = (stream as unknown as { destroy?: () => void }).destroy;
     if (typeof maybeDestroy === 'function') maybeDestroy.call(stream);
+    // No-op when the stream already completed; otherwise the client went away first.
+    finishTrace(trace, emit, downstream.statusCode, 'client_aborted');
   });
 }
