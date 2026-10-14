@@ -37,6 +37,11 @@ export interface ProxyOptions {
   log?: (msg: string) => void;
   /** Maximum request body size in bytes. Defaults to 10 MB. */
   maxBodyBytes?: number;
+  /**
+   * Re-read `config.json` on SIGHUP and when it changes on disk. Defaults to
+   * `false` for the library; the CLI enables it unless `--no-reload-config` is passed.
+   */
+  reloadConfig?: boolean;
 }
 
 /**
@@ -61,6 +66,14 @@ export type ProxyEvent =
   | { type: 'scrubbed'; sessionId: string; entities: number }
   | { type: 'rehydrated'; sessionId: string; placeholders: number }
   | { type: 'passthrough'; reason: string }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string }
+  | {
+      type: 'config_reloaded';
+      trigger: 'signal' | 'watch';
+      rulePacks: number;
+      detectors: number;
+      urlAllowlist: number;
+    }
+  | { type: 'config_reload_failed'; trigger: 'signal' | 'watch'; reason: string };
 
 export type ProxyEventListener = (event: ProxyEvent) => void;

@@ -30,7 +30,8 @@ prompt-scrub
 │   ├── proxy/
 │   │   ├── proxy-server.ts    # HTTP server + lifecycle
 │   │   ├── request-transform.ts   # Scrub OpenAI/Anthropic bodies
-│   │   └── response-transform.ts  # Rehydrate JSON + SSE responses
+│   │   ├── response-transform.ts  # Rehydrate JSON + SSE responses
+│   │   └── config-reloader.ts     # SIGHUP + file watch reload of config.json
 │   │
 │   ├── cli/
 │   │   └── commands/

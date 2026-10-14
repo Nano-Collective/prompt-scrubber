@@ -181,6 +181,15 @@ Anything that does not match a known shape (e.g. `GET /v1/models`, `POST /v1/emb
 - `--disable <detectors>`, `--enable <detectors>`, `--strict-name`, `--code-tell-terms`, `--url-allowlist`: Same scrubber options as the `scrub` command.
 - `-v, --verbose`: Log a one-line summary of every proxied request to `stderr` (including the scrubbed/rehydrated counts and session ID).
 - `--no-gc`: Skip the startup session-garbage-collection pass.
+- `--no-reload-config`: Do not reload `config.json` while the proxy runs (see below).
+
+**Config reload:** the proxy re-reads `config.json` without restarting when it receives `SIGHUP` or when the file changes on disk. Only the `rulePacks` and `urlAllowlist` keys reload. Requests already in flight keep the old configuration, and sessions and their placeholders are kept.
+
+- Reload on demand: `kill -HUP <pid>`, or `ExecReload=/bin/kill -HUP $MAINPID` in a systemd unit, then `systemctl reload`.
+- A file that is missing, invalid, or names a rule pack that fails to load is rejected. The previous configuration stays in force and the reason is logged.
+- Changes to a rule pack's code are not picked up. The pack module stays cached, so restart the proxy after upgrading a pack.
+- The file watcher is not reliable on some network and WSL file systems. Use `SIGHUP` there.
+- On Windows only file changes trigger a reload, because there is no `SIGHUP`.
 
 **Limitations:**
 
