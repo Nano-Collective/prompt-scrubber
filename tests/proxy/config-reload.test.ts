@@ -43,6 +43,14 @@ function startFakeUpstream(): Promise<FakeUpstream> {
   });
 }
 
+const PAGE_TEXT = 'see https://docs.example.org/page';
+
+/** The user message content that the upstream actually received. */
+function sentContent(upstream: FakeUpstream): string {
+  const body = JSON.parse(upstream.lastBody()) as { messages?: Array<{ content?: string }> };
+  return body.messages?.[0]?.content ?? '';
+}
+
 function postChat(url: string, content: string, sessionId?: string): Promise<number> {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({ messages: [{ role: 'user', content }] });
@@ -129,14 +137,14 @@ test.serial(
     const events: ProxyEvent[] = [];
     const proxy = await startProxy(upstream, {}, events);
     try {
-      await postChat(proxy.url, 'see https://docs.example.org/page');
-      t.false(upstream.lastBody().includes('docs.example.org'));
+      await postChat(proxy.url, PAGE_TEXT);
+      t.not(sentContent(upstream), PAGE_TEXT);
 
       writeConfig({ urlAllowlist: ['example.org'] });
       process.emit('SIGHUP');
       await waitForEvent(events, (e) => e.type === 'config_reloaded');
-      await postChat(proxy.url, 'see https://docs.example.org/page');
-      t.true(upstream.lastBody().includes('docs.example.org/page'));
+      await postChat(proxy.url, PAGE_TEXT);
+      t.is(sentContent(upstream), PAGE_TEXT);
 
       writeConfig({});
       process.emit('SIGHUP');
@@ -144,8 +152,8 @@ test.serial(
       while (events.filter((e) => e.type === 'config_reloaded').length <= reloadsBefore) {
         await sleep(20);
       }
-      await postChat(proxy.url, 'see https://docs.example.org/page');
-      t.false(upstream.lastBody().includes('docs.example.org'));
+      await postChat(proxy.url, PAGE_TEXT);
+      t.not(sentContent(upstream), PAGE_TEXT);
     } finally {
       await proxy.close();
       await upstream.close();
@@ -162,8 +170,8 @@ test.serial('saving config.json applies the change through the file watcher', as
     writeConfig({ urlAllowlist: ['example.org'] });
     const event = await waitForEvent(events, (e) => e.type === 'config_reloaded');
     t.is(event.type === 'config_reloaded' ? event.trigger : undefined, 'watch');
-    await postChat(proxy.url, 'see https://docs.example.org/page');
-    t.true(upstream.lastBody().includes('docs.example.org/page'));
+    await postChat(proxy.url, PAGE_TEXT);
+    t.is(sentContent(upstream), PAGE_TEXT);
   } finally {
     await proxy.close();
     await upstream.close();
@@ -180,8 +188,8 @@ test.serial('an invalid config keeps the previous configuration in force', async
     process.emit('SIGHUP');
     const event = await waitForEvent(events, (e) => e.type === 'config_reload_failed');
     t.regex(event.type === 'config_reload_failed' ? event.reason : '', /keeping the previous/);
-    await postChat(proxy.url, 'see https://docs.example.org/page');
-    t.true(upstream.lastBody().includes('docs.example.org/page'));
+    await postChat(proxy.url, PAGE_TEXT);
+    t.is(sentContent(upstream), PAGE_TEXT);
   } finally {
     await proxy.close();
     await upstream.close();
@@ -297,8 +305,8 @@ test.serial('reloadConfig false ignores SIGHUP and registers no listener', async
     process.emit('SIGHUP');
     await sleep(300);
     t.is(events.filter(isReload).length, 0);
-    await postChat(proxy.url, 'see https://docs.example.org/page');
-    t.false(upstream.lastBody().includes('docs.example.org'));
+    await postChat(proxy.url, PAGE_TEXT);
+    t.not(sentContent(upstream), PAGE_TEXT);
   } finally {
     await proxy.close();
     await upstream.close();
