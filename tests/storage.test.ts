@@ -104,19 +104,15 @@ test.serial('deleteSessionMap returns true on hit and false on miss', (t) => {
 test.serial('deleteSessionMap handles unlinkSync error', (t) => {
   const id = 'delete-fail-test-id';
   const filePath = getSessionStoragePath(id);
-  const dirPath = path.dirname(filePath);
 
   writeSessionMap(id, { '«Secret_1»': 'sk-fail' });
-  fs.chmodSync(dirPath, 0o555); // make directory read-only so unlink fails
 
-  const originalError = console.error;
-  console.error = () => {};
+  fs.rmSync(filePath, { force: true });
+  fs.mkdirSync(filePath, { recursive: true });
+  fs.writeFileSync(path.join(filePath, 'blocker.txt'), 'x', 'utf8');
+  t.teardown(() => fs.rmSync(filePath, { recursive: true, force: true }));
 
-  const result = deleteSessionMap(id);
-  t.false(result);
-
-  console.error = originalError;
-  fs.chmodSync(dirPath, 0o777); // restore
+  t.false(deleteSessionMap(id));
 });
 
 test.serial('listSessions ignores non-.json files', (t) => {

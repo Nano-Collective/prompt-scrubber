@@ -495,11 +495,11 @@ test.serial('runProxyCommand logs a warning when session GC throws', async (t) =
   // should log a warning and continue. We then immediately SIGINT the
   // process group to stop runProxy from blocking forever.
   const { runProxyCommand } = await import('../../src/cli/commands/proxy.js');
-  const unreadableDir = path.join(__dirname, '.tmp-gc-error');
-  fs.mkdirSync(path.join(unreadableDir, 'sessions'), { recursive: true });
-  fs.chmodSync(path.join(unreadableDir, 'sessions'), 0o000);
+  const blockedDir = path.join(__dirname, '.tmp-gc-error');
+  fs.mkdirSync(blockedDir, { recursive: true });
+  fs.writeFileSync(path.join(blockedDir, 'sessions'), 'not a directory', 'utf8');
   const originalDir = process.env.PROMPT_SCRUB_CONFIG_DIR;
-  process.env.PROMPT_SCRUB_CONFIG_DIR = unreadableDir;
+  process.env.PROMPT_SCRUB_CONFIG_DIR = blockedDir;
 
   const originalError = console.error;
   const stderr: string[] = [];
@@ -520,8 +520,7 @@ test.serial('runProxyCommand logs a warning when session GC throws', async (t) =
 
   process.env.PROMPT_SCRUB_CONFIG_DIR = originalDir;
   console.error = originalError;
-  fs.chmodSync(path.join(unreadableDir, 'sessions'), 0o755);
-  fs.rmSync(unreadableDir, { recursive: true, force: true });
+  fs.rmSync(blockedDir, { recursive: true, force: true });
 
   const combined = stderr.join('\n');
   t.true(
