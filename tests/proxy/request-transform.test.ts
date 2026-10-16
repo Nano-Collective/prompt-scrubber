@@ -139,3 +139,379 @@ test('scrubChatBody dispatches by provider', (t) => {
   const result = scrubChatBody('unknown', body, () => ({ content: '', entities: 0 }));
   t.is(result.body, body);
 });
+
+/**
+ * Stand-in for the real scrubber: replaces the two e-mail addresses used in
+ * these tests with stable placeholders and counts the replacements.
+ */
+function fakeScrub(text: string): { content: string; entities: number } {
+  let content = text;
+  let entities = 0;
+  for (const [needle, placeholder] of [
+    ['john@example.com', '«Email_1»'],
+    ['alice@example.com', '«Email_2»'],
+  ] as const) {
+    const parts = content.split(needle);
+    entities += parts.length - 1;
+    content = parts.join(placeholder);
+  }
+  return { content, entities };
+}
+
+test('scrubOpenAIChatBody keeps a tool-calling assistant message and scrubs its arguments', (t) => {
+  // The exact repro from issue #163: the assistant turn carries `tool_calls`
+  // and no `content` key at all.
+  const body = {
+    model: 'gpt-4o',
+    messages: [
+      { role: 'user', content: 'What is the status of john@example.com?' },
+      {
+        role: 'assistant',
+        tool_calls: [
+          {
+            id: '1',
+            type: 'function',
+            function: { name: 'lookup', arguments: '{"email":"john@example.com"}' },
+          },
+        ],
+      },
+      { role: 'tool', tool_call_id: '1', content: 'User john@example.com has balance $500' },
+    ],
+  };
+
+  const result = scrubOpenAIChatBody(body, fakeScrub);
+  const out = result.body as {
+    messages: Array<{
+      role: string;
+      content?: string;
+      tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }>;
+    }>;
+  };
+
+  t.is(out.messages.length, 3, 'the assistant message must survive');
+  t.is(out.messages[1]?.role, 'assistant');
+  t.is(out.messages[0]?.content, 'What is the status of «Email_1»?');
+  t.is(out.messages[2]?.content, 'User «Email_1» has balance $500');
+
+  const call = out.messages[1]?.tool_calls?.[0];
+  t.is(call?.id, '1');
+  t.is(call?.function.name, 'lookup', 'the function name is a contract, never scrubbed');
+  t.deepEqual(JSON.parse(call?.function.arguments ?? '{}'), { email: '«Email_1»' });
+  t.is(result.entities, 3);
+  t.false(JSON.stringify(result.body).includes('john@example.com'));
+});
+
+test('scrubOpenAIChatBody keeps an assistant message with content: null', (t) => {
+  const body = {
+    messages: [
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [
+          {
+            id: '1',
+            type: 'function',
+            function: { name: 'f', arguments: '{"to":"alice@example.com"}' },
+          },
+        ],
+      },
+    ],
+  };
+  const result = scrubOpenAIChatBody(body, fakeScrub);
+  const out = result.body as {
+    messages: Array<{ content: null; tool_calls: Array<{ function: { arguments: string } }> }>;
+  };
+  t.is(out.messages.length, 1);
+  t.is(out.messages[0]?.content, null, 'a null content stays null');
+  t.is(out.messages[0]?.tool_calls[0]?.function.arguments, '{"to":"«Email_2»"}');
+  t.is(result.entities, 1);
+});
+
+test('scrubOpenAIChatBody preserves entries of messages[] it does not understand', (t) => {
+  const body = { messages: [null, 'not a message', 42, { role: 'user', content: 'hi' }] };
+  const result = scrubOpenAIChatBody(body, fakeScrub);
+  const out = result.body as { messages: unknown[] };
+  t.is(out.messages.length, 4);
+  t.is(out.messages[0], null);
+  t.is(out.messages[1], 'not a message');
+  t.is(out.messages[2], 42);
+});
+
+test('scrubOpenAIChatBody scrubs tool-call arguments that are not valid JSON as plain text', (t) => {
+  const body = {
+    messages: [
+      {
+        role: 'assistant',
+        tool_calls: [
+          {
+            id: '1',
+            type: 'function',
+            function: { name: 'f', arguments: 'email=john@example.com' },
+          },
+        ],
+      },
+    ],
+  };
+  const result = scrubOpenAIChatBody(body, fakeScrub);
+  const out = result.body as {
+    messages: Array<{ tool_calls: Array<{ function: { arguments: string } }> }>;
+  };
+  t.is(out.messages[0]?.tool_calls[0]?.function.arguments, 'email=«Email_1»');
+  t.is(result.entities, 1);
+});
+
+test('scrubOpenAIChatBody scrubs tool descriptions but not names or enum values', (t) => {
+  const body = {
+    messages: [{ role: 'user', content: 'hi' }],
+    tools: [
+      {
+        type: 'function',
+        function: {
+          name: 'notify_john@example.com',
+          description: 'Email john@example.com about an order',
+          parameters: {
+            type: 'object',
+            properties: {
+              to: {
+                type: 'string',
+                description: 'Defaults to john@example.com',
+                enum: ['john@example.com', 'alice@example.com'],
+              },
+            },
+          },
+        },
+      },
+    ],
+  };
+  const result = scrubOpenAIChatBody(body, fakeScrub);
+  const out = result.body as {
+    tools: Array<{
+      function: {
+        name: string;
+        description: string;
+        parameters: { properties: { to: { description: string; enum: string[] } } };
+      };
+    }>;
+  };
+  const fn = out.tools[0]?.function;
+  t.is(fn?.description, 'Email «Email_1» about an order');
+  t.is(fn?.parameters.properties.to.description, 'Defaults to «Email_1»');
+  t.is(fn?.name, 'notify_john@example.com', 'tool names must round-trip verbatim');
+  t.deepEqual(fn?.parameters.properties.to.enum, ['john@example.com', 'alice@example.com']);
+  t.is(result.entities, 2);
+});
+
+test('scrubAnthropicMessagesBody scrubs a string system prompt', (t) => {
+  const body = {
+    model: 'claude-3',
+    system: 'You support john@example.com.',
+    messages: [{ role: 'user', content: 'hi' }],
+  };
+  const result = scrubAnthropicMessagesBody(body, fakeScrub);
+  const out = result.body as { system: string };
+  t.is(out.system, 'You support «Email_1».');
+  t.is(result.entities, 1);
+});
+
+test('scrubAnthropicMessagesBody scrubs system prompt text blocks', (t) => {
+  const body = {
+    system: [
+      { type: 'text', text: 'Contact: john@example.com' },
+      { type: 'text', text: 'Backup: alice@example.com', cache_control: { type: 'ephemeral' } },
+    ],
+    messages: [],
+  };
+  const result = scrubAnthropicMessagesBody(body, fakeScrub);
+  const out = result.body as { system: Array<{ text: string; cache_control?: unknown }> };
+  t.is(out.system[0]?.text, 'Contact: «Email_1»');
+  t.is(out.system[1]?.text, 'Backup: «Email_2»');
+  t.deepEqual(out.system[1]?.cache_control, { type: 'ephemeral' }, 'sibling fields survive');
+  t.is(result.entities, 2);
+});
+
+test('scrubAnthropicMessagesBody scrubs tool_use input and tool_result content', (t) => {
+  const body = {
+    messages: [
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'toolu_1',
+            name: 'lookup',
+            input: { email: 'john@example.com', nested: { note: 'cc alice@example.com' } },
+          },
+        ],
+      },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'toolu_1',
+            content: 'User john@example.com has balance $500',
+          },
+        ],
+      },
+    ],
+  };
+  const result = scrubAnthropicMessagesBody(body, fakeScrub);
+  const out = result.body as {
+    messages: Array<{
+      content: Array<{
+        type: string;
+        id?: string;
+        name?: string;
+        input?: { email: string; nested: { note: string } };
+        content?: string;
+      }>;
+    }>;
+  };
+  const use = out.messages[0]?.content[0];
+  t.is(use?.input?.email, '«Email_1»');
+  t.is(use?.input?.nested.note, 'cc «Email_2»');
+  t.is(use?.name, 'lookup', 'tool names must round-trip verbatim');
+  t.is(use?.id, 'toolu_1');
+  t.is(out.messages[1]?.content[0]?.content, 'User «Email_1» has balance $500');
+  t.is(result.entities, 3);
+});
+
+test('scrubAnthropicMessagesBody scrubs text blocks nested in a tool_result', (t) => {
+  const body = {
+    messages: [
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'toolu_1',
+            content: [
+              { type: 'text', text: 'Owner: john@example.com' },
+              { type: 'image', source: { type: 'base64', data: '...' } },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  const result = scrubAnthropicMessagesBody(body, fakeScrub);
+  const out = result.body as {
+    messages: Array<{ content: Array<{ content: Array<{ text?: string; source?: unknown }> }> }>;
+  };
+  const inner = out.messages[0]?.content[0]?.content;
+  t.is(inner?.[0]?.text, 'Owner: «Email_1»');
+  t.deepEqual(inner?.[1]?.source, { type: 'base64', data: '...' });
+  t.is(result.entities, 1);
+});
+
+test('scrubAnthropicMessagesBody scrubs tool descriptions', (t) => {
+  const body = {
+    messages: [],
+    tools: [
+      {
+        name: 'lookup',
+        description: 'Look up john@example.com',
+        input_schema: {
+          type: 'object',
+          properties: { email: { type: 'string', description: 'e.g. alice@example.com' } },
+        },
+      },
+    ],
+  };
+  const result = scrubAnthropicMessagesBody(body, fakeScrub);
+  const out = result.body as {
+    tools: Array<{
+      name: string;
+      description: string;
+      input_schema: { properties: { email: { description: string } } };
+    }>;
+  };
+  t.is(out.tools[0]?.description, 'Look up «Email_1»');
+  t.is(out.tools[0]?.input_schema.properties.email.description, 'e.g. «Email_2»');
+  t.is(out.tools[0]?.name, 'lookup');
+  t.is(result.entities, 2);
+});
+
+test('scrubOpenAIChatBody scrubs the deprecated function_call and functions[]', (t) => {
+  const body = {
+    messages: [
+      {
+        role: 'assistant',
+        function_call: { name: 'lookup', arguments: '{"email":"john@example.com"}' },
+      },
+    ],
+    functions: [
+      {
+        name: 'lookup',
+        description: 'Look up john@example.com',
+        parameters: {
+          type: 'object',
+          properties: { email: { type: 'string', description: 'e.g. alice@example.com' } },
+        },
+      },
+    ],
+  };
+  const result = scrubOpenAIChatBody(body, fakeScrub);
+  const out = result.body as {
+    messages: Array<{ function_call: { name: string; arguments: string } }>;
+    functions: Array<{
+      name: string;
+      description: string;
+      parameters: { properties: { email: { description: string } } };
+    }>;
+  };
+  t.is(out.messages[0]?.function_call.arguments, '{"email":"«Email_1»"}');
+  t.is(out.messages[0]?.function_call.name, 'lookup');
+  t.is(out.functions[0]?.description, 'Look up «Email_1»');
+  t.is(out.functions[0]?.parameters.properties.email.description, 'e.g. «Email_2»');
+  t.is(result.entities, 3);
+  t.false(JSON.stringify(result.body).includes('john@example.com'));
+});
+
+test('scrubOpenAIChatBody scrubs the description of a custom tool', (t) => {
+  const body = {
+    messages: [],
+    tools: [{ type: 'custom', custom: { name: 'grep', description: 'search john@example.com' } }],
+  };
+  const result = scrubOpenAIChatBody(body, fakeScrub);
+  const out = result.body as { tools: Array<{ custom: { name: string; description: string } }> };
+  t.is(out.tools[0]?.custom.description, 'search «Email_1»');
+  t.is(out.tools[0]?.custom.name, 'grep');
+});
+
+test('scrubAnthropicMessagesBody survives pathologically nested tool_result blocks', (t) => {
+  // `JSON.parse` accepts far deeper nesting than a recursive walk survives,
+  // so the walk is capped rather than left to exhaust the stack.
+  let block: unknown = { type: 'text', text: 'john@example.com' };
+  for (let i = 0; i < 5000; i += 1) {
+    block = { type: 'tool_result', tool_use_id: 't', content: [block] };
+  }
+  const body = { messages: [{ role: 'user', content: [block] }] };
+  t.notThrows(() => scrubAnthropicMessagesBody(body, fakeScrub));
+});
+
+test('scrubAnthropicMessagesBody still scrubs normally nested tool_result blocks', (t) => {
+  const body = {
+    messages: [
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 't1',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 't2',
+                content: [{ type: 'text', text: 'Owner: john@example.com' }],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  const result = scrubAnthropicMessagesBody(body, fakeScrub);
+  t.is(result.entities, 1);
+  t.false(JSON.stringify(result.body).includes('john@example.com'));
+});

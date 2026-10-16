@@ -780,3 +780,120 @@ test.serial(
     }
   },
 );
+
+test('scrubs a tool-calling OpenAI conversation end to end', async (t) => {
+  // Regression test for issue #163: the assistant turn below has no `content`
+  // key, which used to drop it from the forwarded body entirely, and its
+  // `arguments` JSON used to reach the upstream with the raw address in it.
+  const upstream = await startFakeUpstream((_, body, res) => {
+    const forwarded = JSON.parse(body) as {
+      messages: Array<{ role: string; tool_calls?: unknown[] }>;
+    };
+    t.is(forwarded.messages.length, 3, 'all three messages reach the upstream');
+    t.is(forwarded.messages[1]?.role, 'assistant');
+    t.truthy(forwarded.messages[1]?.tool_calls, 'the tool call survives');
+    t.false(body.includes('john@example.com'), 'no raw address reaches the upstream');
+    t.true(body.includes('«Email_1»'));
+
+    jsonResponse(res, 200, {
+      id: 'chatcmpl-1',
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: 'assistant',
+            content: null,
+            tool_calls: [
+              {
+                id: '2',
+                type: 'function',
+                function: { name: 'lookup', arguments: '{"email":"«Email_1»"}' },
+              },
+            ],
+          },
+        },
+      ],
+    });
+  });
+
+  const proxy = await withProxy(upstream);
+
+  try {
+    const res = await makeRequest(`${proxy.url}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-4o',
+        messages: [
+          { role: 'user', content: 'What is the status of john@example.com?' },
+          {
+            role: 'assistant',
+            tool_calls: [
+              {
+                id: '1',
+                type: 'function',
+                function: { name: 'lookup', arguments: '{"email":"john@example.com"}' },
+              },
+            ],
+          },
+          { role: 'tool', tool_call_id: '1', content: 'User john@example.com has balance $500' },
+        ],
+      }),
+    });
+
+    t.is(res.status, 200);
+    const parsed = JSON.parse(res.body) as {
+      choices: Array<{ message: { tool_calls: Array<{ function: { arguments: string } }> } }>;
+    };
+    // The client runs the tool locally, so the arguments must be real again.
+    t.deepEqual(JSON.parse(parsed.choices[0]?.message.tool_calls[0]?.function.arguments ?? '{}'), {
+      email: 'john@example.com',
+    });
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+});
+
+test('scrubs an Anthropic system prompt and tool blocks end to end', async (t) => {
+  const upstream = await startFakeUpstream((_, body, res) => {
+    t.false(body.includes('john@example.com'), 'no raw address reaches the upstream');
+    t.true(body.includes('«Email_1»'));
+    jsonResponse(res, 200, {
+      id: 'msg_1',
+      content: [{ type: 'text', text: 'Found «Email_1».' }],
+    });
+  });
+
+  const proxy = await withProxy(upstream);
+
+  try {
+    const res = await makeRequest(`${proxy.url}/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-3',
+        system: 'You are support for john@example.com, be brief',
+        tools: [{ name: 'lookup', description: 'Look up john@example.com', input_schema: {} }],
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 'toolu_1',
+                content: 'User john@example.com has balance $500',
+              },
+            ],
+          },
+        ],
+      }),
+    });
+
+    t.is(res.status, 200);
+    t.true(res.body.includes('john@example.com'), 'the response is rehydrated for the client');
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+});
