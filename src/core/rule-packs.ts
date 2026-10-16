@@ -1,3 +1,5 @@
+import * as path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import type { Detector } from '../types/index.js';
 import { loadConfig } from './config.js';
 import type { DetectorMetadata } from './detectors.js';
@@ -5,6 +7,10 @@ import type { DetectorMetadata } from './detectors.js';
 export interface RulePackResult {
   detectors: Detector[];
   metadata: DetectorMetadata[];
+}
+
+export function toImportSpecifier(specifier: string): string {
+  return path.isAbsolute(specifier) ? pathToFileURL(specifier).href : specifier;
 }
 
 /**
@@ -51,7 +57,7 @@ export async function loadConfiguredRulePacks(): Promise<RulePackResult> {
   for (const packName of config.rulePacks) {
     try {
       // Dynamically load the npm package
-      const mod = await import(packName);
+      const mod = await import(toImportSpecifier(packName));
 
       let packDetectors: Detector[] = [];
 

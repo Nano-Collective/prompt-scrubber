@@ -3,11 +3,33 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'ava';
-import { loadConfiguredRulePacks } from '../../src/core/rule-packs.js';
+import { loadConfiguredRulePacks, toImportSpecifier } from '../../src/core/rule-packs.js';
 import { scrub } from '../../src/core/scrub.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+test('toImportSpecifier maps an absolute path to a file URL', (t) => {
+  const absolute = path.join(os.tmpdir(), 'prompt-scrub-pack', 'pack.mjs');
+  t.is(toImportSpecifier(absolute), pathToFileURL(absolute).href);
+});
+
+test('toImportSpecifier passes an existing file URL through untouched', (t) => {
+  const href = pathToFileURL(path.join(os.tmpdir(), 'prompt-scrub-pack', 'pack.mjs')).href;
+  t.is(toImportSpecifier(href), href);
+});
+
+test('toImportSpecifier passes a bare package specifier through untouched', (t) => {
+  for (const specifier of ['prompt-scrub-example-pack', '@scope/pack', 'my-pack/sub-path']) {
+    t.is(toImportSpecifier(specifier), specifier);
+  }
+});
+
+test('a file URL round-trips back to the path it was built from', (t) => {
+  const original = path.join(os.tmpdir(), 'prompt-scrub-pack', 'pack.mjs');
+  const roundTripped = fileURLToPath(new URL(toImportSpecifier(original)));
+  t.is(roundTripped, original);
+});
 
 test.serial('loadConfiguredRulePacks loads a valid mock pack', async (t) => {
   // We can override the process.cwd() or PROMPT_SCRUB_CONFIG_DIR, but since loadConfig reads
