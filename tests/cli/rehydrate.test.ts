@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'ava';
 import { handleRehydrate } from '../../src/cli/commands/rehydrate.js';
+import { setStdinFd } from '../../src/cli/io.js';
 import { writeSessionMap } from '../../src/session/storage.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -80,6 +81,9 @@ test.serial('rehydrate command fails when no stdin is provided', async (t) => {
   console.error = (msg: string) => {
     errorOutput += msg;
   };
+
+  setStdinFd(-1);
+  t.teardown(() => setStdinFd(0));
 
   await program.parseAsync(['node', 'test', 'rehydrate', '--session-id', 'test']);
 

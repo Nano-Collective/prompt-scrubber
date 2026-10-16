@@ -5,6 +5,7 @@ import {
   handleInspect,
   simulateScrub,
 } from '../../src/cli/commands/inspect.js';
+import { setStdinFd } from '../../src/cli/io.js';
 
 test('handleInspect finds entities without side effects', async (t) => {
   const { findings } = await handleInspect('My email is test@example.com', {});
@@ -107,6 +108,9 @@ test.serial('inspect command fails when no stdin is provided', async (t) => {
   // Actually, mocking fs.readFileSync doesn't work for ES modules imported elsewhere.
   // We can just pass no stdin by relying on the test environment having closed stdin,
   // or by just calling the action directly, but Commander parse works.
+
+  setStdinFd(-1);
+  t.teardown(() => setStdinFd(0));
 
   await program.parseAsync(['node', 'test', 'inspect']);
 

@@ -2,6 +2,12 @@ import { readFileSync } from 'node:fs';
 import type { Command } from 'commander';
 import { emitError } from './output.js';
 
+let stdinFd = 0;
+
+export function setStdinFd(fd: number): void {
+  stdinFd = fd;
+}
+
 export function readInput(file?: string, useJson = false): string | undefined {
   if (file) {
     try {
@@ -13,7 +19,7 @@ export function readInput(file?: string, useJson = false): string | undefined {
     }
   }
   try {
-    return readFileSync(0, 'utf-8');
+    return readFileSync(stdinFd, 'utf-8');
   } catch {
     emitError('No input provided.', useJson);
     process.exit(1);

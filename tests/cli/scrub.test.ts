@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import test from 'ava';
 import { formatScrubSummary, handleScrub } from '../../src/cli/commands/scrub.js';
 import { parseConfidence } from '../../src/cli/options.js';
+import { setStdinFd } from '../../src/cli/io.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -118,6 +119,9 @@ test.serial('scrub command fails when no stdin is provided', async (t) => {
   console.error = (msg: string) => {
     errorOutput += msg;
   };
+
+  setStdinFd(-1);
+  t.teardown(() => setStdinFd(0));
 
   await program.parseAsync(['node', 'test', 'scrub']);
 
