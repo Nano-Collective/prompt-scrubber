@@ -1,15 +1,19 @@
 import { StringDecoder } from 'node:string_decoder';
 import { rehydrateText } from '../core/rehydrate.js';
+import { type JsonTextTransform, mapJsonStringField, mapJsonStrings } from './json-scrub.js';
 import type { ProxyProvider } from './types.js';
 
 /**
  * Rehydrate placeholders in OpenAI chat-completion responses.
  *
- * Non-streaming: `choices[].message.content` is a string.
+ * Non-streaming: `choices[].message.content` is a string, and a tool-calling
+ * turn additionally carries `choices[].message.tool_calls[]` whose
+ * `function.arguments` is JSON encoded as a string. The arguments have to be
+ * restored too: the client executes that tool locally, so a placeholder left
+ * in there reaches the caller's own code instead of the real value.
+ *
  * Streaming: each SSE `data:` payload carries a `choices[].delta` object whose
- * `content` field is an incremental string fragment; replacing placeholders
- * across the whole fragment would corrupt output (`«Email_1»` arrives as
- * `«Email_` then `1»`), so the streaming path is handled separately in
+ * `content` field is an incremental string fragment; see
  * `createSseRehydrator`.
  */
 export function rehydrateOpenAIJsonBody(
@@ -22,17 +26,30 @@ export function rehydrateOpenAIJsonBody(
 
   let placeholders = 0;
   const choices = root.choices.map((raw) => {
-    if (typeof raw !== 'object' || raw === null) return raw;
-    const choice = raw as Record<string, unknown>;
-    if (typeof choice.message === 'object' && choice.message !== null) {
-      const message = choice.message as Record<string, unknown>;
-      if (typeof message.content === 'string') {
-        const { content, replaced } = rehydrateText(message.content, sessionMap);
-        placeholders += replaced;
-        return { ...choice, message: { ...message, content } };
-      }
+    const choice = asRecord(raw);
+    if (!choice) return raw;
+    const message = asRecord(choice.message);
+    if (!message) return raw;
+
+    const patch: Record<string, unknown> = {};
+
+    if (typeof message.content === 'string') {
+      const { content, replaced } = rehydrateText(message.content, sessionMap);
+      placeholders += replaced;
+      if (content !== message.content) patch.content = content;
     }
-    return choice;
+
+    const add = (n: number) => {
+      placeholders += n;
+    };
+    const toolCalls = rehydrateToolCallArguments(message.tool_calls, sessionMap, add);
+    if (toolCalls !== message.tool_calls) patch.tool_calls = toolCalls;
+    // Deprecated single-call form, still accepted by the API.
+    const functionCall = rehydrateCallArguments(message.function_call, sessionMap, add);
+    if (functionCall !== message.function_call) patch.function_call = functionCall;
+
+    if (Object.keys(patch).length === 0) return raw;
+    return { ...choice, message: { ...message, ...patch } };
   });
 
   return { body: { ...root, choices }, placeholders };
@@ -41,8 +58,9 @@ export function rehydrateOpenAIJsonBody(
 /**
  * Rehydrate placeholders in Anthropic `/v1/messages` responses.
  *
- * Non-streaming: `content` is an array of blocks. Only `text` blocks are
- * touched; other block types (`tool_use`, `image`, ...) pass through.
+ * Non-streaming: `content` is an array of blocks. `text` blocks and the
+ * `input` object of a `tool_use` block are restored; other block types
+ * (`image`, `thinking`, ...) pass through.
  */
 export function rehydrateAnthropicJsonBody(
   body: unknown,
@@ -56,21 +74,25 @@ export function rehydrateAnthropicJsonBody(
   if (!Array.isArray(root.content)) return { body, placeholders: 0 };
 
   let placeholders = 0;
-  const content = root.content.map((block) => {
-    if (
-      typeof block === 'object' &&
-      block !== null &&
-      (block as { type?: unknown }).type === 'text' &&
-      typeof (block as { text?: unknown }).text === 'string'
-    ) {
-      const { content: text, replaced } = rehydrateText(
-        (block as { text: string }).text,
-        sessionMap,
-      );
+  const content = root.content.map((raw) => {
+    const block = asRecord(raw);
+    if (!block) return raw;
+
+    if (block.type === 'text' && typeof block.text === 'string') {
+      const { content: text, replaced } = rehydrateText(block.text, sessionMap);
       placeholders += replaced;
+      if (text === block.text) return raw;
       return { ...block, text };
     }
-    return block;
+
+    if (block.type === 'tool_use') {
+      const { value, count } = mapJsonStrings(block.input, rehydrateTransform(sessionMap));
+      placeholders += count;
+      if (value === block.input) return raw;
+      return { ...block, input: value };
+    }
+
+    return raw;
   });
 
   return { body: { ...root, content }, placeholders };
@@ -86,16 +108,40 @@ export function rehydrateJsonBody(
   return { body, placeholders: 0 };
 }
 
+/** Per-response state the SSE rehydrator threads through the event walk. */
+interface StreamState {
+  provider: ProxyProvider;
+  sessionMap: Record<string, string>;
+  /** `sessionMap` with its values escaped for a JSON-string context. */
+  escaped: () => Record<string, string>;
+  /** Fragments held back mid-placeholder, keyed by the call they belong to. */
+  tails: Map<string, PendingTail>;
+}
+
+interface PendingTail {
+  text: string;
+  /** Builds a standalone SSE event carrying `text`, for recovery at flush. */
+  synthesize: (text: string) => string;
+}
+
 /**
  * Incrementally rehydrate an SSE byte stream.
  *
- * Placeholders like `«Email_1»` may be split across chunks (`«Email_` then
- * `1»`). To handle that we buffer trailing bytes that don't yet form a
- * complete SSE event. SSE events are separated by a blank line (`\n\n`); we
- * keep the incomplete tail and emit only complete events downstream.
+ * Two different splits have to be handled. A *chunk* boundary can fall
+ * anywhere, so bytes that do not yet form a complete event (events are
+ * separated by a blank line) are buffered, and multibyte codepoints are
+ * reassembled by `StringDecoder`.
  *
- * Multibyte UTF-8 codepoints may also be split across chunks; the
- * `StringDecoder` handles that so we never see replacement errors.
+ * An *event* boundary is the harder one: vendors emit roughly one token per
+ * event, so `«Email_1»` genuinely arrives as `«Email_` in one event and `1»`
+ * in the next. For tool-call arguments that is the common case rather than an
+ * edge case, and leaving it unresolved hands the client's own tool a literal
+ * placeholder, so a trailing partial placeholder is held back and prepended
+ * to the next fragment for that same call (see `rehydrateFragment`).
+ *
+ * `delta.content` deliberately keeps the simpler per-event behaviour: a split
+ * placeholder there is cosmetic — the reader sees `«Email_1»` — whereas tool
+ * arguments are executed by code.
  */
 export function createSseRehydrator(
   provider: ProxyProvider,
@@ -105,34 +151,50 @@ export function createSseRehydrator(
   flush: () => string;
 } {
   const decoder = new StringDecoder('utf8');
+  const state: StreamState = {
+    provider,
+    sessionMap,
+    escaped: createEscapedMapReader(sessionMap),
+    tails: new Map(),
+  };
   let buffer = '';
 
   return {
     push(chunk: Buffer | Uint8Array): string {
       buffer += decoder.write(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      return emitCompleteEvents(provider, sessionMap, buffer, (rest) => {
+      return emitCompleteEvents(state, buffer, (rest) => {
         buffer = rest;
       });
     },
     flush(): string {
       buffer += decoder.end();
-      const tail = emitCompleteEvents(provider, sessionMap, `${buffer}\n\n`, (rest) => {
+      const tail = emitCompleteEvents(state, `${buffer}\n\n`, (rest) => {
         buffer = rest;
       });
+      // A tail still held here means the stream ended mid-placeholder (a
+      // truncated or hallucinated `«`). Emitting it as a vendor-shaped delta
+      // event of its own is the only way to hand those bytes over without
+      // corrupting the framing — dropping them would silently truncate the
+      // tool's arguments. It lands after the terminating event, which a
+      // client may ignore; losing the bytes outright is worse.
+      let orphans = '';
+      for (const pending of state.tails.values()) {
+        orphans += pending.synthesize(pending.text);
+      }
+      state.tails.clear();
       // After flushing, anything still in `buffer` is the trailing fragment
       // that never had a terminating blank line. Emit it as-is so the client
       // receives the final bytes (e.g. the `[DONE]` sentinel or a trailing
       // event without a final newline).
       const leftover = buffer;
       buffer = '';
-      return tail + leftover;
+      return tail + orphans + leftover;
     },
   };
 }
 
 function emitCompleteEvents(
-  provider: ProxyProvider,
-  sessionMap: Record<string, string>,
+  state: StreamState,
   input: string,
   setRemainder: (rest: string) => void,
 ): string {
@@ -149,7 +211,7 @@ function emitCompleteEvents(
       out += '\n\n';
       continue;
     }
-    out += transformSseEvent(provider, sessionMap, event);
+    out += transformSseEvent(state, event);
     out += '\n\n';
   }
   return out;
@@ -160,18 +222,14 @@ function emitCompleteEvents(
  * JSON payload. Everything else (`event:`, `id:`, `:comment`, etc.) is passed
  * through unchanged.
  */
-function transformSseEvent(
-  provider: ProxyProvider,
-  sessionMap: Record<string, string>,
-  event: string,
-): string {
+function transformSseEvent(state: StreamState, event: string): string {
   const lines = event.split('\n');
   const out: string[] = [];
   for (const line of lines) {
     if (line.startsWith('data:')) {
       // SSE allows `data:` (no space) and `data: ` (with space). Match both.
       const payload = line.startsWith('data: ') ? line.slice('data: '.length) : line.slice(5);
-      out.push(`data: ${transformSseData(provider, sessionMap, payload)}`);
+      out.push(`data: ${transformSseData(state, payload)}`);
     } else {
       out.push(line);
     }
@@ -179,11 +237,7 @@ function transformSseEvent(
   return out.join('\n');
 }
 
-function transformSseData(
-  provider: ProxyProvider,
-  sessionMap: Record<string, string>,
-  payload: string,
-): string {
+function transformSseData(state: StreamState, payload: string): string {
   const trimmed = payload.trim();
   if (trimmed === '[DONE]' || trimmed === '') return payload;
 
@@ -197,10 +251,10 @@ function transformSseData(
   }
 
   let transformed: unknown = parsed;
-  if (provider === 'openai') {
-    transformed = rehydrateOpenAIStreamChunk(parsed, sessionMap);
-  } else if (provider === 'anthropic') {
-    transformed = rehydrateAnthropicStreamChunk(parsed, sessionMap);
+  if (state.provider === 'openai') {
+    transformed = rehydrateOpenAIStreamChunk(parsed, state);
+  } else if (state.provider === 'anthropic') {
+    transformed = rehydrateAnthropicStreamChunk(parsed, state);
   }
   // Skip the round-trip when nothing changed — `JSON.stringify` on an already
   // compact payload would otherwise introduce subtle whitespace differences.
@@ -212,45 +266,266 @@ function transformSseData(
  * OpenAI streaming chunks:
  *   `{ choices: [ { delta: { content: "..." }, index: 0 } ] }`
  *
- * `delta.content` is sometimes `null` (e.g. role-only chunks).
+ * `delta.content` is sometimes `null` (e.g. role-only chunks). A tool call
+ * streams instead as `delta.tool_calls[].function.arguments`, one fragment of
+ * the JSON argument string per chunk, identified by `tool_calls[].index`.
  */
-function rehydrateOpenAIStreamChunk(payload: unknown, sessionMap: Record<string, string>): unknown {
+function rehydrateOpenAIStreamChunk(payload: unknown, state: StreamState): unknown {
   if (typeof payload !== 'object' || payload === null) return payload;
   const root = payload as Record<string, unknown>;
   if (!Array.isArray(root.choices)) return payload;
+
+  let changed = false;
   const choices = root.choices.map((raw) => {
-    if (typeof raw !== 'object' || raw === null) return raw;
-    const choice = raw as Record<string, unknown>;
-    if (typeof choice.delta !== 'object' || choice.delta === null) return choice;
-    const delta = choice.delta as Record<string, unknown>;
+    const choice = asRecord(raw);
+    if (!choice) return raw;
+    const delta = asRecord(choice.delta);
+    if (!delta) return raw;
+
+    const patch: Record<string, unknown> = {};
+
     if (typeof delta.content === 'string') {
-      const { content, replaced } = rehydrateText(delta.content, sessionMap);
-      if (replaced === 0) return choice;
-      return { ...choice, delta: { ...delta, content } };
+      const { content, replaced } = rehydrateText(delta.content, state.sessionMap);
+      if (replaced > 0) patch.content = content;
     }
-    return choice;
+
+    const toolCalls = rehydrateStreamedToolCalls(delta.tool_calls, choice.index, state);
+    if (toolCalls !== delta.tool_calls) patch.tool_calls = toolCalls;
+
+    if (Object.keys(patch).length === 0) return raw;
+    changed = true;
+    return { ...choice, delta: { ...delta, ...patch } };
   });
-  return { ...root, choices };
+
+  return changed ? { ...root, choices } : payload;
 }
 
 /**
  * Anthropic streaming chunks:
  *   `{ type: "content_block_delta", index: N, delta: { type: "text_delta", text: "..." } }`
+ *   `{ type: "content_block_delta", index: N, delta: { type: "input_json_delta", partial_json: "..." } }`
  *
- * Only `content_block_delta` events with a string `text` field are scrubbed.
- * Other event types (`message_start`, `content_block_start`, `ping`, etc.)
- * pass through untouched.
+ * Only those two delta shapes are rewritten. Other event types
+ * (`message_start`, `content_block_start`, `ping`, etc.) pass through
+ * untouched.
  */
-function rehydrateAnthropicStreamChunk(
-  payload: unknown,
-  sessionMap: Record<string, string>,
-): unknown {
+function rehydrateAnthropicStreamChunk(payload: unknown, state: StreamState): unknown {
   if (typeof payload !== 'object' || payload === null) return payload;
   const root = payload as Record<string, unknown>;
   if (root.type !== 'content_block_delta') return payload;
-  if (typeof root.delta !== 'object' || root.delta === null) return payload;
-  const delta = root.delta as Record<string, unknown>;
-  if (typeof delta.text !== 'string') return payload;
-  const { content: text } = rehydrateText(delta.text, sessionMap);
-  return { ...root, delta: { ...delta, text } };
+  const delta = asRecord(root.delta);
+  if (!delta) return payload;
+
+  if (typeof delta.text === 'string') {
+    const { content: text, replaced } = rehydrateText(delta.text, state.sessionMap);
+    if (replaced === 0) return payload;
+    return { ...root, delta: { ...delta, text } };
+  }
+
+  if (typeof delta.partial_json === 'string') {
+    const index = typeof root.index === 'number' ? root.index : 0;
+    const next = rehydrateFragment(delta.partial_json, `anthropic:${index}`, state, (text) =>
+      synthesizeAnthropicEvent(index, text),
+    );
+    if (next === delta.partial_json) return payload;
+    return { ...root, delta: { ...delta, partial_json: next } };
+  }
+
+  return payload;
+}
+
+/**
+ * Restore placeholders inside `tool_calls[].function.arguments` /
+ * `function_call.arguments` on a non-streaming response: parse, replace,
+ * re-stringify, so a restored value containing a quote or a backslash is
+ * escaped properly and the field stays valid JSON.
+ */
+function rehydrateToolCallArguments(
+  value: unknown,
+  sessionMap: Record<string, string>,
+  add: (n: number) => void,
+): unknown {
+  if (!Array.isArray(value)) return value;
+
+  let changed = false;
+  const next = value.map((raw) => {
+    const call = asRecord(raw);
+    if (!call) return raw;
+    const fn = rehydrateCallArguments(call.function, sessionMap, add);
+    if (fn === call.function) return raw;
+    changed = true;
+    return { ...call, function: fn };
+  });
+
+  return changed ? next : value;
+}
+
+function rehydrateCallArguments(
+  value: unknown,
+  sessionMap: Record<string, string>,
+  add: (n: number) => void,
+): unknown {
+  const fn = asRecord(value);
+  if (!fn || typeof fn.arguments !== 'string') return value;
+  const { value: args, count } = mapJsonStringField(
+    fn.arguments,
+    rehydrateTransform(sessionMap),
+    // Malformed `arguments` cannot be re-serialised, so the restored value
+    // has to be escaped by hand for the JSON string it still sits in.
+    (text) => {
+      const { content, replaced } = rehydrateText(text, escapeMapForJsonString(sessionMap));
+      return { content, count: replaced };
+    },
+  );
+  add(count);
+  if (args === fn.arguments) return value;
+  return { ...fn, arguments: args };
+}
+
+/** Streaming counterpart: one fragment of an argument string per event. */
+function rehydrateStreamedToolCalls(
+  value: unknown,
+  choiceIndex: unknown,
+  state: StreamState,
+): unknown {
+  if (!Array.isArray(value)) return value;
+
+  let changed = false;
+  const next = value.map((raw) => {
+    const call = asRecord(raw);
+    if (!call) return raw;
+    const fn = asRecord(call.function);
+    if (!fn || typeof fn.arguments !== 'string') return raw;
+
+    const choice = typeof choiceIndex === 'number' ? choiceIndex : 0;
+    const index = typeof call.index === 'number' ? call.index : 0;
+    const args = rehydrateFragment(fn.arguments, `openai:${choice}:${index}`, state, (text) =>
+      synthesizeOpenAIEvent(choice, index, text),
+    );
+    if (args === fn.arguments) return raw;
+    changed = true;
+    return { ...call, function: { ...fn, arguments: args } };
+  });
+
+  return changed ? next : value;
+}
+
+/**
+ * Longest tail worth holding back. Placeholders are short (`«Email_1»`), so
+ * anything longer is an unrelated guillemet rather than a partial
+ * placeholder, and buffering it would stall the stream.
+ */
+const MAX_HELD_TAIL = 48;
+
+/**
+ * Restore placeholders in a *fragment* of a JSON string — a streamed slice of
+ * `arguments` / `partial_json`, which is not parseable on its own.
+ *
+ * Two things make this different from rehydrating a whole field:
+ *
+ * 1. The fragment sits inside a JSON string literal that the client will
+ *    reassemble, so a substituted value must be escaped as that literal's
+ *    contents: `C:\Users\alice` has to land as `C:\\Users\\alice`.
+ * 2. A placeholder may straddle the boundary between two events. The part
+ *    from an unterminated `«` onwards is withheld and prepended to the next
+ *    fragment for the same call, so the client's reassembled arguments carry
+ *    the real value.
+ */
+function rehydrateFragment(
+  fragment: string,
+  key: string,
+  state: StreamState,
+  synthesize: (text: string) => string,
+): string {
+  const previous = state.tails.get(key);
+  const combined = previous === undefined ? fragment : previous.text + fragment;
+  const { ready, held } = splitAtOpenPlaceholder(combined);
+
+  if (held.length > 0) state.tails.set(key, { text: held, synthesize });
+  else state.tails.delete(key);
+
+  if (!ready.includes('«')) return ready;
+  return rehydrateText(ready, state.escaped()).content;
+}
+
+/**
+ * Split a fragment into the part safe to emit now and a trailing partial
+ * placeholder to hold back.
+ */
+function splitAtOpenPlaceholder(text: string): { ready: string; held: string } {
+  const start = text.lastIndexOf('«');
+  if (start === -1) return { ready: text, held: '' };
+  // A closing guillemet after it means this one is already complete.
+  if (text.includes('»', start)) return { ready: text, held: '' };
+
+  const candidate = text.slice(start);
+  // Placeholders carry no whitespace and are short; anything else is ordinary
+  // text that happens to contain a `«`.
+  if (candidate.length > MAX_HELD_TAIL || /\s/.test(candidate)) {
+    return { ready: text, held: '' };
+  }
+  return { ready: text.slice(0, start), held: candidate };
+}
+
+function synthesizeOpenAIEvent(choiceIndex: number, callIndex: number, text: string): string {
+  const payload = {
+    choices: [
+      {
+        index: choiceIndex,
+        delta: { tool_calls: [{ index: callIndex, function: { arguments: text } }] },
+      },
+    ],
+  };
+  return `data: ${JSON.stringify(payload)}\n\n`;
+}
+
+function synthesizeAnthropicEvent(blockIndex: number, text: string): string {
+  const payload = {
+    type: 'content_block_delta',
+    index: blockIndex,
+    delta: { type: 'input_json_delta', partial_json: text },
+  };
+  return `data: ${JSON.stringify(payload)}\n\n`;
+}
+
+/**
+ * Build the escaped view of the session map lazily, reusing it until the map
+ * grows. The request side mutates the map in place, but only ever *adds*
+ * placeholders — a placeholder's value is stable once minted — so the entry
+ * count is a sound cache key.
+ */
+function createEscapedMapReader(sessionMap: Record<string, string>): () => Record<string, string> {
+  let cached: Record<string, string> | undefined;
+  let size = -1;
+  return () => {
+    const current = Object.keys(sessionMap).length;
+    if (cached === undefined || current !== size) {
+      cached = escapeMapForJsonString(sessionMap);
+      size = current;
+    }
+    return cached;
+  };
+}
+
+function escapeMapForJsonString(sessionMap: Record<string, string>): Record<string, string> {
+  const escaped: Record<string, string> = {};
+  for (const [placeholder, value] of Object.entries(sessionMap)) {
+    // `JSON.stringify` of a string yields a quoted literal; drop the quotes
+    // to get exactly the escaped body we need to splice in.
+    escaped[placeholder] = JSON.stringify(value).slice(1, -1);
+  }
+  return escaped;
+}
+
+/** Adapt `rehydrateText` to the shape `json-scrub` expects. */
+function rehydrateTransform(sessionMap: Record<string, string>): JsonTextTransform {
+  return (text) => {
+    const { content, replaced } = rehydrateText(text, sessionMap);
+    return { content, count: replaced };
+  };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  return value as Record<string, unknown>;
 }
