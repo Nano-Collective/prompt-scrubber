@@ -202,6 +202,15 @@ Responses are rehydrated in the same places as requests: message content, `tool_
 - `--audit-log <path>`: Append one JSON line per completed request to this file. Records hold counts, detector categories, timings and the request path. They never hold values, bodies, headers or query strings. The file is created with mode `0600`.
 - `--no-metrics`: Do not serve `/healthz` and `/metrics`. Those paths are then forwarded upstream like any other path.
 - `--no-gc`: Skip the startup session-garbage-collection pass.
+- `--no-reload-config`: Do not reload `config.json` while the proxy runs (see below).
+
+**Config reload:** the proxy re-reads `config.json` without restarting when it receives `SIGHUP` or when the file changes on disk. Only the `rulePacks` and `urlAllowlist` keys reload. Requests already in flight keep the old configuration, and sessions and their placeholders are kept.
+
+- Reload on demand: `kill -HUP <pid>`, or `ExecReload=/bin/kill -HUP $MAINPID` in a systemd unit, then `systemctl reload`.
+- A file that is missing, invalid, or names a rule pack that fails to load is rejected. The previous configuration stays in force and the reason is logged.
+- Changes to a rule pack's code are not picked up. The pack module stays cached, so restart the proxy after upgrading a pack.
+- The file watcher is not reliable on some network and WSL file systems. Use `SIGHUP` there.
+- On Windows only file changes trigger a reload, because there is no `SIGHUP`.
 
 **Health and metrics:** the proxy answers two local endpoints on its own port. They are not forwarded upstream, so they shadow any upstream path with the same name.
 

@@ -2,10 +2,12 @@ import * as crypto from 'node:crypto';
 import * as http from 'node:http';
 import * as https from 'node:https';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { getConfigDir, loadConfig, readConfigFile } from '../core/config.js';
 import { loadConfiguredRulePacks } from '../core/rule-packs.js';
 import { scrub } from '../core/scrub.js';
 import type { ScrubOptions } from '../types/index.js';
 import { AuditLog } from './audit-log.js';
+import { createConfigReloader, type ConfigReloader } from './config-reloader.js';
 import { ProxyMetrics } from './metrics.js';
 import { detectProvider, scrubChatBody } from './request-transform.js';
 import { createSseRehydrator, rehydrateJsonBody } from './response-transform.js';
@@ -92,9 +94,17 @@ export async function createProxyServer(
   const serveObservability = options.metrics !== false;
   const version = options.version ?? 'unknown';
 
-  // Load rule pack detectors once at startup so each request stays sync.
+  // Load rule pack detectors once at startup so each request stays sync. The
+  // holder is read once per request, so a reload never changes options midway
+  // through a request.
   const { detectors: rulePackDetectors } = await loadConfiguredRulePacks();
-  const baseScrubOptions = buildBaseScrubOptions(options.scrubOptions, rulePackDetectors);
+  const scrubState = {
+    current: buildBaseScrubOptions(
+      options.scrubOptions,
+      rulePackDetectors,
+      loadConfig().urlAllowlist,
+    ),
+  };
 
   // Opened before listening so an unwritable --audit-log fails startup.
   const metrics = new ProxyMetrics(version);
@@ -117,6 +127,40 @@ export async function createProxyServer(
     listener?.(event);
   };
 
+  let reloader: ConfigReloader | undefined;
+  // Applies the config file as it is on disk now. Throwing keeps the previous config.
+  const applyConfig = async () => {
+    const file = readConfigFile();
+    if (!file.exists) {
+      throw new Error('config file is missing; keeping the previous configuration');
+    }
+    if (file.errors.length > 0) {
+      throw new Error(
+        `config is invalid; keeping the previous configuration. ${file.errors.join(' ')}`,
+      );
+    }
+    const { detectors, metadata } = await loadConfiguredRulePacks();
+    const loaded = new Set(metadata.map((m) => m.source));
+    const failed = (file.config.rulePacks ?? []).filter(
+      (name) => !loaded.has(`rule-pack: ${name}`),
+    );
+    if (failed.length > 0) {
+      throw new Error(
+        `rule pack(s) failed to load, keeping the previous configuration: ${failed.join(', ')}`,
+      );
+    }
+    scrubState.current = buildBaseScrubOptions(
+      options.scrubOptions,
+      detectors,
+      file.config.urlAllowlist,
+    );
+    return {
+      rulePacks: file.config.rulePacks?.length ?? 0,
+      detectors: detectors.length,
+      urlAllowlist: scrubState.current.urlAllowlist?.length ?? 0,
+    };
+  };
+
   const server = http.createServer((req, res) => {
     const route = serveObservability ? observabilityRoute(req) : undefined;
     if (route) {
@@ -131,7 +175,7 @@ export async function createProxyServer(
       trace,
       options,
       sessions,
-      baseScrubOptions,
+      scrubState,
       emit,
       log,
       maxBodyBytes,
@@ -166,11 +210,21 @@ export async function createProxyServer(
       const boundPort = typeof address === 'object' && address ? address.port : options.port;
       const url = `http://${host}:${boundPort}`;
 
+      if (options.reloadConfig) {
+        reloader = createConfigReloader({
+          dir: getConfigDir(),
+          apply: applyConfig,
+          emit,
+          log,
+        });
+      }
+
       let closing: Promise<void> | undefined;
       const handle: ProxyHandle = {
         url,
         port: boundPort,
         close: () => {
+          reloader?.close();
           closing ??= new Promise<void>((closeResolve, closeReject) => {
             server.close((err) => (err ? closeReject(err) : closeResolve()));
           }).finally(() => audit?.close());
@@ -190,6 +244,13 @@ export async function createProxyServer(
           );
         }
       }
+      if (reloader) {
+        const how = [
+          reloader.signal ? 'SIGHUP' : null,
+          reloader.watching ? 'file changes' : null,
+        ].filter(Boolean);
+        log(`[proxy] Config reload enabled (${how.join(' or ') || 'no trigger available'}).`);
+      }
       resolve(handle);
     });
   });
@@ -198,28 +259,26 @@ export async function createProxyServer(
 /**
  * Translate the CLI-shaped `ScrubCliOptions` (comma-separated strings, etc.)
  * into the structured `ScrubOptions` accepted by `scrub()`. Merged with the
- * pre-loaded rule-pack detectors.
+ * pre-loaded rule-pack detectors and the config-file allowlist, so the proxy
+ * behaves like the standalone `scrub` command.
  */
 function buildBaseScrubOptions(
   raw: ProxyOptions['scrubOptions'],
   rulePackDetectors: import('../types/index.js').Detector[],
+  configUrlAllowlist: string[] = [],
 ): ScrubOptions {
   const scrub: ScrubOptions = { customDetectors: rulePackDetectors };
-  if (!raw) return scrub;
-
-  const disabled = parseList(raw.disable);
-  const enabled = parseList(raw.enable);
+  const disabled = parseList(raw?.disable);
+  const enabled = parseList(raw?.enable);
   if (disabled.length > 0) scrub.disabledDetectors = disabled;
   if (enabled.length > 0) scrub.enabledDetectors = enabled;
-  if (raw.strictName !== undefined) scrub.strictNameDetector = raw.strictName;
-  if (raw.codeTellTerms !== undefined) {
-    const terms = parseList(raw.codeTellTerms);
-    if (terms.length > 0) scrub.codeTellTerms = terms;
-  }
-  if (raw.urlAllowlist !== undefined) {
-    const list = parseList(raw.urlAllowlist);
-    if (list.length > 0) scrub.urlAllowlist = list;
-  }
+  if (raw?.strictName !== undefined) scrub.strictNameDetector = raw.strictName;
+  const codeTellTerms = parseList(raw?.codeTellTerms);
+  if (codeTellTerms.length > 0) scrub.codeTellTerms = codeTellTerms;
+  const urlAllowlist = Array.from(
+    new Set([...configUrlAllowlist, ...parseList(raw?.urlAllowlist)]),
+  );
+  if (urlAllowlist.length > 0) scrub.urlAllowlist = urlAllowlist;
   return scrub;
 }
 
@@ -323,12 +382,13 @@ async function handleClientRequest(
   trace: RequestTrace,
   options: ProxyOptions,
   sessions: Sessions,
-  baseScrubOptions: ScrubOptions,
+  scrubState: { current: ScrubOptions },
   emit: (event: ProxyEvent) => void,
   log: (msg: string) => void,
   maxBodyBytes: number,
 ): Promise<void> {
   const { sessionId, provider, url: incomingUrl } = trace;
+  const baseScrubOptions = scrubState.current;
 
   emit({
     type: 'request',

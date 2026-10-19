@@ -19,6 +19,8 @@ interface ProxyCommandOptions extends ScrubCliOptions {
   version?: string;
   /** True when `--gc` was passed; defaults to true. `--no-gc` flips this off. */
   gc?: boolean;
+  /** False when `--no-reload-config` was passed. */
+  reloadConfig?: boolean;
 }
 
 function parseList(value: string | undefined): string[] {
@@ -75,11 +77,9 @@ export async function runProxyCommand(options: ProxyCommandOptions): Promise<voi
     }
   }
 
-  // Merge CLI + config-supplied allowlists so users get the same defaults as
-  // the standalone `scrub` command.
-  const config = loadConfig();
-  const cliUrlAllowlist = parseList(options.urlAllowlist);
-  const urlAllowlist = Array.from(new Set([...(config.urlAllowlist || []), ...cliUrlAllowlist]));
+  // The config-file allowlist is merged inside the server, so it can be
+  // reloaded. Only the flag value is passed here.
+  const urlAllowlist = parseList(options.urlAllowlist);
 
   const disable = parseList(options.disable).join(',');
   const enable = parseList(options.enable).join(',');
@@ -97,6 +97,7 @@ export async function runProxyCommand(options: ProxyCommandOptions): Promise<voi
     port,
     host,
     verbose: options.verbose ?? false,
+    reloadConfig: options.reloadConfig !== false,
     metrics: options.metrics !== false,
     ...(auditLog !== undefined ? { auditLog } : {}),
     ...(options.version !== undefined ? { version: options.version } : {}),
@@ -131,6 +132,7 @@ export function setupProxyCommand(program: Command) {
       'Comma-separated list of hostnames to pass-through in URLs (subdomains are implicitly allowed)',
     )
     .option('-v, --verbose', 'Log a one-line summary of every proxied request to stderr')
+    .option('--no-reload-config', 'Do not reload config.json on SIGHUP or when it changes on disk')
     .option(
       '--audit-log <path>',
       'Append one JSON line per request to this file (counts and categories only, never values)',
