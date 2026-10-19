@@ -180,7 +180,32 @@ Anything that does not match a known shape (e.g. `GET /v1/models`, `POST /v1/emb
 - `--host <host>`: Local interface to bind (default `127.0.0.1`).
 - `--disable <detectors>`, `--enable <detectors>`, `--strict-name`, `--code-tell-terms`, `--url-allowlist`: Same scrubber options as the `scrub` command.
 - `-v, --verbose`: Log a one-line summary of every proxied request to `stderr` (including the scrubbed/rehydrated counts and session ID).
+- `--audit-log <path>`: Append one JSON line per completed request to this file. Records hold counts, detector categories, timings and the request path. They never hold values, bodies, headers or query strings. The file is created with mode `0600`.
+- `--no-metrics`: Do not serve `/healthz` and `/metrics`. Those paths are then forwarded upstream like any other path.
 - `--no-gc`: Skip the startup session-garbage-collection pass.
+
+**Health and metrics:** the proxy answers two local endpoints on its own port. They are not forwarded upstream, so they shadow any upstream path with the same name.
+
+- `GET /healthz` returns `{"status":"ok","uptimeSeconds":…,"version":"…"}`.
+- `GET /metrics` returns Prometheus text (`text/plain; version=0.0.4`). Add `?format=json` or `Accept: application/json` for JSON.
+
+Metrics: `prompt_scrub_requests_total{provider,status_class}`, `prompt_scrub_entities_redacted_total{category}`, `prompt_scrub_placeholders_rehydrated_total`, `prompt_scrub_passthrough_total{reason}`, `prompt_scrub_errors_total{kind}`, `prompt_scrub_audit_dropped_total`, `prompt_scrub_request_duration_seconds` (histogram), and the gauges `prompt_scrub_inflight_requests`, `prompt_scrub_uptime_seconds` and `prompt_scrub_build_info`. Rehydration counts for streamed responses are approximate.
+
+```yaml
+scrape_configs:
+  - job_name: prompt-scrub
+    static_configs:
+      - targets: ['127.0.0.1:8080']
+    metrics_path: /metrics
+```
+
+An audit record looks like this:
+
+```json
+{"ts":"2026-10-14T09:12:03.418Z","type":"response","requestId":"…","sessionId":"…","method":"POST","path":"/v1/chat/completions","provider":"openai","status":200,"durationMs":412.7,"streaming":false,"outcome":"ok","entities":1,"byCategory":{"Email":1},"rehydrated":1}
+```
+
+`outcome` is one of `ok`, `passthrough` (forwarded without scrubbing), `rejected` (413) or `error`. When it is `error`, `errorKind` is one of `upstream_timeout`, `upstream_error`, `client_aborted` or `internal`.
 
 **Limitations:**
 

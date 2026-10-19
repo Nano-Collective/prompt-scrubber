@@ -37,6 +37,19 @@ export interface ProxyOptions {
   log?: (msg: string) => void;
   /** Maximum request body size in bytes. Defaults to 10 MB. */
   maxBodyBytes?: number;
+  /**
+   * Append one JSON line per completed request to this file. Records hold
+   * counts, categories and timings only: never values, bodies, headers or
+   * query strings.
+   */
+  auditLog?: string;
+  /**
+   * Serve `GET /healthz` and `GET /metrics` on the proxy's port instead of
+   * forwarding those paths upstream. Defaults to true.
+   */
+  metrics?: boolean;
+  /** Proxy version reported by `/healthz` and `/metrics`. Defaults to `unknown`. */
+  version?: string;
 }
 
 /**
@@ -61,6 +74,31 @@ export type ProxyEvent =
   | { type: 'scrubbed'; sessionId: string; entities: number }
   | { type: 'rehydrated'; sessionId: string; placeholders: number }
   | { type: 'passthrough'; reason: string }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string }
+  /**
+   * Emitted exactly once per client request, after the response has been
+   * sent (or the connection has gone). `path` has no query string.
+   */
+  | {
+      type: 'response';
+      requestId: string;
+      sessionId: string;
+      method: string;
+      path: string;
+      provider: ProxyProvider;
+      status: number;
+      durationMs: number;
+      streaming: boolean;
+      outcome: 'ok' | 'passthrough' | 'rejected' | 'error';
+      entities: number;
+      byCategory: Record<string, number>;
+      rehydrated: number;
+      errorKind?:
+        | 'body_too_large'
+        | 'upstream_timeout'
+        | 'upstream_error'
+        | 'client_aborted'
+        | 'internal';
+    };
 
 export type ProxyEventListener = (event: ProxyEvent) => void;
