@@ -159,16 +159,35 @@ export OPENAI_BASE_URL=http://localhost:8080/v1
 
 The proxy recognises two providers by URL shape:
 
-| Path pattern | Provider | Scrubbed fields |
-| --- | --- | --- |
-| `…/v1/chat/completions` | OpenAI | `messages[].content` (string or `text` parts) |
-| `…/v1/messages` | Anthropic | `messages[].content` (string or `text` blocks) |
+| Path pattern | Provider |
+| --- | --- |
+| `…/v1/chat/completions` | OpenAI |
+| `…/v1/messages` | Anthropic |
 
 Anything that does not match a known shape (e.g. `GET /v1/models`, `POST /v1/embeddings`) is forwarded byte-for-byte without modification. This is the safe default: enabling a new vendor is additive.
 
+**Scrubbed fields.** Every field of a recognised body that carries free text:
+
+| | OpenAI | Anthropic |
+| --- | --- | --- |
+| Message content | `messages[].content` (string or `text` parts) | `messages[].content` (string or `text` blocks) |
+| System prompt | the `role: "system"` message | top-level `system` (string or `text` blocks) |
+| Tool call arguments | `messages[].tool_calls[].function.arguments` | `tool_use.input` |
+| Tool results | the `role: "tool"` message | `tool_result` blocks, including `text` blocks nested inside them |
+| Tool definitions | `tools[].function.description` / `tools[].custom.description`, plus `description` fields inside `parameters` | `tools[].description`, plus `description` fields inside `input_schema` |
+| Deprecated function calling | `messages[].function_call.arguments` and `functions[].description` | — |
+
+Tool arguments are JSON encoded as a string, so they are parsed, scrubbed value by value and re-serialised: argument *keys* and the JSON structure are preserved exactly.
+
+Messages are never dropped. An entry the proxy does not recognise — an assistant turn that carries only `tool_calls`, a block type a vendor adds tomorrow — is forwarded unchanged at its original position in `messages[]`.
+
+**Never scrubbed, by design:** tool names, tool-call ids, JSON-schema property keys and `enum` values. The model has to reproduce those verbatim for the client's own dispatch to work, so a placeholder there would break the call rather than protect anything — keep PII out of tool names and enums.
+
+Responses are rehydrated in the same places as requests: message content, `tool_calls[].function.arguments` and `tool_use.input`. The client executes those tool calls on its own machine, so they are handed back with the real values in them.
+
 **Session continuity:** the proxy threads a session ID through every request via the `x-prompt-scrub-session` header. When the client sends the header back on a follow-up call, the same placeholder map is reused, so `«Email_1»` stays `«Email_1»` across turns. If the client does not send the header, the proxy generates a UUID and echoes it in the response so the client can pin it.
 
-**Streaming:** Server-Sent Events (SSE) are rehydrated incrementally. A placeholder may be split across chunks (`«Email_` then `1»`); the proxy buffers incomplete events so rehydration is lossless and reordering-safe. `data: [DONE]` sentinels and non-JSON payloads pass through untouched.
+**Streaming:** Server-Sent Events (SSE) are rehydrated incrementally, and a placeholder can be split in two different ways. A *chunk* boundary can fall anywhere, so the proxy buffers bytes that do not yet form a complete event. An *event* boundary is the interesting one: vendors emit roughly one token per event, so `«Email_1»` genuinely arrives as `«Email_` then `1»` in the next event. For streamed tool-call arguments (`delta.tool_calls[].function.arguments`, `input_json_delta.partial_json`) the proxy holds the trailing partial placeholder back and prepends it to the next fragment of that same call, so what the client reassembles carries the real value. `data: [DONE]` sentinels and non-JSON payloads pass through untouched.
 
 **Headers:** the proxy strips hop-by-hop headers per RFC 7230 (`connection`, `keep-alive`, `transfer-encoding`, `upgrade`, `host`, etc.) and rewrites `host` to the upstream value. Authentication headers (`authorization`, `x-api-key`, etc.) are forwarded as-is.
 
@@ -180,6 +199,8 @@ Anything that does not match a known shape (e.g. `GET /v1/models`, `POST /v1/emb
 - `--host <host>`: Local interface to bind (default `127.0.0.1`).
 - `--disable <detectors>`, `--enable <detectors>`, `--strict-name`, `--code-tell-terms`, `--url-allowlist`: Same scrubber options as the `scrub` command.
 - `-v, --verbose`: Log a one-line summary of every proxied request to `stderr` (including the scrubbed/rehydrated counts and session ID).
+- `--audit-log <path>`: Append one JSON line per completed request to this file. Records hold counts, detector categories, timings and the request path. They never hold values, bodies, headers or query strings. The file is created with mode `0600`.
+- `--no-metrics`: Do not serve `/healthz` and `/metrics`. Those paths are then forwarded upstream like any other path.
 - `--no-gc`: Skip the startup session-garbage-collection pass.
 - `--no-reload-config`: Do not reload `config.json` while the proxy runs (see below).
 
@@ -191,9 +212,34 @@ Anything that does not match a known shape (e.g. `GET /v1/models`, `POST /v1/emb
 - The file watcher is not reliable on some network and WSL file systems. Use `SIGHUP` there.
 - On Windows only file changes trigger a reload, because there is no `SIGHUP`.
 
+**Health and metrics:** the proxy answers two local endpoints on its own port. They are not forwarded upstream, so they shadow any upstream path with the same name.
+
+- `GET /healthz` returns `{"status":"ok","uptimeSeconds":…,"version":"…"}`.
+- `GET /metrics` returns Prometheus text (`text/plain; version=0.0.4`). Add `?format=json` or `Accept: application/json` for JSON.
+
+Metrics: `prompt_scrub_requests_total{provider,status_class}`, `prompt_scrub_entities_redacted_total{category}`, `prompt_scrub_placeholders_rehydrated_total`, `prompt_scrub_passthrough_total{reason}`, `prompt_scrub_errors_total{kind}`, `prompt_scrub_audit_dropped_total`, `prompt_scrub_request_duration_seconds` (histogram), and the gauges `prompt_scrub_inflight_requests`, `prompt_scrub_uptime_seconds` and `prompt_scrub_build_info`. Rehydration counts for streamed responses are approximate.
+
+```yaml
+scrape_configs:
+  - job_name: prompt-scrub
+    static_configs:
+      - targets: ['127.0.0.1:8080']
+    metrics_path: /metrics
+```
+
+An audit record looks like this:
+
+```json
+{"ts":"2026-10-14T09:12:03.418Z","type":"response","requestId":"…","sessionId":"…","method":"POST","path":"/v1/chat/completions","provider":"openai","status":200,"durationMs":412.7,"streaming":false,"outcome":"ok","entities":1,"byCategory":{"Email":1},"rehydrated":1}
+```
+
+`outcome` is one of `ok`, `passthrough` (forwarded without scrubbing), `rejected` (413) or `error`. When it is `error`, `errorKind` is one of `upstream_timeout`, `upstream_error`, `client_aborted` or `internal`.
+
 **Limitations:**
 
 - Request bodies larger than 10 MB are rejected with `413 Payload Too Large`. Tune with `maxBodyBytes` on the programmatic `ProxyOptions`.
+- In streamed *text* (`delta.content`, `text_delta`), a placeholder split across two separate SSE events is forwarded as-is: the reader sees `«Email_1»` instead of the value, and nothing is corrupted. Streamed tool-call arguments do not have this gap, because code acts on them — see **Streaming** above.
+- A value nested deeper than 64 levels inside tool arguments, a tool schema, or a chain of `tool_result` blocks is forwarded unscrubbed. The cap keeps a hostile body from exhausting the stack; nothing legitimate nests that deep.
 - Responses that arrive gzipped are forwarded uncompressed (we strip `accept-encoding` on the outbound hop). Upstreams that re-add gzip mid-flight are forwarded unchanged.
 - The proxy does not perform TLS termination for the inbound hop — terminate TLS at a reverse proxy if you need to expose it on a network interface. The default `127.0.0.1` binding is loopback-only.
 - The proxy is a development tool, not a hardened gateway. Run it on a trusted host.

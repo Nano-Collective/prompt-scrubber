@@ -31,7 +31,9 @@ prompt-scrub
 │   │   ├── proxy-server.ts    # HTTP server + lifecycle
 │   │   ├── request-transform.ts   # Scrub OpenAI/Anthropic bodies
 │   │   ├── response-transform.ts  # Rehydrate JSON + SSE responses
-│   │   └── config-reloader.ts     # SIGHUP + file watch reload of config.json
+│   │   ├── audit-log.ts           # Append-only JSONL request log (--audit-log)
+│   │   ├── config-reloader.ts     # SIGHUP + file watch reload of config.json
+│   │   └── metrics.ts             # /healthz + /metrics counters and histogram
 │   │
 │   ├── cli/
 │   │   └── commands/
