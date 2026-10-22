@@ -1364,3 +1364,48 @@ test('the startup line does not print credentials or a query string from --targe
   t.false(line.includes('hunter2'));
   t.false(line.includes('secret_abc'));
 });
+
+test('the query string is forwarded to the upstream, on known and unknown paths', async (t) => {
+  const seen: string[] = [];
+  const upstream = await startFakeUpstream((req, _body, res) => {
+    seen.push(`${req.method} ${req.url}`);
+    jsonResponse(res, 200, { choices: [{ message: { role: 'assistant', content: 'ok' } }] });
+  });
+  const proxy = await withProxy(upstream);
+  try {
+    await makeRequest(`${proxy.url}/v1/models?limit=5&api_key=secret_12345`, { method: 'GET' });
+    await makeRequest(`${proxy.url}/openai/deployments/d/chat/completions?api-version=2024-02-01`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    await makeRequest(`${proxy.url}/?x=1`, { method: 'GET' });
+    await makeRequest(`${proxy.url}/v1/models`, { method: 'GET' });
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+  t.deepEqual(seen, [
+    'GET /v1/models?limit=5&api_key=secret_12345',
+    'POST /openai/deployments/d/chat/completions?api-version=2024-02-01',
+    'GET /?x=1',
+    'GET /v1/models',
+  ]);
+});
+
+test('the query string is kept after a path prefix on the target', async (t) => {
+  let seen = '';
+  const upstream = await startFakeUpstream((req, _body, res) => {
+    seen = req.url ?? '';
+    jsonResponse(res, 200, {});
+  });
+  const target = new URL(`${upstream.url}/gateway/`);
+  const proxy = await createProxyServer({ target, port: 0, host: '127.0.0.1', log: () => {} });
+  try {
+    await makeRequest(`${proxy.url}/v1/models?key=abc`, { method: 'GET' });
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+  t.is(seen, '/gateway/v1/models?key=abc');
+});

@@ -846,11 +846,14 @@ function dispatchUpstream(target: URL, req: DispatchRequest): Promise<UpstreamRe
  */
 function joinTargetPath(target: URL, incomingUrl: string): string {
   const incomingPath = parsePath(incomingUrl);
+  // The query string is part of the request: Azure OpenAI needs `?api-version=`,
+  // Gemini takes `?key=`, and `/v1/models?limit=` pages its results with it.
+  const query = incomingUrl.slice(incomingPath.length);
   const base = target.pathname.replace(/\/$/, '');
   if (incomingPath === '/' || incomingPath === '') {
-    return `${base}/`;
+    return `${base}/${query}`;
   }
-  return `${base}${incomingPath}`;
+  return `${base}${incomingPath}${query}`;
 }
 
 function pipeStreamingResponse(
