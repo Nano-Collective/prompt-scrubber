@@ -446,6 +446,129 @@ test('strict mode is visible in /metrics as a blocked counter', async (t) => {
   }
 });
 
+function chatResponder(content: string) {
+  return (_req: http.IncomingMessage, _body: string, res: http.ServerResponse) =>
+    jsonResponse(res, 200, { choices: [{ index: 0, message: { role: 'assistant', content } }] });
+}
+
+async function chat(proxyUrl: string, messages: unknown[], session?: string) {
+  const res = await makeRequest(`${proxyUrl}/v1/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      ...(session ? { [SESSION_HEADER]: session } : {}),
+    },
+    body: JSON.stringify({ model: 'gpt-4', messages }),
+  });
+  const reply = (JSON.parse(res.body) as { choices: { message: { content: string } }[] }).choices[0]
+    ?.message.content;
+  return { reply, session: res.headers[SESSION_HEADER] as string };
+}
+
+test('a literal placeholder in an earlier message is not minted for a later email', async (t) => {
+  const upstream = await startFakeUpstream(
+    chatResponder('You said «Email_1»; I will mail «Email_2».'),
+  );
+  const proxy = await withProxy(upstream);
+  try {
+    const { reply } = await chat(proxy.url, [
+      { role: 'user', content: 'What does «Email_1» mean?' },
+      { role: 'user', content: 'Mail test@example.com' },
+    ]);
+    const sent = JSON.parse(upstream.lastBody()) as { messages: { content: string }[] };
+    t.is(sent.messages[0]?.content, 'What does «Email_1» mean?');
+    t.is(sent.messages[1]?.content, 'Mail «Email_2»');
+    t.is(reply, 'You said «Email_1»; I will mail test@example.com.');
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+});
+
+test('a literal placeholder in a later message is not minted for an earlier email', async (t) => {
+  const upstream = await startFakeUpstream(chatResponder('ok'));
+  const proxy = await withProxy(upstream);
+  try {
+    await chat(proxy.url, [
+      { role: 'user', content: 'Mail test@example.com' },
+      { role: 'user', content: 'What does «Email_1» mean?' },
+    ]);
+    const sent = JSON.parse(upstream.lastBody()) as { messages: { content: string }[] };
+    t.is(sent.messages[0]?.content, 'Mail «Email_2»');
+    t.is(sent.messages[1]?.content, 'What does «Email_1» mean?');
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+});
+
+test('a literal placeholder from one request is not minted in a later request of the session', async (t) => {
+  const upstream = await startFakeUpstream(chatResponder('mailing «Email_2», re «Email_1»'));
+  const proxy = await withProxy(upstream);
+  try {
+    const first = await chat(proxy.url, [{ role: 'user', content: 'What does «Email_1» mean?' }]);
+    const second = await chat(
+      proxy.url,
+      [{ role: 'user', content: 'Mail test@example.com' }],
+      first.session,
+    );
+    t.is(
+      (JSON.parse(upstream.lastBody()) as { messages: { content: string }[] }).messages[0]?.content,
+      'Mail «Email_2»',
+    );
+    t.is(second.reply, 'mailing test@example.com, re «Email_1»');
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+});
+
+test('a literal placeholder in an Anthropic system prompt is not minted for a message email', async (t) => {
+  const upstream = await startFakeUpstream((_req, _body, res) =>
+    jsonResponse(res, 200, { content: [{ type: 'text', text: 'sent to «Email_2»' }] }),
+  );
+  const proxy = await withProxy(upstream);
+  try {
+    const res = await makeRequest(`${proxy.url}/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude',
+        system: 'Tokens look like «Email_1».',
+        messages: [{ role: 'user', content: 'Mail test@example.com' }],
+      }),
+    });
+    const sent = JSON.parse(upstream.lastBody()) as {
+      system: string;
+      messages: { content: string }[];
+    };
+    t.is(sent.system, 'Tokens look like «Email_1».');
+    t.is(sent.messages[0]?.content, 'Mail «Email_2»');
+    t.true(res.body.includes('sent to test@example.com'));
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+});
+
+test('a placeholder the session already maps keeps resolving to its value', async (t) => {
+  const upstream = await startFakeUpstream(chatResponder('reply «Email_1»'));
+  const proxy = await withProxy(upstream);
+  try {
+    const first = await chat(proxy.url, [{ role: 'user', content: 'Mail test@example.com' }]);
+    t.is(first.reply, 'reply test@example.com');
+    const second = await chat(
+      proxy.url,
+      [{ role: 'user', content: 'Again «Email_1»' }],
+      first.session,
+    );
+    t.is(second.reply, 'reply test@example.com');
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+});
+
 test('reuses an inbound session header to resolve existing placeholders', async (t) => {
   const upstream = await startFakeUpstream((_, body, res) => {
     // The inbound body should be RE-HYDRATED back to the original PII before

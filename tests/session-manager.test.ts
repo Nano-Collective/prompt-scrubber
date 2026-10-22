@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'ava';
-import { SessionManager } from '../src/session/session-manager.js';
+import { placeholderTokensIn, SessionManager } from '../src/session/session-manager.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -129,4 +129,12 @@ test('rebuildCategoryCounts ignores invalid placeholders and handles out-of-orde
   const resumed = new SessionManager(manager.getSessionId());
   const next = resumed.createPlaceholder('Email', 'c@test.com');
   t.is(next, '«Email_3»');
+});
+
+test('placeholderTokensIn finds every placeholder-shaped token and nothing else', (t) => {
+  t.deepEqual(placeholderTokensIn('«Email_1» and «Ticket2_14», not «quoted text» or «a b_1»'), [
+    '«Email_1»',
+    '«Ticket2_14»',
+  ]);
+  t.deepEqual(placeholderTokensIn('no tokens here'), []);
 });

@@ -5,6 +5,7 @@ import * as https from 'node:https';
 import { getConfigDir, loadConfig, readConfigFile } from '../core/config.js';
 import { loadConfiguredRulePacks } from '../core/rule-packs.js';
 import { scrub } from '../core/scrub.js';
+import { placeholderTokensIn } from '../session/session-manager.js';
 import type { ScrubOptions } from '../types/index.js';
 import { AuditLog } from './audit-log.js';
 import { type ConfigReloader, createConfigReloader } from './config-reloader.js';
@@ -462,6 +463,7 @@ async function handleClientRequest(
     emit({ type: 'passthrough', reason: unscrubbedReason });
   } else if (parsed !== undefined) {
     const map = sessions.get(sessionId) ?? {};
+    reserveLiteralPlaceholders(provider, parsed, map);
     // The scrubber's reverse-lookup (`valueToPlaceholder`) keeps stable
     // placeholders for values it has seen before, so round-trips from the
     // client (which sends placeholders) and fresh PII both end up
@@ -571,6 +573,27 @@ function scrubTextSync(
     entities: result.stats.totalEntities,
     byCategory: result.stats.byCategory,
   };
+}
+
+/**
+ * Claim every placeholder the request already carries literally, across all of
+ * its messages and for the rest of the session. `scrub()` runs once per string
+ * with a fresh SessionManager, so without this a literal «Email_1» in one
+ * message does not stop another message, or a later request, minting «Email_1»
+ * for a real address. The identity entry makes the token unavailable and
+ * rehydrates back to itself.
+ */
+function reserveLiteralPlaceholders(
+  provider: ProxyProvider,
+  body: unknown,
+  map: Record<string, string>,
+): void {
+  scrubChatBody(provider, body, (text) => {
+    for (const token of placeholderTokensIn(text)) {
+      if (!Object.hasOwn(map, token)) map[token] = token;
+    }
+    return { content: text, entities: 0 };
+  });
 }
 
 function mergeCounts(into: Record<string, number>, from: Record<string, number>): void {
