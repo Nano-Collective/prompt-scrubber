@@ -75,3 +75,20 @@ test('scores a matched address as a high-confidence exact pattern', (t) => {
   t.is(findings[0]?.confidence, 0.95);
   t.is(findings[0]?.method, 'exact-pattern');
 });
+
+test('detects an address at the end of a sentence', (t) => {
+  t.is(detector.detect('Contact alice@example.com.')[0]?.value, 'alice@example.com');
+  t.is(detector.detect('Mail bob@example.com. Then call.')[0]?.value, 'bob@example.com');
+  t.is(detector.detect('Contact alice@example.co.uk.')[0]?.value, 'alice@example.co.uk');
+  t.is(detector.detect('Write to alice@example.com...')[0]?.value, 'alice@example.com');
+});
+
+test('the span of an address followed by a full stop excludes the full stop', (t) => {
+  const text = 'Contact alice@example.com.';
+  const [start, end] = detector.detect(text)[0]!.span;
+  t.is(text.slice(start, end), 'alice@example.com');
+});
+
+test('still skips a domain that continues past its top-level label', (t) => {
+  t.is(detector.detect('a@b.com.x').length, 0);
+});

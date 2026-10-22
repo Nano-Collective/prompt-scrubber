@@ -14,7 +14,7 @@ const ENTROPY_CONFIDENCE = 0.6;
 const PREFIX_PATTERNS: { regex: RegExp; name: string; confidence?: number }[] = [
   // OpenAI: sk-...48 alphanumeric chars (new format: sk-proj-..., sk-svcacct-...)
   {
-    regex: /sk-(?:proj-|svcacct-|ant-api\d+-)?[A-Za-z0-9_-]{20,80}/g,
+    regex: /(?<![A-Za-z0-9_-])sk-(?:proj-|svcacct-|ant-api\d+-)?[A-Za-z0-9_-]{20,80}/g,
     name: 'OpenAI/Anthropic key',
   },
   // GitHub personal access tokens
@@ -32,7 +32,7 @@ const PREFIX_PATTERNS: { regex: RegExp; name: string; confidence?: number }[] = 
   { regex: /(?<![A-Z0-9])(AKIA[0-9A-Z]{16})(?![A-Z0-9])/g, name: 'AWS Access Key ID' },
   // Bearer token in Authorization header
   {
-    regex: /(?:Bearer|bearer)\s+([A-Za-z0-9\-._~+/]{20,}={0,2})/g,
+    regex: /bearer\s+([A-Za-z0-9\-._~+/]{20,}={0,2})/gi,
     name: 'Bearer token',
     confidence: BEARER_CONFIDENCE,
   },
@@ -40,9 +40,48 @@ const PREFIX_PATTERNS: { regex: RegExp; name: string; confidence?: number }[] = 
 
 // --- Layer 2: Key-value heuristic ---
 // Matches KEY=value or KEY: value where the key name suggests it's a secret.
-const SECRET_KEY_NAMES =
-  /(?:key|secret|token|password|pass|pwd|api|auth|cred|credential|private|access)[_-]?(?:id|key|secret|token)?/i;
-const KV_PATTERN = /(?:^|[\s,;{])([a-zA-Z0-9_.-]+)\s*[:=]\s*["']?([A-Za-z0-9+/\-_.~@]{8,})["']?/gm;
+// A key name suggests a secret when one of its words is one of these. Whole words, not
+// substrings: `author`, `monkey` and `compass` contain `auth`, `key` and `pass`.
+const SECRET_KEY_WORDS = new Set([
+  'key',
+  'keys',
+  'secret',
+  'secrets',
+  'token',
+  'tokens',
+  'password',
+  'passwords',
+  'passwd',
+  'passphrase',
+  'pass',
+  'pwd',
+  'api',
+  'apikey',
+  'auth',
+  'authorization',
+  'cred',
+  'creds',
+  'credential',
+  'credentials',
+  'private',
+  'access',
+  'bearer',
+]);
+
+function isSecretKeyName(key: string): boolean {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .some((word) => SECRET_KEY_WORDS.has(word));
+}
+
+// The key may be quoted (`"api_key": ...` in JSON or YAML). A quoted value runs to its
+// closing quote, so a passphrase with spaces is taken whole; an unquoted one stops at
+// whitespace and at brackets, quotes, commas and semicolons, but keeps `!`, `#`, `$` and
+// the other punctuation a password is allowed to contain.
+const KV_PATTERN =
+  /(?:^|[\s,;{])["']?([a-zA-Z0-9_.-]+)["']?\s*[:=]\s*(?:"([^"\r\n]{8,})"|'([^'\r\n]{8,})'|([A-Za-z0-9+/\-_.~@!#$%^&*=?:]{8,}))/gm;
 
 // --- Layer 3: High-entropy strings ---
 // Only fires when the value is surrounded by quotes or follows an = sign.
@@ -93,10 +132,10 @@ export class SecretDetector implements Detector {
     let match: RegExpExecArray | null;
     while ((match = KV_PATTERN.exec(text)) !== null) {
       const key = match[1] ?? '';
-      const value = match[2] ?? '';
-      if (!SECRET_KEY_NAMES.test(key)) continue;
+      const value = match[2] ?? match[3] ?? match[4] ?? '';
+      if (!isSecretKeyName(key)) continue;
 
-      const valueStart = match.index + match[0].indexOf(value);
+      const valueStart = match.index + match[0].lastIndexOf(value);
       raw.push({
         category: 'Secret',
         span: [valueStart, valueStart + value.length],

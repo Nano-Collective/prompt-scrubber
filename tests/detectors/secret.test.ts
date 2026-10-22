@@ -141,3 +141,88 @@ test('a wider low-confidence overlap does not downgrade a vendor-prefixed key', 
   t.is(findings[0]?.confidence, 0.99);
   t.is(findings[0]?.method, 'exact-pattern');
 });
+
+test('detects a secret under a quoted key', (t) => {
+  for (const [text, value] of [
+    ['{"api_key": "mysecretvalue123"}', 'mysecretvalue123'],
+    ["{'password': 'hunter2hunter2'}", 'hunter2hunter2'],
+    ['"client_secret":"abcd1234efgh5678"', 'abcd1234efgh5678'],
+  ] as const) {
+    const findings = detector.detect(text);
+    t.is(findings.length, 1, text);
+    t.is(findings[0]?.value, value, text);
+  }
+});
+
+test('takes a password with punctuation whole', (t) => {
+  for (const [text, value] of [
+    ['password: Secret!Pass123', 'Secret!Pass123'],
+    ['DB_PASSWORD=P@ss!w0rd#2024', 'P@ss!w0rd#2024'],
+    ['password: "my long pass phrase 99"', 'my long pass phrase 99'],
+    ['token=abc$def%ghi^jkl', 'abc$def%ghi^jkl'],
+  ] as const) {
+    const findings = detector.detect(text);
+    t.is(findings.length, 1, text);
+    t.is(findings[0]?.value, value, text);
+  }
+});
+
+test('an unquoted value stops at brackets, quotes and commas', (t) => {
+  t.is(detector.detect('call password=abcd1234efgh) now')[0]?.value, 'abcd1234efgh');
+  t.is(detector.detect('use [ token=abcd1234efgh], next')[0]?.value, 'abcd1234efgh');
+  t.is(detector.detect("run token=abcd1234efgh'")[0]?.value, 'abcd1234efgh');
+});
+
+test('a key name must contain a secret word, not just a substring of one', (t) => {
+  for (const text of [
+    'author: jonathan-smith-the-third',
+    'monkey=bananabananabanana',
+    'compass=northnorthnorthnorth',
+    'keyword=somethingverylong',
+    'tokenizer=whitespace-splitter',
+  ]) {
+    t.is(detector.detect(text).length, 0, text);
+  }
+});
+
+test('recognises secret words in snake, kebab, camel and upper case', (t) => {
+  for (const text of [
+    'secret_key=abcdefgh12345678',
+    'client-secret=abcdefgh12345678',
+    'accessToken: abcdefgh12345678',
+    'API_KEY=abcdefgh12345678',
+    'apikey=abcdefgh12345678',
+    'x.auth.token=abcdefgh12345678',
+  ]) {
+    t.is(detector.detect(text).length, 1, text);
+  }
+});
+
+test('does not start an sk- key in the middle of a word', (t) => {
+  t.is(detector.detect('risk-assessment_2024').length, 0);
+  t.is(detector.detect('see task-force-leader-abcdefghijklmnop').length, 0);
+  t.is(detector.detect('use sk-aBcDeFgHiJkLmNoPqRsTuVwXyZ1234567890 now').length, 1);
+  t.is(detector.detect('"sk-aBcDeFgHiJkLmNoPqRsTuVwXyZ1234567890"').length, 1);
+});
+
+test('detects an upper-case Bearer scheme', (t) => {
+  for (const scheme of ['Bearer', 'bearer', 'BEARER']) {
+    const findings = detector.detect(`Authorization: ${scheme} aaaaaaaaaaaaaaaaaaaaa`);
+    t.is(findings.length, 1, scheme);
+    t.is(findings[0]?.value, 'aaaaaaaaaaaaaaaaaaaaa');
+  }
+});
+
+test('scans pathological key-value input in linear time', (t) => {
+  for (const input of [
+    ` ${'a='.repeat(50_000)}`,
+    `password: ${'!'.repeat(100_000)}`,
+    `password="${'a'.repeat(100_000)}`,
+    'sk-'.repeat(30_000),
+    'Bearer '.repeat(20_000),
+  ]) {
+    const start = Date.now();
+    detector.detect(input);
+    t.true(Date.now() - start < 1000, `took ${Date.now() - start}ms`);
+  }
+});
