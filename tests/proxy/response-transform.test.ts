@@ -508,3 +508,83 @@ test('rehydrateOpenAIJsonBody restores the deprecated function_call arguments', 
     p: 'C:\\Users\\alice',
   });
 });
+
+function contentEvent(text: string): string {
+  return `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: text } }] })}`;
+}
+
+function sseStream(eol: string): string {
+  return [
+    `event: message${eol}${contentEvent('hello «Email_1»')}`,
+    contentEvent('and bye'),
+    'data: [DONE]',
+  ]
+    .map((event) => `${event}${eol}${eol}`)
+    .join('');
+}
+
+function runSse(chunks: string[]): string {
+  const rehydrator = createSseRehydrator('openai', SESSION);
+  let out = '';
+  for (const chunk of chunks) out += rehydrator.push(Buffer.from(chunk));
+  return out + rehydrator.flush();
+}
+
+test('createSseRehydrator treats CRLF, CR and LF framing alike', (t) => {
+  // `flush` ends with a blank event whose length depends on how the stream ended,
+  // so compare the events and ignore trailing blank lines.
+  const expected = runSse([sseStream('\n')]).trimEnd();
+  t.true(expected.includes('hello alice@example.com'));
+  t.is(runSse([sseStream('\r\n')]).trimEnd(), expected);
+  t.is(runSse([sseStream('\r')]).trimEnd(), expected);
+});
+
+test('createSseRehydrator emits CRLF events as they arrive instead of at the end', (t) => {
+  const rehydrator = createSseRehydrator('openai', SESSION);
+  const first = rehydrator.push(Buffer.from(`${contentEvent('hi «Email_1»')}\r\n\r\n`));
+  t.is(first, `${contentEvent('hi alice@example.com')}\n\n`);
+  const second = rehydrator.push(Buffer.from(`${contentEvent('more')}\r\n\r\ndata: partial`));
+  t.is(second, `${contentEvent('more')}\n\n`);
+});
+
+test('createSseRehydrator gives the same output wherever the chunks are split', (t) => {
+  for (const eol of ['\r\n', '\r', '\n']) {
+    const stream = sseStream(eol);
+    const expected = runSse([stream]);
+    for (let cut = 1; cut < stream.length; cut++) {
+      t.is(
+        runSse([stream.slice(0, cut), stream.slice(cut)]),
+        expected,
+        `${JSON.stringify(eol)} cut at ${cut}`,
+      );
+    }
+    t.is(runSse(stream.split('')), expected, `${JSON.stringify(eol)} one character at a time`);
+  }
+});
+
+test('createSseRehydrator does not mistake a CR LF pair for two line breaks', (t) => {
+  const rehydrator = createSseRehydrator('openai', SESSION);
+  t.is(rehydrator.push(Buffer.from(`${contentEvent('a')}\r`)), '');
+  t.is(rehydrator.push(Buffer.from('\n')), '');
+  t.is(rehydrator.push(Buffer.from('\r\n')), `${contentEvent('a')}\n\n`);
+});
+
+test('createSseRehydrator handles mixed line endings and a final event with no blank line', (t) => {
+  const out = runSse([
+    `${contentEvent('one «Email_1»')}\r\n\r\n`,
+    `${contentEvent('two')}\n\n`,
+    `${contentEvent('three')}\r\r`,
+    'data: [DONE]',
+  ]);
+  t.true(out.includes('one alice@example.com'));
+  t.true(out.includes('"content":"two"'));
+  t.true(out.includes('"content":"three"'));
+  t.true(out.trimEnd().endsWith('data: [DONE]'));
+});
+
+test('createSseRehydrator keeps non-data fields of a CRLF event', (t) => {
+  const out = runSse([
+    `id: 7\r\nevent: delta\r\n${contentEvent('x «Email_1»')}\r\nretry: 100\r\n\r\n`,
+  ]);
+  t.is(out.trimEnd(), `id: 7\nevent: delta\n${contentEvent('x alice@example.com')}\nretry: 100`);
+});

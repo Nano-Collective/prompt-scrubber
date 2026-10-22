@@ -193,17 +193,32 @@ export function createSseRehydrator(
   };
 }
 
+// A line ends with CRLF, a lone CR or a lone LF (HTML Living Standard, 9.2.6), and a
+// blank line, which ends an event, is two terminators in a row. A CR followed by LF is
+// one terminator, not two.
+const EOL = String.raw`(?:\r\n|\r(?!\n)|\n)`;
+const EVENT_BOUNDARY = new RegExp(`${EOL}${EOL}`, 'g');
+const LINE_BREAK = /\r\n|\r|\n/;
+
 function emitCompleteEvents(
   state: StreamState,
   input: string,
   setRemainder: (rest: string) => void,
 ): string {
-  // SSE events are separated by a blank line. The split produces an empty
-  // element at the end when the input already ends with `\n\n`, which we want
-  // to keep in `buffer` so we don't prematurely emit partial data.
-  const events = input.split('\n\n');
-  const remainder = events.pop() ?? '';
-  setRemainder(remainder);
+  // A CR at the very end may be the first half of a CRLF whose LF is in the next
+  // chunk, so it waits for more input before it can be read as a terminator.
+  const held = input.endsWith('\r') ? '\r' : '';
+  const body = held ? input.slice(0, -1) : input;
+
+  // Events are separated by a blank line. Whatever follows the last boundary is
+  // kept in the buffer so partial data is never emitted early.
+  const events: string[] = [];
+  let start = 0;
+  for (const boundary of body.matchAll(EVENT_BOUNDARY)) {
+    events.push(body.slice(start, boundary.index));
+    start = boundary.index + boundary[0].length;
+  }
+  setRemainder(body.slice(start) + held);
 
   let out = '';
   for (const event of events) {
@@ -219,11 +234,11 @@ function emitCompleteEvents(
 
 /**
  * Transform a single SSE event block. Lines beginning with `data: ` carry the
- * JSON payload. Everything else (`event:`, `id:`, `:comment`, etc.) is passed
+ * JSON payload. Output lines always end with a bare LF, whatever the upstream used. Everything else (`event:`, `id:`, `:comment`, etc.) is passed
  * through unchanged.
  */
 function transformSseEvent(state: StreamState, event: string): string {
-  const lines = event.split('\n');
+  const lines = event.split(LINE_BREAK);
   const out: string[] = [];
   for (const line of lines) {
     if (line.startsWith('data:')) {
