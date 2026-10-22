@@ -1470,3 +1470,92 @@ test('with an auth token, /healthz stays open and /metrics needs the token', asy
     await upstream.close();
   }
 });
+
+const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+test('a request keeps its placeholders when other traffic evicts its session mid-flight', async (t) => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let calls = 0;
+  const upstream = await startFakeUpstream((_req, _body, res) => {
+    calls += 1;
+    const answer = () =>
+      jsonResponse(res, 200, {
+        choices: [{ message: { role: 'assistant', content: 'mailing «Email_1»' } }],
+      });
+    if (calls === 1) void gate.then(answer);
+    else answer();
+  });
+  const sessionStore = new Map<string, Record<string, string>>();
+  const proxy = await withProxy(upstream, { sessionStore, maxSessions: 1 });
+  try {
+    const slow = chat(proxy.url, [{ role: 'user', content: 'mail slow@example.com' }]);
+    await pause(100);
+    await chat(proxy.url, [{ role: 'user', content: 'mail other@example.com' }]);
+    t.is(sessionStore.size, 1);
+    release();
+    t.is((await slow).reply, 'mailing slow@example.com');
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+});
+
+test('a streamed response keeps its placeholders when its session is evicted mid-flight', async (t) => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let calls = 0;
+  const upstream = await startFakeUpstream((_req, _body, res) => {
+    calls += 1;
+    if (calls === 1) {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      void gate.then(() => {
+        res.write(
+          `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: 'mailing «Email_1»' } }] })}\n\n`,
+        );
+        res.end('data: [DONE]\n\n');
+      });
+    } else {
+      jsonResponse(res, 200, { choices: [{ message: { role: 'assistant', content: 'ok' } }] });
+    }
+  });
+  const proxy = await withProxy(upstream, { maxSessions: 1 });
+  try {
+    const parsed = new URL(proxy.url);
+    const streamed = new Promise<string>((resolve, reject) => {
+      const req = http.request(
+        {
+          hostname: parsed.hostname,
+          port: parsed.port,
+          path: '/v1/chat/completions',
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+        },
+        (res) => {
+          let body = '';
+          res.on('data', (c: Buffer) => (body += c.toString('utf8')));
+          res.on('end', () => resolve(body));
+        },
+      );
+      req.on('error', reject);
+      req.end(
+        JSON.stringify({
+          model: 'gpt-4',
+          stream: true,
+          messages: [{ role: 'user', content: 'mail slow@example.com' }],
+        }),
+      );
+    });
+    await pause(100);
+    await chat(proxy.url, [{ role: 'user', content: 'mail other@example.com' }]);
+    release();
+    t.true((await streamed).includes('mailing slow@example.com'));
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+});

@@ -489,6 +489,10 @@ async function handleClientRequest(
   let upstreamBody: Buffer | undefined = bodyBuf;
   let parsed: unknown;
   let unscrubbedReason: string | undefined;
+  // The map this request scrubbed against. The response is rehydrated with this
+  // reference, not a fresh lookup: other traffic can evict the session from the
+  // store while the upstream is still answering.
+  let requestMap: Record<string, string> | undefined;
   if (provider === 'unknown') {
     unscrubbedReason = 'unknown provider';
   } else if (bodyBuf !== undefined && bodyBuf.length > 0) {
@@ -517,6 +521,7 @@ async function handleClientRequest(
     emit({ type: 'passthrough', reason: unscrubbedReason });
   } else if (parsed !== undefined) {
     const map = openSession(sessions, sessionId, options.maxSessions ?? DEFAULT_MAX_SESSIONS);
+    requestMap = map;
     reserveLiteralPlaceholders(provider, parsed, map);
     // The scrubber's reverse-lookup (`valueToPlaceholder`) keeps stable
     // placeholders for values it has seen before, so round-trips from the
@@ -560,7 +565,7 @@ async function handleClientRequest(
       upstreamResponse,
       res,
       provider,
-      sessions.get(sessionId) ?? {},
+      requestMap ?? sessions.get(sessionId) ?? {},
       trace,
       emit,
       log,
@@ -577,7 +582,7 @@ async function handleClientRequest(
     throw toUpstreamFailure(err);
   }
   let payload = Buffer.concat(chunks);
-  const map = sessions.get(sessionId) ?? {};
+  const map = requestMap ?? sessions.get(sessionId) ?? {};
   // Only attempt to rehydrate if this session actually has mappings. A
   // 4xx error body from the upstream carries no placeholders — running
   // it through the rehydrator is a no-op, but skipping the path entirely
