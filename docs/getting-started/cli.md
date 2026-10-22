@@ -26,7 +26,7 @@ Scrubbed: 2 entities (1 Email, 1 Secret)
 The summary counts replacements, not unique values: a value that appears three times counts three times, even though all three collapse onto the same placeholder. Reusing a session with `--session-id` does not carry counts over — the summary always describes the current run only. When nothing is detected the summary reads `Scrubbed: 0 entities`.
 
 **Options:**
-- `--session-id <id>`: Reuse an existing session map. If omitted, a new UUID is generated.
+- `--session-id <id>`: Reuse an existing session map. If omitted, a new UUID is generated. The ID becomes a file name, so it must be 1 to 255 characters and must not contain a path separator (`/` or `\`), `:`, `*`, `?`, a quote, `<`, `>`, `|` or a control character. That keeps a crafted ID from reaching outside the sessions directory; sessions saved by earlier versions under other names keep working.
 - `--disable <detectors>`: Comma-separated list of detectors to disable (e.g. `EmailDetector,PhoneDetector`).
 - `--locale <locale>`: BCP-47 tag (e.g. `de-DE`) that activates detectors scoped to that locale. Overrides `locale` in the configuration file. A malformed tag exits `1`; a well-formed tag that activates no detector warns on `stderr`, so a missing rule pack is never mistaken for a completed locale scrub.
 - `--min-confidence <value>`: Discard findings scored below this confidence (`0`-`1`). Defaults to the configured `minConfidence`, or `0` (keep everything). Whatever the threshold discards is named in the summary, so a filtered run never quietly under-redacts. See [Confidence & Tiered Detection](../features/detectors.md#confidence--tiered-detection).
@@ -178,12 +178,15 @@ By default, anything that does not match a known shape (e.g. `GET /v1/models`, `
 | Tool results | the `role: "tool"` message | `tool_result` blocks, including `text` blocks nested inside them |
 | Tool definitions | `tools[].function.description` / `tools[].custom.description`, plus `description` fields inside `parameters` | `tools[].description`, plus `description` fields inside `input_schema` |
 | Deprecated function calling | `messages[].function_call.arguments` and `functions[].description` | — |
+| Documents and search results | — | `document` blocks (`title`, `context`, and the text of a `text` or `content` source) and `search_result` blocks |
+| End-user identifiers | `user`, `safety_identifier`, `metadata` values | `metadata` values (such as `user_id`) |
+| Other request fields | `prediction.content` and the descriptions in `response_format.json_schema` | — |
 
 Tool arguments are JSON encoded as a string, so they are parsed, scrubbed value by value and re-serialised: argument *keys* and the JSON structure are preserved exactly.
 
 Messages are never dropped. An entry the proxy does not recognise — an assistant turn that carries only `tool_calls`, a block type a vendor adds tomorrow — is forwarded unchanged at its original position in `messages[]`.
 
-**Never scrubbed, by design:** tool names, tool-call ids, JSON-schema property keys and `enum` values. The model has to reproduce those verbatim for the client's own dispatch to work, so a placeholder there would break the call rather than protect anything — keep PII out of tool names and enums.
+**Never scrubbed, by design:** tool names, tool-call ids, JSON-schema property keys and `enum` values. The model has to reproduce those verbatim for the client's own dispatch to work, so a placeholder there would break the call rather than protect anything — keep PII out of tool names and enums. Also left alone: `messages[].name` (the API only accepts `[a-zA-Z0-9_-]`, so a placeholder would be rejected), `thinking` blocks (the model's own output, so they hold placeholders rather than real values, and editing one breaks its signature), and opaque payloads such as images and `base64` or `url` document sources.
 
 Responses are rehydrated in the same places as requests: message content, `tool_calls[].function.arguments` and `tool_use.input`. The client executes those tool calls on its own machine, so they are handed back with the real values in them.
 

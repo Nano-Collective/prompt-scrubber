@@ -5,6 +5,7 @@ import type { Detector, Finding, ScoredFinding } from '../types/index.js';
 // entropy alone is only ever a hint.
 const PREFIX_CONFIDENCE = 0.99;
 const BEARER_CONFIDENCE = 0.9;
+const URL_CREDENTIALS_CONFIDENCE = 0.95;
 const KEY_NAME_CONFIDENCE = 0.7;
 const ENTROPY_CONFIDENCE = 0.6;
 
@@ -35,6 +36,14 @@ const PREFIX_PATTERNS: { regex: RegExp; name: string; confidence?: number }[] = 
   { regex: /ya29\.[0-9A-Za-z\-_]{60,200}/g, name: 'Google OAuth token' },
   // AWS Access Key ID
   { regex: /(?<![A-Z0-9])(AKIA[0-9A-Z]{16})(?![A-Z0-9])/g, name: 'AWS Access Key ID' },
+  // Credentials embedded in a URL or connection string, e.g. postgres://user:pass@host/db.
+  // Matches the whole string so the user name, password and host go as one unit.
+  {
+    regex:
+      /(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]{1,30}:\/\/[^\s:@/?#'"<>]*:[^\s@/?#'"<>]+@[^\s/?#'"<>]*[^\s/?#'"<>.,;:!?)\]](?:[/?#](?:[^\s'"<>]*[^\s'"<>.,;:!?)\]])?)?/g,
+    name: 'URL credentials',
+    confidence: URL_CREDENTIALS_CONFIDENCE,
+  },
   // Bearer token in Authorization header
   {
     regex: /(?:Bearer|bearer)\s+([A-Za-z0-9\-._~+/]{20,}={0,2})/g,
