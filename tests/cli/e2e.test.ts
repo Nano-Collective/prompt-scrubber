@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'ava';
 import { computeHash } from '../../src/cli/commands/inspect.js';
 
@@ -961,7 +961,7 @@ test.serial('CLI: importing the entry file does not run the CLI', (t) => {
       '--import',
       'tsx',
       '-e',
-      `import(${JSON.stringify(cliEntry)}).then(() => console.log('imported'))`,
+      `import(${JSON.stringify(pathToFileURL(cliEntry).href)}).then(() => console.log('imported'))`,
     ],
     {
       encoding: 'utf-8',
