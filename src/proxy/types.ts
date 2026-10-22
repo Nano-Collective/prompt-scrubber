@@ -38,6 +38,12 @@ export interface ProxyOptions {
   /** Maximum request body size in bytes. Defaults to 10 MB. */
   maxBodyBytes?: number;
   /**
+   * Fail closed: refuse with `403` any request that carries a body the proxy
+   * cannot scrub (an unrecognised endpoint, a compressed body, or a body that
+   * is not JSON) instead of forwarding it untouched. Defaults to `false`.
+   */
+  strict?: boolean;
+  /**
    * Re-read `config.json` on SIGHUP and when it changes on disk. Defaults to
    * `false` for the library; the CLI enables it unless `--no-reload-config` is passed.
    */
@@ -79,6 +85,7 @@ export type ProxyEvent =
   | { type: 'scrubbed'; sessionId: string; entities: number }
   | { type: 'rehydrated'; sessionId: string; placeholders: number }
   | { type: 'passthrough'; reason: string }
+  | { type: 'blocked'; reason: string }
   | { type: 'error'; message: string }
   | {
       type: 'config_reloaded';
@@ -111,6 +118,7 @@ export type ProxyEvent =
         | 'upstream_timeout'
         | 'upstream_error'
         | 'client_aborted'
+        | 'strict_blocked'
         | 'internal';
     };
 

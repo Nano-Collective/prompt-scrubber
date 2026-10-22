@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as http from 'node:http';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import * as zlib from 'node:zlib';
 import test from 'ava';
 import { createProxyServer, SESSION_HEADER } from '../../src/proxy/proxy-server.js';
 import type { ProxyEvent, ProxyHandle, ProxyOptions } from '../../src/proxy/types.js';
@@ -200,6 +201,249 @@ test('passes through non-chat requests unchanged', async (t) => {
   }
 
   t.true(events.some((e) => e.type === 'passthrough'));
+});
+
+const PII_BODY = JSON.stringify({ input: 'Email me at alice@example.com' });
+const CHAT_BODY = JSON.stringify({
+  model: 'gpt-4',
+  messages: [{ role: 'user', content: 'Email me at alice@example.com' }],
+});
+
+test('forwards a body on an unknown endpoint untouched when strict is off', async (t) => {
+  const upstream = await startFakeUpstream((_req, _body, res) => jsonResponse(res, 200, {}));
+  const events: ProxyEvent[] = [];
+  const proxy = await withProxy(upstream, {}, events);
+  try {
+    const res = await makeRequest(`${proxy.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: PII_BODY,
+    });
+    t.is(res.status, 200);
+    t.is(upstream.requestCount(), 1);
+    t.is(upstream.lastBody(), PII_BODY);
+    t.true(events.some((e) => e.type === 'passthrough' && e.reason === 'unknown provider'));
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+});
+
+test('strict mode blocks a body on an unknown endpoint and never contacts upstream', async (t) => {
+  const upstream = await startFakeUpstream((_req, _body, res) => jsonResponse(res, 200, {}));
+  const events: ProxyEvent[] = [];
+  const proxy = await withProxy(upstream, { strict: true }, events);
+  try {
+    const res = await makeRequest(`${proxy.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: PII_BODY,
+    });
+    t.is(res.status, 403);
+    t.true(res.body.includes('strict mode'));
+    t.true(res.body.includes('unknown provider'));
+    t.false(res.body.includes('alice@example.com'));
+    t.is(upstream.requestCount(), 0);
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+
+  t.true(events.some((e) => e.type === 'blocked' && e.reason === 'unknown provider'));
+  t.false(events.some((e) => e.type === 'passthrough'));
+  const responses = events.filter((e) => e.type === 'response');
+  t.is(responses.length, 1);
+  t.like(responses[0], { status: 403, outcome: 'rejected', errorKind: 'strict_blocked' });
+});
+
+test('strict mode blocks provider-specific paths other than the two it can scrub', async (t) => {
+  const upstream = await startFakeUpstream((_req, _body, res) => jsonResponse(res, 200, {}));
+  const proxy = await withProxy(upstream, { strict: true });
+  try {
+    for (const route of [
+      '/v1beta/models/gemini-pro:generateContent',
+      '/openai/deployments/gpt-4/chat/completions?api-version=2024-02-01',
+      '/api/chat',
+    ]) {
+      const res = await makeRequest(`${proxy.url}${route}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: PII_BODY,
+      });
+      t.is(res.status, 403, route);
+    }
+    t.is(upstream.requestCount(), 0);
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+});
+
+test('strict mode blocks a gzip body on a recognised endpoint', async (t) => {
+  const upstream = await startFakeUpstream((_req, _body, res) => jsonResponse(res, 200, {}));
+  const events: ProxyEvent[] = [];
+  const proxy = await withProxy(upstream, { strict: true }, events);
+  try {
+    const res = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+      const parsed = new URL(proxy.url);
+      const req = http.request(
+        {
+          hostname: parsed.hostname,
+          port: parsed.port,
+          path: '/v1/chat/completions',
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'content-encoding': 'gzip' },
+        },
+        (r) => {
+          const chunks: Buffer[] = [];
+          r.on('data', (c: Buffer) => chunks.push(c));
+          r.on('end', () =>
+            resolve({ status: r.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') }),
+          );
+        },
+      );
+      req.on('error', reject);
+      req.end(zlib.gzipSync(Buffer.from(CHAT_BODY)));
+    });
+    t.is(res.status, 403);
+    t.true(res.body.includes('compressed body'));
+    t.is(upstream.requestCount(), 0);
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+  t.true(events.some((e) => e.type === 'blocked' && e.reason === 'compressed body'));
+});
+
+test('a gzip body is reported as compressed, and still forwarded, when strict is off', async (t) => {
+  const upstream = await startFakeUpstream((_req, _body, res) => jsonResponse(res, 200, {}));
+  const events: ProxyEvent[] = [];
+  const proxy = await withProxy(upstream, {}, events);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const parsed = new URL(proxy.url);
+      const req = http.request(
+        {
+          hostname: parsed.hostname,
+          port: parsed.port,
+          path: '/v1/chat/completions',
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'content-encoding': 'gzip' },
+        },
+        (r) => {
+          r.resume();
+          r.on('end', () => resolve());
+        },
+      );
+      req.on('error', reject);
+      req.end(zlib.gzipSync(Buffer.from(CHAT_BODY)));
+    });
+    t.is(upstream.requestCount(), 1);
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+  t.true(events.some((e) => e.type === 'passthrough' && e.reason === 'compressed body'));
+});
+
+test('strict mode blocks a non-JSON body on a recognised endpoint', async (t) => {
+  const upstream = await startFakeUpstream((_req, _body, res) => jsonResponse(res, 200, {}));
+  const events: ProxyEvent[] = [];
+  const proxy = await withProxy(upstream, { strict: true }, events);
+  try {
+    const res = await makeRequest(`${proxy.url}/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'text/plain' },
+      body: 'Email me at alice@example.com',
+    });
+    t.is(res.status, 403);
+    t.true(res.body.includes('non-json body'));
+    t.is(upstream.requestCount(), 0);
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+  t.true(events.some((e) => e.type === 'blocked' && e.reason === 'non-json body'));
+});
+
+test('strict mode still scrubs and forwards a recognised JSON request', async (t) => {
+  const upstream = await startFakeUpstream((_req, body, res) => {
+    t.false(body.includes('alice@example.com'));
+    t.true(body.includes('«Email_1»'));
+    jsonResponse(res, 200, { choices: [{ message: { role: 'assistant', content: 'ok' } }] });
+  });
+  const events: ProxyEvent[] = [];
+  const proxy = await withProxy(upstream, { strict: true }, events);
+  try {
+    const res = await makeRequest(`${proxy.url}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: CHAT_BODY,
+    });
+    t.is(res.status, 200);
+    t.is(upstream.requestCount(), 1);
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+  t.false(events.some((e) => e.type === 'blocked'));
+  t.true(events.some((e) => e.type === 'scrubbed'));
+});
+
+test('strict mode accepts content-encoding: identity on a recognised endpoint', async (t) => {
+  const upstream = await startFakeUpstream((_req, body, res) => {
+    t.false(body.includes('alice@example.com'));
+    jsonResponse(res, 200, {});
+  });
+  const proxy = await withProxy(upstream, { strict: true });
+  try {
+    const res = await makeRequest(`${proxy.url}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-encoding': 'identity' },
+      body: CHAT_BODY,
+    });
+    t.is(res.status, 200);
+    t.is(upstream.requestCount(), 1);
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+});
+
+test('strict mode lets bodyless requests through, including on unknown endpoints', async (t) => {
+  const upstream = await startFakeUpstream((_req, _body, res) =>
+    jsonResponse(res, 200, { data: [{ id: 'gpt-4' }] }),
+  );
+  const proxy = await withProxy(upstream, { strict: true });
+  try {
+    const get = await makeRequest(`${proxy.url}/v1/models`, { method: 'GET' });
+    t.is(get.status, 200);
+    t.true(get.body.includes('gpt-4'));
+    const emptyPost = await makeRequest(`${proxy.url}/v1/embeddings`, { method: 'POST' });
+    t.is(emptyPost.status, 200);
+    t.is(upstream.requestCount(), 2);
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+});
+
+test('strict mode is visible in /metrics as a blocked counter', async (t) => {
+  const upstream = await startFakeUpstream((_req, _body, res) => jsonResponse(res, 200, {}));
+  const proxy = await withProxy(upstream, { strict: true });
+  try {
+    await makeRequest(`${proxy.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: PII_BODY,
+    });
+    const metrics = await makeRequest(`${proxy.url}/metrics`, { method: 'GET' });
+    t.regex(metrics.body, /prompt_scrub_blocked_total\{reason="unknown provider"\} 1/);
+    t.regex(metrics.body, /prompt_scrub_errors_total\{kind="strict_blocked"\} 1/);
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
 });
 
 test('reuses an inbound session header to resolve existing placeholders', async (t) => {

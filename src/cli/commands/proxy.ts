@@ -1,9 +1,9 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { Command } from 'commander';
+import { loadConfig } from '../../core/config.js';
 import { runProxy } from '../../proxy/proxy-server.js';
 import type { ScrubCliOptions } from '../../proxy/types.js';
-import { loadConfig } from '../../core/config.js';
 import { gcSessions } from '../../session/storage.js';
 
 interface ProxyCommandOptions extends ScrubCliOptions {
@@ -21,6 +21,8 @@ interface ProxyCommandOptions extends ScrubCliOptions {
   gc?: boolean;
   /** False when `--no-reload-config` was passed. */
   reloadConfig?: boolean;
+  /** True when `--strict` was passed: block requests that cannot be scrubbed. */
+  strict?: boolean;
 }
 
 function parseList(value: string | undefined): string[] {
@@ -98,6 +100,7 @@ export async function runProxyCommand(options: ProxyCommandOptions): Promise<voi
     host,
     verbose: options.verbose ?? false,
     reloadConfig: options.reloadConfig !== false,
+    strict: options.strict === true,
     metrics: options.metrics !== false,
     ...(auditLog !== undefined ? { auditLog } : {}),
     ...(options.version !== undefined ? { version: options.version } : {}),
@@ -132,6 +135,10 @@ export function setupProxyCommand(program: Command) {
       'Comma-separated list of hostnames to pass-through in URLs (subdomains are implicitly allowed)',
     )
     .option('-v, --verbose', 'Log a one-line summary of every proxied request to stderr')
+    .option(
+      '--strict',
+      'Fail closed: block requests whose body cannot be scrubbed (unknown endpoint, compressed or non-JSON body) instead of forwarding them',
+    )
     .option('--no-reload-config', 'Do not reload config.json on SIGHUP or when it changes on disk')
     .option(
       '--audit-log <path>',

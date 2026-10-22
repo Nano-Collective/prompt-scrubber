@@ -338,6 +338,33 @@ test.serial('CLI: proxy --help shows provider options and the session header', (
   t.true(result.stdout.includes('--target'));
   t.true(result.stdout.includes('--verbose'));
   t.true(result.stdout.includes('--no-gc'));
+  t.true(result.stdout.includes('--strict '));
+});
+
+test.serial('CLI: proxy --strict announces fail-closed mode at startup', (t) => {
+  const child = spawnSync(
+    process.execPath,
+    [
+      '--import',
+      'tsx',
+      cliEntry,
+      'proxy',
+      '--target',
+      'http://127.0.0.1:1',
+      '--port',
+      '0',
+      '--strict',
+    ],
+    {
+      encoding: 'utf-8',
+      env: {
+        ...process.env,
+        PROMPT_SCRUB_CONFIG_DIR: path.join(tmpConfigDir, 'prompt-scrub'),
+      },
+      timeout: 3000,
+    },
+  );
+  t.true(child.stderr.includes('[proxy] Strict mode'), `no strict notice: ${child.stderr}`);
 });
 
 test.serial('CLI: proxy refuses to start without --target', (t) => {

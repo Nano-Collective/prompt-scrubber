@@ -164,7 +164,9 @@ The proxy recognises two providers by URL shape:
 | `…/v1/chat/completions` | OpenAI |
 | `…/v1/messages` | Anthropic |
 
-Anything that does not match a known shape (e.g. `GET /v1/models`, `POST /v1/embeddings`) is forwarded byte-for-byte without modification. This is the safe default: enabling a new vendor is additive.
+By default, anything that does not match a known shape (e.g. `GET /v1/models`, `POST /v1/embeddings`) is forwarded byte-for-byte without modification, so enabling a new vendor is additive. That also means a body on an unrecognised endpoint (OpenAI `/v1/responses`, Gemini, Azure OpenAI deployments, Ollama `/api/chat`) reaches the upstream **unscrubbed**. A body that is compressed (`Content-Encoding: gzip`, `br`, `deflate`) or is not valid JSON is forwarded unscrubbed too, even on a recognised endpoint. Each of these is counted in `prompt_scrub_passthrough_total{reason}` with the reason `unknown provider`, `compressed body` or `non-json body`.
+
+**Strict mode:** pass `--strict` to fail closed. Any request that carries a body the proxy cannot scrub is refused with `403` and is never sent upstream. The response names the reason, never the body. Requests with no body (such as `GET /v1/models`) and recognised JSON requests behave as before. Blocked requests are counted in `prompt_scrub_blocked_total{reason}` and show up in the audit log with `outcome: "rejected"` and `errorKind: "strict_blocked"`. Use it whenever the proxy is the only thing standing between your clients and a third party.
 
 **Scrubbed fields.** Every field of a recognised body that carries free text:
 
@@ -199,6 +201,7 @@ Responses are rehydrated in the same places as requests: message content, `tool_
 - `--host <host>`: Local interface to bind (default `127.0.0.1`).
 - `--disable <detectors>`, `--enable <detectors>`, `--strict-name`, `--code-tell-terms`, `--url-allowlist`: Same scrubber options as the `scrub` command.
 - `-v, --verbose`: Log a one-line summary of every proxied request to `stderr` (including the scrubbed/rehydrated counts and session ID).
+- `--strict`: Fail closed. Refuse with `403` any request whose body cannot be scrubbed (unknown endpoint, compressed body, or non-JSON body) instead of forwarding it. Off by default.
 - `--audit-log <path>`: Append one JSON line per completed request to this file. Records hold counts, detector categories, timings and the request path. They never hold values, bodies, headers or query strings. The file is created with mode `0600`.
 - `--no-metrics`: Do not serve `/healthz` and `/metrics`. Those paths are then forwarded upstream like any other path.
 - `--no-gc`: Skip the startup session-garbage-collection pass.
@@ -217,7 +220,7 @@ Responses are rehydrated in the same places as requests: message content, `tool_
 - `GET /healthz` returns `{"status":"ok","uptimeSeconds":…,"version":"…"}`.
 - `GET /metrics` returns Prometheus text (`text/plain; version=0.0.4`). Add `?format=json` or `Accept: application/json` for JSON.
 
-Metrics: `prompt_scrub_requests_total{provider,status_class}`, `prompt_scrub_entities_redacted_total{category}`, `prompt_scrub_placeholders_rehydrated_total`, `prompt_scrub_passthrough_total{reason}`, `prompt_scrub_errors_total{kind}`, `prompt_scrub_audit_dropped_total`, `prompt_scrub_request_duration_seconds` (histogram), and the gauges `prompt_scrub_inflight_requests`, `prompt_scrub_uptime_seconds` and `prompt_scrub_build_info`. Rehydration counts for streamed responses are approximate.
+Metrics: `prompt_scrub_requests_total{provider,status_class}`, `prompt_scrub_entities_redacted_total{category}`, `prompt_scrub_placeholders_rehydrated_total`, `prompt_scrub_passthrough_total{reason}`, `prompt_scrub_blocked_total{reason}`, `prompt_scrub_errors_total{kind}`, `prompt_scrub_audit_dropped_total`, `prompt_scrub_request_duration_seconds` (histogram), and the gauges `prompt_scrub_inflight_requests`, `prompt_scrub_uptime_seconds` and `prompt_scrub_build_info`. Rehydration counts for streamed responses are approximate.
 
 ```yaml
 scrape_configs:
@@ -233,10 +236,11 @@ An audit record looks like this:
 {"ts":"2026-10-14T09:12:03.418Z","type":"response","requestId":"…","sessionId":"…","method":"POST","path":"/v1/chat/completions","provider":"openai","status":200,"durationMs":412.7,"streaming":false,"outcome":"ok","entities":1,"byCategory":{"Email":1},"rehydrated":1}
 ```
 
-`outcome` is one of `ok`, `passthrough` (forwarded without scrubbing), `rejected` (413) or `error`. When it is `error`, `errorKind` is one of `upstream_timeout`, `upstream_error`, `client_aborted` or `internal`.
+`outcome` is one of `ok`, `passthrough` (forwarded without scrubbing), `rejected` (413, or 403 in strict mode) or `error`. When it is `rejected` or `error`, `errorKind` is one of `body_too_large`, `strict_blocked`, `upstream_timeout`, `upstream_error`, `client_aborted` or `internal`.
 
 **Limitations:**
 
+- The proxy cannot decompress request bodies. Without `--strict` a compressed body is forwarded as received; with it, the request is blocked. Most SDKs send uncompressed JSON by default.
 - Request bodies larger than 10 MB are rejected with `413 Payload Too Large`. Tune with `maxBodyBytes` on the programmatic `ProxyOptions`.
 - In streamed *text* (`delta.content`, `text_delta`), a placeholder split across two separate SSE events is forwarded as-is: the reader sees `«Email_1»` instead of the value, and nothing is corrupted. Streamed tool-call arguments do not have this gap, because code acts on them — see **Streaming** above.
 - A value nested deeper than 64 levels inside tool arguments, a tool schema, or a chain of `tool_result` blocks is forwarded unscrubbed. The cap keeps a hostile body from exhausting the stack; nothing legitimate nests that deep.

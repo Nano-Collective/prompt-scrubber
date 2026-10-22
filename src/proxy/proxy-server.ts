@@ -1,13 +1,13 @@
 import * as crypto from 'node:crypto';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import * as http from 'node:http';
 import * as https from 'node:https';
-import type { IncomingMessage, ServerResponse } from 'node:http';
 import { getConfigDir, loadConfig, readConfigFile } from '../core/config.js';
 import { loadConfiguredRulePacks } from '../core/rule-packs.js';
 import { scrub } from '../core/scrub.js';
 import type { ScrubOptions } from '../types/index.js';
 import { AuditLog } from './audit-log.js';
-import { createConfigReloader, type ConfigReloader } from './config-reloader.js';
+import { type ConfigReloader, createConfigReloader } from './config-reloader.js';
 import { ProxyMetrics } from './metrics.js';
 import { detectProvider, scrubChatBody } from './request-transform.js';
 import { createSseRehydrator, rehydrateJsonBody } from './response-transform.js';
@@ -236,6 +236,9 @@ export async function createProxyServer(
       if (options.auditLog !== undefined) {
         log(`[proxy] Audit log: ${options.auditLog}`);
       }
+      if (options.strict) {
+        log('[proxy] Strict mode: requests with a body that cannot be scrubbed are blocked.');
+      }
       if (serveObservability) {
         log(`[proxy] Metrics: ${url}/metrics  Health: ${url}/healthz`);
         if (!LOOPBACK_HOSTS.has(host)) {
@@ -351,7 +354,7 @@ function finishTrace(
   trace.finished = true;
 
   const outcome = errorKind
-    ? errorKind === 'body_too_large'
+    ? errorKind === 'body_too_large' || errorKind === 'strict_blocked'
       ? 'rejected'
       : 'error'
     : trace.passthroughReason !== undefined
@@ -426,36 +429,53 @@ async function handleClientRequest(
   }
 
   // Build the upstream request body. For known providers we scrub the JSON;
-  // everything else is forwarded as-is.
+  // everything else is forwarded as-is, unless `strict` is on and there is a
+  // body we would be sending out unscrubbed.
   let upstreamBody: Buffer | undefined = bodyBuf;
-  if (provider !== 'unknown' && bodyBuf && bodyBuf.length > 0) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(bodyBuf.toString('utf8'));
-    } catch {
-      trace.passthroughReason = 'non-json body';
-      emit({ type: 'passthrough', reason: 'non-json body' });
-    }
-    if (parsed !== undefined) {
-      const map = sessions.get(sessionId) ?? {};
-      // The scrubber's reverse-lookup (`valueToPlaceholder`) keeps stable
-      // placeholders for values it has seen before, so round-trips from the
-      // client (which sends placeholders) and fresh PII both end up
-      // referencing the same map without an explicit rehydrate step.
-      const outcome = scrubChatBody(provider, parsed, (text) => {
-        const scrubbed = scrubTextSync(text, sessionId, map, baseScrubOptions);
-        mergeCounts(trace.byCategory, scrubbed.byCategory);
-        return scrubbed;
-      });
-      trace.entities = outcome.entities;
-      upstreamBody = Buffer.from(JSON.stringify(outcome.body), 'utf8');
-      if (outcome.entities > 0) {
-        emit({ type: 'scrubbed', sessionId, entities: outcome.entities });
+  let parsed: unknown;
+  let unscrubbedReason: string | undefined;
+  if (provider === 'unknown') {
+    unscrubbedReason = 'unknown provider';
+  } else if (bodyBuf !== undefined && bodyBuf.length > 0) {
+    if (isContentEncoded(req.headers['content-encoding'])) {
+      unscrubbedReason = 'compressed body';
+    } else {
+      try {
+        parsed = JSON.parse(bodyBuf.toString('utf8'));
+      } catch {
+        unscrubbedReason = 'non-json body';
       }
     }
-  } else if (provider === 'unknown') {
-    trace.passthroughReason = 'unknown provider';
-    emit({ type: 'passthrough', reason: 'unknown provider' });
+  }
+
+  if (unscrubbedReason !== undefined) {
+    if (options.strict && bodyBuf !== undefined && bodyBuf.length > 0) {
+      res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' });
+      res.end(
+        `prompt-scrub proxy: request blocked in strict mode (${unscrubbedReason}). It was not forwarded upstream.\n`,
+      );
+      emit({ type: 'blocked', reason: unscrubbedReason });
+      finishTrace(trace, emit, 403, 'strict_blocked');
+      return;
+    }
+    trace.passthroughReason = unscrubbedReason;
+    emit({ type: 'passthrough', reason: unscrubbedReason });
+  } else if (parsed !== undefined) {
+    const map = sessions.get(sessionId) ?? {};
+    // The scrubber's reverse-lookup (`valueToPlaceholder`) keeps stable
+    // placeholders for values it has seen before, so round-trips from the
+    // client (which sends placeholders) and fresh PII both end up
+    // referencing the same map without an explicit rehydrate step.
+    const outcome = scrubChatBody(provider, parsed, (text) => {
+      const scrubbed = scrubTextSync(text, sessionId, map, baseScrubOptions);
+      mergeCounts(trace.byCategory, scrubbed.byCategory);
+      return scrubbed;
+    });
+    trace.entities = outcome.entities;
+    upstreamBody = Buffer.from(JSON.stringify(outcome.body), 'utf8');
+    if (outcome.entities > 0) {
+      emit({ type: 'scrubbed', sessionId, entities: outcome.entities });
+    }
   }
 
   const upstreamHeaders = buildUpstreamHeaders(req.headers, options.target);
@@ -591,6 +611,15 @@ function readBody(req: IncomingMessage, maxBodyBytes: number): Promise<Buffer> {
     });
     req.on('error', (err) => rejectOnce(err));
   });
+}
+
+/** True when a `Content-Encoding` header names anything other than `identity`. */
+function isContentEncoded(header: string | string[] | undefined): boolean {
+  const value = Array.isArray(header) ? header.join(',') : (header ?? '');
+  return value
+    .split(',')
+    .map((coding) => coding.trim().toLowerCase())
+    .some((coding) => coding !== '' && coding !== 'identity');
 }
 
 function hasMeaningfulBody(req: IncomingMessage): boolean {

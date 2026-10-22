@@ -76,6 +76,23 @@ test('errors and passthrough are counted by kind and reason', (t) => {
   t.regex(text, /prompt_scrub_requests_total\{provider="openai",status_class="5xx"\} 1/);
 });
 
+test('blocked requests are counted by reason', (t) => {
+  const metrics = new ProxyMetrics('x');
+  metrics.observe({ type: 'blocked', reason: 'unknown provider' });
+  metrics.observe({ type: 'blocked', reason: 'unknown provider' });
+  metrics.observe({ type: 'blocked', reason: 'compressed body' });
+
+  const text = metrics.renderPrometheus();
+  t.regex(text, /prompt_scrub_blocked_total\{reason="unknown provider"\} 2/);
+  t.regex(text, /prompt_scrub_blocked_total\{reason="compressed body"\} 1/);
+  t.deepEqual(
+    (metrics.toJSON().blocked as { labels: Record<string, string>; value: number }[]).map(
+      (s) => s.value,
+    ),
+    [1, 2],
+  );
+});
+
 test('label values are escaped in the Prometheus output', (t) => {
   const metrics = new ProxyMetrics('x');
   metrics.observe(response({ entities: 1, byCategory: { 'a"b\\c': 1 } }));
