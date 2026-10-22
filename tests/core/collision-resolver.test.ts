@@ -374,3 +374,49 @@ test('two different categories at the same default priority do not enter the loc
     'the longer value wins; category, not localeScoped, decided it',
   );
 });
+
+test('resolves tens of thousands of disjoint findings quickly', (t) => {
+  const findings = Array.from({ length: 20_000 }, (_, i) =>
+    makeFinding('Email', i * 20, i * 20 + 15),
+  );
+  const start = Date.now();
+  const result = resolveCollisions(findings);
+  t.is(result.length, 20_000);
+  t.true(Date.now() - start < 1000, `took ${Date.now() - start}ms`);
+});
+
+test('resolves thousands of overlapping findings quickly and keeps the higher priority', (t) => {
+  const findings = Array.from({ length: 3_000 }, (_, i) => [
+    makeFinding('Url', i * 40, i * 40 + 30, 'u'.repeat(30)),
+    makeFinding('Email', i * 40 + 10, i * 40 + 25, 'e'.repeat(15)),
+  ]).flat();
+  const start = Date.now();
+  const result = resolveCollisions(findings);
+  t.true(Date.now() - start < 1000, `took ${Date.now() - start}ms`);
+  t.is(result.filter((f) => f.category === 'Email').length, 3_000);
+  t.is(result.filter((f) => f.category === 'Url').length, 6_000);
+});
+
+test('output is sorted and non-overlapping for arbitrary mixed input', (t) => {
+  const categories = ['Secret', 'Email', 'Url', 'Path', 'Phone', 'Address', 'Custom'];
+  let seed = 7;
+  const next = (n: number) => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return Math.floor((seed / 2 ** 32) * n);
+  };
+  for (let round = 0; round < 300; round++) {
+    const findings = Array.from({ length: 1 + next(25) }, () => {
+      const start = next(80);
+      const end = Math.min(100, start + 1 + next(20));
+      return makeFinding(categories[next(categories.length)]!, start, end, 'x'.repeat(end - start));
+    });
+    const result = resolveCollisions(findings);
+    for (let i = 1; i < result.length; i++) {
+      t.true(result[i - 1]!.span[0] <= result[i]!.span[0]);
+      t.true(
+        result[i - 1]!.span[1] <= result[i]!.span[0],
+        JSON.stringify(result.map((f) => f.span)),
+      );
+    }
+  }
+});

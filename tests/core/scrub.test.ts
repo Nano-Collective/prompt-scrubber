@@ -1194,3 +1194,17 @@ test('counts findings for a category named like an Object.prototype member', (t)
   t.is(Object.keys(result.stats.byCategory).join(), 'constructor');
   t.is(result.stats.byCategory.constructor, 1);
 });
+
+test('scrubs a document with thousands of findings in well under a second', (t) => {
+  const emails = Array.from({ length: 10_000 }, (_, i) => `user${i}@example.com`);
+  const start = Date.now();
+  const result = scrub({ content: emails.join(' '), sessionMap: {} });
+  t.true(Date.now() - start < 1000, `took ${Date.now() - start}ms`);
+  t.is(result.stats.totalEntities, 10_000);
+  t.false((result.scrubbedContent as string).includes('@example.com'));
+});
+
+test('numbers placeholders right-to-left and rebuilds the text in order', (t) => {
+  const result = scrub({ content: 'a alice@x.com b bob@y.org c', sessionMap: {} });
+  t.is(result.scrubbedContent, 'a «Email_2» b «Email_1» c');
+});

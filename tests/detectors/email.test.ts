@@ -75,3 +75,21 @@ test('scores a matched address as a high-confidence exact pattern', (t) => {
   t.is(findings[0]?.confidence, 0.95);
   t.is(findings[0]?.method, 'exact-pattern');
 });
+
+test('an address with no completing domain does not stall the scan', (t) => {
+  for (const input of [
+    `a@${'-'.repeat(100_000)}`,
+    `a@${'a-'.repeat(50_000)}`,
+    `a@a.${'b-'.repeat(50_000)}`,
+    `a@${'a.a-'.repeat(25_000)}`,
+  ]) {
+    const start = Date.now();
+    detector.detect(input);
+    t.true(Date.now() - start < 1000, `took ${Date.now() - start}ms`);
+  }
+});
+
+test('still matches a local part that starts with a hyphen or plus', (t) => {
+  t.is(detector.detect('mail -lead@example.com now')[0]?.value, '-lead@example.com');
+  t.is(detector.detect('mail +tag@example.com now')[0]?.value, '+tag@example.com');
+});
