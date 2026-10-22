@@ -52,6 +52,15 @@ test('isMainModule matches the same path and rejects other scripts', (t) => {
   t.false(isMainModule(path.join(os.tmpdir(), 'does-not-exist.js'), __filename));
 });
 
+test('isMainModule compares what the paths resolve to, not how they are spelled', (t) => {
+  // Two spellings of one file: different strings, same real path. No symlink needed.
+  // Built by hand: `path.join` would normalise the `..` away.
+  const respelled = [__dirname, '..', 'cli', path.basename(__filename)].join(path.sep);
+  t.not(respelled, __filename);
+  t.true(isMainModule(respelled, __filename));
+  t.true(isMainModule([__dirname, '.', path.basename(__filename)].join(path.sep), __filename));
+});
+
 test('isMainModule resolves a symlink to the script, as a global npm install uses', (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'prompt-bin-'));
   t.teardown(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -59,7 +68,8 @@ test('isMainModule resolves a symlink to the script, as a global npm install use
   try {
     fs.symlinkSync(__filename, link);
   } catch {
-    t.pass('symlinks are not permitted here');
+    t.log('SKIPPED: this system does not allow creating symlinks');
+    t.pass();
     return;
   }
   t.true(isMainModule(link, __filename));

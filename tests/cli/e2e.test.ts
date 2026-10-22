@@ -933,7 +933,8 @@ test.serial('CLI: runs when started through a symlink, as a global npm install d
   try {
     fs.symlinkSync(cliEntry, link);
   } catch {
-    t.pass('symlinks are not permitted here');
+    t.log('SKIPPED: this system does not allow creating symlinks');
+    t.pass();
     return;
   }
 
@@ -948,4 +949,29 @@ test.serial('CLI: runs when started through a symlink, as a global npm install d
 
   t.is(result.status, 0);
   t.true(result.stdout.includes('Contact «Email_1»'), result.stdout + result.stderr);
+});
+
+test.serial('CLI: importing the entry file does not run the CLI', (t) => {
+  // `-e` leaves argv[1] undefined, which is what any importer looks like. If the
+  // entry check accepted that, commander would parse an empty command line and
+  // print its help text instead of staying quiet.
+  const result = spawnSync(
+    process.execPath,
+    [
+      '--import',
+      'tsx',
+      '-e',
+      `import(${JSON.stringify(cliEntry)}).then(() => console.log('imported'))`,
+    ],
+    {
+      encoding: 'utf-8',
+      env: {
+        ...process.env,
+        PROMPT_SCRUB_CONFIG_DIR: path.join(tmpConfigDir, 'prompt-scrub'),
+      },
+    },
+  );
+
+  t.is(result.status, 0, result.stderr);
+  t.is(result.stdout.trim(), 'imported');
 });
