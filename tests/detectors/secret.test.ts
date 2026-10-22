@@ -1,4 +1,5 @@
 import test from 'ava';
+import { scrub } from '../../src/core/scrub.js';
 import { SecretDetector } from '../../src/detectors/secret.js';
 
 const detector = new SecretDetector();
@@ -140,4 +141,33 @@ test('a wider low-confidence overlap does not downgrade a vendor-prefixed key', 
   t.is(findings[0]?.value, 'AKIAIOSFODNN7EXAMPLE.');
   t.is(findings[0]?.confidence, 0.99);
   t.is(findings[0]?.method, 'exact-pattern');
+});
+
+test('detects an OpenAI project key in full, past 80 characters', (t) => {
+  const key = `sk-proj-${'A1b2C3d4_-'.repeat(15)}T3BlbkFJ${'x9Y8z7W6'.repeat(2)}`;
+  t.true(key.length > 160);
+  const findings = detector.detect(`rotate ${key} today`);
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, key);
+});
+
+test('detects an Anthropic key in full', (t) => {
+  const key = `sk-ant-api03-${'Zz9Yy8Xx-_'.repeat(9)}AA`;
+  t.true(key.length > 100);
+  const findings = detector.detect(`the key is "${key}" in the logs`);
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, key);
+});
+
+test('a long key ends at the first character that cannot be part of it', (t) => {
+  const key = `sk-svcacct-${'Qq1Ww2Ee3Rr4'.repeat(10)}`;
+  const findings = detector.detect(`use (${key}), then rotate`);
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, key);
+});
+
+test('a long key leaves no tail behind after scrubbing', (t) => {
+  const key = `sk-proj-${'0123456789'.repeat(16)}`;
+  const result = scrub({ content: `rotate ${key} today`, sessionMap: {} });
+  t.is(result.scrubbedContent, 'rotate «Secret_1» today');
 });

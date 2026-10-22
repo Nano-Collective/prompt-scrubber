@@ -12,9 +12,11 @@ const ENTROPY_CONFIDENCE = 0.6;
 // These are high-precision patterns: specific vendor prefixes + characteristic lengths.
 // `confidence` defaults to PREFIX_CONFIDENCE below; only Bearer overrides it.
 const PREFIX_PATTERNS: { regex: RegExp; name: string; confidence?: number }[] = [
-  // OpenAI: sk-...48 alphanumeric chars (new format: sk-proj-..., sk-svcacct-...)
+  // OpenAI and Anthropic: sk-... with no upper bound on the length. Project keys
+  // (sk-proj-) run to about 164 characters and Anthropic keys to about 108, so a
+  // cap would redact the head of a key and leave the tail in the clear.
   {
-    regex: /sk-(?:proj-|svcacct-|ant-api\d+-)?[A-Za-z0-9_-]{20,80}/g,
+    regex: /sk-(?:proj-|svcacct-|ant-api\d+-)?[A-Za-z0-9_-]{20,}/g,
     name: 'OpenAI/Anthropic key',
   },
   // GitHub personal access tokens
