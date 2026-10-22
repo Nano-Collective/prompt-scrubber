@@ -13,7 +13,10 @@ const BARE_API_REGEX =
 const FULL_URL_CONFIDENCE = 0.95;
 const BARE_URL_CONFIDENCE = 0.7;
 
-const TRAILING_PUNCTUATION = new Set(['.', ',', ':', ';', '!', '?', "'", '*']);
+// Only marks that are almost never the real end of a URL. `!`, `;`, `'` and
+// `*` are valid URL characters, and trimming them would leave the last
+// character of a query value unredacted.
+const TRAILING_PUNCTUATION = new Set(['.', ',', ':', '?']);
 
 function trimTrailingUrlPunctuation(url: string): string {
   let trimmed = url;

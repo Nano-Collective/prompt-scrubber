@@ -92,7 +92,7 @@ test('preserves balanced parentheses in URL when wrapped in prose parentheses', 
 });
 
 test('strips various trailing sentence punctuation marks', (t) => {
-  for (const p of ['.', ',', ':', ';', '!', '?', "'", '*']) {
+  for (const p of ['.', ',', ':', '?']) {
     const text = `Look at https://example.com/api${p}`;
     const findings = detector.detect(text);
     t.is(findings.length, 1);
@@ -100,6 +100,20 @@ test('strips various trailing sentence punctuation marks', (t) => {
     const [start, end] = findings[0]!.span;
     t.is(text.slice(start, end), 'https://example.com/api');
   }
+});
+
+test('keeps trailing characters that are valid URL syntax', (t) => {
+  for (const p of ['!', ';', "'", '*']) {
+    const text = `Look at https://example.com/api?token=abc${p}`;
+    const findings = detector.detect(text);
+    t.is(findings.length, 1);
+    t.is(findings[0]?.value, `https://example.com/api?token=abc${p}`);
+  }
+});
+
+test('trims an unmatched closing parenthesis but keeps an unmatched opening one', (t) => {
+  t.is(detector.detect('https://example.com/a)b)')[0]?.value, 'https://example.com/a)b');
+  t.is(detector.detect('https://example.com/a(b')[0]?.value, 'https://example.com/a(b');
 });
 
 test('strips trailing punctuation from bare API endpoints', (t) => {
