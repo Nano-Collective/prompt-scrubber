@@ -13,6 +13,53 @@ const BARE_API_REGEX =
 const FULL_URL_CONFIDENCE = 0.95;
 const BARE_URL_CONFIDENCE = 0.7;
 
+// Only marks that are almost never the real end of a URL. `!`, `;`, `'` and
+// `*` are valid URL characters, and trimming them would leave the last
+// character of a query value unredacted.
+const TRAILING_PUNCTUATION = new Set(['.', ',', ':', '?']);
+
+function trimTrailingUrlPunctuation(url: string): string {
+  let trimmed = url;
+  while (trimmed.length > 0) {
+    const lastChar = trimmed[trimmed.length - 1]!;
+    if (TRAILING_PUNCTUATION.has(lastChar)) {
+      trimmed = trimmed.slice(0, -1);
+      continue;
+    }
+    if (lastChar === ')') {
+      const openCount = (trimmed.match(/\(/g) ?? []).length;
+      const closeCount = (trimmed.match(/\)/g) ?? []).length;
+      if (closeCount > openCount) {
+        trimmed = trimmed.slice(0, -1);
+        continue;
+      }
+    }
+    if (lastChar === ']') {
+      const openCount = (trimmed.match(/\[/g) ?? []).length;
+      const closeCount = (trimmed.match(/\]/g) ?? []).length;
+      if (closeCount > openCount) {
+        trimmed = trimmed.slice(0, -1);
+        continue;
+      }
+    }
+    break;
+  }
+  return trimmed;
+}
+
+function isValidFullUrl(url: string): boolean {
+  if (!url.startsWith('http://') && !url.startsWith('https://')) return false;
+  const rest = url.replace(/^https?:\/\//, '');
+  return rest.length > 0 && !rest.startsWith('/');
+}
+
+function isValidBareApi(url: string): boolean {
+  const slashIndex = url.indexOf('/');
+  if (slashIndex <= 0) return false;
+  const host = url.slice(0, slashIndex);
+  return host.includes('.');
+}
+
 export class UrlDetector implements Detector {
   readonly name = 'UrlDetector';
 
@@ -35,7 +82,9 @@ export class UrlDetector implements Detector {
     FULL_URL_REGEX.lastIndex = 0;
     let match: RegExpExecArray | null;
     while ((match = FULL_URL_REGEX.exec(text)) !== null) {
-      const value = match[0];
+      const originalValue = match[0];
+      const value = trimTrailingUrlPunctuation(originalValue);
+      if (!isValidFullUrl(value)) continue;
       if (this.isHostAllowed(value)) continue;
 
       raw.push({
@@ -50,8 +99,11 @@ export class UrlDetector implements Detector {
 
     BARE_API_REGEX.lastIndex = 0;
     while ((match = BARE_API_REGEX.exec(text)) !== null) {
-      const value = match[1] ?? match[0];
-      const start = match.index + (match[0].length - value.length);
+      const originalValue = match[1] ?? match[0];
+      const start = match.index + (match[0].length - originalValue.length);
+      const value = trimTrailingUrlPunctuation(originalValue);
+      if (!isValidBareApi(value)) continue;
+
       // Skip if already covered by a full URL match
       const alreadyCovered = raw.some(
         (existing) => start >= existing.span[0] && start < existing.span[1],

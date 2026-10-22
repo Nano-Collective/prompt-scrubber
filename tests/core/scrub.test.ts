@@ -1109,3 +1109,42 @@ for (const sample of NEGATIVE_CORPUS) {
     t.is(result.stats.totalEntities, 0);
   });
 }
+
+test('scrub preserves trailing markdown punctuation and parentheses around URLs', (t) => {
+  const result = scrub({ content: 'Check (https://example.com/api).' });
+  t.is(result.scrubbedContent, 'Check («Url_1»).');
+  t.is(result.sessionMap?.['«Url_1»'], 'https://example.com/api');
+
+  const restored = rehydrate({
+    content: result.scrubbedContent as string,
+    sessionMap: result.sessionMap!,
+  });
+  t.is(restored.content, 'Check (https://example.com/api).');
+});
+
+test('scrub preserves markdown link formatting around URLs', (t) => {
+  const result = scrub({ content: 'See [link](https://example.com/docs).' });
+  t.is(result.scrubbedContent, 'See [link](«Url_1»).');
+  t.is(result.sessionMap?.['«Url_1»'], 'https://example.com/docs');
+
+  const restored = rehydrate({
+    content: result.scrubbedContent as string,
+    sessionMap: result.sessionMap!,
+  });
+  t.is(restored.content, 'See [link](https://example.com/docs).');
+});
+
+test('scrub handles URL with trailing markdown punctuation adjacent to email', (t) => {
+  const result = scrub({
+    content: 'Contact us at alice@example.com or visit (https://example.com/support).',
+  });
+  t.is(result.scrubbedContent, 'Contact us at «Email_1» or visit («Url_1»).');
+  t.is(result.sessionMap?.['«Url_1»'], 'https://example.com/support');
+  t.is(result.sessionMap?.['«Email_1»'], 'alice@example.com');
+
+  const restored = rehydrate({
+    content: result.scrubbedContent as string,
+    sessionMap: result.sessionMap!,
+  });
+  t.is(restored.content, 'Contact us at alice@example.com or visit (https://example.com/support).');
+});
