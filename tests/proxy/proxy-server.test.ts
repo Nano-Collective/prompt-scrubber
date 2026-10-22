@@ -1264,3 +1264,49 @@ test('scrubs an Anthropic system prompt and tool blocks end to end', async (t) =
     await upstream.close();
   }
 });
+
+test('the session header is never forwarded to the upstream', async (t) => {
+  const seen: http.IncomingHttpHeaders[] = [];
+  const upstream = await startFakeUpstream((req, _body, res) => {
+    seen.push(req.headers);
+    jsonResponse(res, 200, {
+      choices: [{ index: 0, message: { role: 'assistant', content: 'ok' } }],
+    });
+  });
+  const proxy = await withProxy(upstream);
+  try {
+    const first = await chat(proxy.url, [{ role: 'user', content: 'hello' }]);
+    t.truthy(first.session);
+    await chat(proxy.url, [{ role: 'user', content: 'again' }], first.session);
+
+    const known = await makeRequest(`${proxy.url}/v1/models`, {
+      method: 'GET',
+      headers: { [SESSION_HEADER]: first.session, authorization: 'Bearer test-key' },
+    });
+    t.is(known.status, 200);
+
+    t.is(seen.length, 3);
+    for (const headers of seen) {
+      t.false(SESSION_HEADER in headers);
+    }
+    t.is(seen[2]?.authorization, 'Bearer test-key');
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+});
+
+test('the session header still reaches the client and pins the session', async (t) => {
+  const upstream = await startFakeUpstream(chatResponder('mailing «Email_1»'));
+  const proxy = await withProxy(upstream);
+  try {
+    const first = await chat(proxy.url, [{ role: 'user', content: 'mail bob@example.com' }]);
+    t.regex(first.session, /^[0-9a-f-]{36}$/);
+    const second = await chat(proxy.url, [{ role: 'user', content: 'again' }], first.session);
+    t.is(second.session, first.session);
+    t.is(second.reply, 'mailing bob@example.com');
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+});
