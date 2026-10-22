@@ -240,6 +240,7 @@ An audit record looks like this:
 
 **Limitations:**
 
+- `--strict` checks that a body can be scrubbed, not that every field in it was. A JSON body in a shape the scrubber does not traverse on a recognised endpoint (for example `{"input": "…"}` sent to `/v1/chat/completions`), or a value nested past the 64-level cap, is still forwarded unscrubbed in strict mode.
 - The proxy cannot decompress request bodies. Without `--strict` a compressed body is forwarded as received; with it, the request is blocked. Most SDKs send uncompressed JSON by default.
 - Request bodies larger than 10 MB are rejected with `413 Payload Too Large`. Tune with `maxBodyBytes` on the programmatic `ProxyOptions`.
 - In streamed *text* (`delta.content`, `text_delta`), a placeholder split across two separate SSE events is forwarded as-is: the reader sees `«Email_1»` instead of the value, and nothing is corrupted. Streamed tool-call arguments do not have this gap, because code acts on them — see **Streaming** above.

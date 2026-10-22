@@ -338,7 +338,7 @@ test.serial('CLI: proxy --help shows provider options and the session header', (
   t.true(result.stdout.includes('--target'));
   t.true(result.stdout.includes('--verbose'));
   t.true(result.stdout.includes('--no-gc'));
-  t.true(result.stdout.includes('--strict '));
+  t.regex(result.stdout, /--strict\b/);
 });
 
 test.serial('CLI: proxy --strict announces fail-closed mode at startup', (t) => {
