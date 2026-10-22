@@ -173,16 +173,65 @@ test('an unquoted value stops at brackets, quotes and commas', (t) => {
   t.is(detector.detect("run token=abcd1234efgh'")[0]?.value, 'abcd1234efgh');
 });
 
-test('a key name must contain a secret word, not just a substring of one', (t) => {
+test('a weak key word must be a whole word of the name, not a piece of another word', (t) => {
   for (const text of [
     'author: jonathan-smith-the-third',
     'monkey=bananabananabanana',
     'compass=northnorthnorthnorth',
     'keyword=somethingverylong',
-    'tokenizer=whitespace-splitter',
+    'turkey=roastroastroast',
+    'hockey=stickstickstick',
+    'bypass=roadroadroadroad',
+    'trespass=signsignsignsign',
+    'keynote=slidesslidesslides',
+    'apiary=beesbeesbeesbees',
+    'authority=governmentgov',
   ]) {
     t.is(detector.detect(text).length, 0, text);
   }
+});
+
+test('finds compound key names that glue a secret word onto another word', (t) => {
+  for (const text of [
+    'refreshtoken=abcdefgh1234',
+    'accesstoken=abcdefgh1234',
+    'privatekey=abcdefgh1234',
+    'masterkey=abcdefgh1234',
+    'signingkey=abcdefgh1234',
+    'secretkey=abcdefgh1234',
+    'clientsecret=abcdefgh1234',
+    'awssecretaccesskey=abcdefgh1234',
+    'AWS_SECRET_ACCESS_KEY=abcdefgh1234',
+    'DB_PASSWORD=abcdefgh1234',
+    'password1=abcdefgh1234',
+    'key2=abcdefgh1234',
+    'token_2=abcdefgh1234',
+    'apikey=abcdefgh1234',
+    'passkey=abcdefgh1234',
+    'oauth=abcdefgh1234',
+    'sessionkey=abcdefgh1234',
+    'x-api-key: abcdefgh1234',
+    'creds=abcdefgh1234',
+  ]) {
+    t.is(detector.detect(text).length, 1, text);
+  }
+});
+
+test('an unquoted value stops where the next query parameter starts', (t) => {
+  for (const text of [
+    'token=abcdefghij&redirect=/home',
+    'token=abcdefghij?page=2',
+    'token=abcdefghij&next=1',
+  ]) {
+    t.is(detector.detect(text)[0]?.value, 'abcdefghij', text);
+  }
+});
+
+test('keeps base64 padding on an unquoted value', (t) => {
+  t.is(
+    detector.detect('token=QWxhZGRpbjpvcGVuIHNlc2FtZQ==')[0]?.value,
+    'QWxhZGRpbjpvcGVuIHNlc2FtZQ==',
+  );
 });
 
 test('recognises secret words in snake, kebab, camel and upper case', (t) => {

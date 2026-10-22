@@ -40,48 +40,51 @@ const PREFIX_PATTERNS: { regex: RegExp; name: string; confidence?: number }[] = 
 
 // --- Layer 2: Key-value heuristic ---
 // Matches KEY=value or KEY: value where the key name suggests it's a secret.
-// A key name suggests a secret when one of its words is one of these. Whole words, not
-// substrings: `author`, `monkey` and `compass` contain `auth`, `key` and `pass`.
-const SECRET_KEY_WORDS = new Set([
+// A key name suggests a secret in two ways, because the words differ in how often they
+// appear inside an unrelated word.
+//
+// Strong words (`token`, `secret`, `password`, ...) are matched as substrings, so compounds
+// such as `refreshtoken`, `clientsecret` and `dbpassword` are found. Hardly any ordinary
+// word contains one of them.
+const STRONG_KEY_WORD = /token|secret|passw(?:or)?d|passphrase|credential/;
+
+// Weak words (`key`, `pass`, `auth`, `api`, ...) sit inside `monkey`, `compass`, `author`,
+// so each must be a whole word of the name: the name is split at punctuation, case changes
+// and digits (`key2` is `key`). A few compounds that glue one on without a separator are
+// listed, since splitting cannot find them.
+const WEAK_KEY_WORDS = new Set([
   'key',
   'keys',
-  'secret',
-  'secrets',
-  'token',
-  'tokens',
-  'password',
-  'passwords',
-  'passwd',
-  'passphrase',
   'pass',
   'pwd',
   'api',
   'apikey',
   'auth',
+  'oauth',
   'authorization',
   'cred',
   'creds',
-  'credential',
-  'credentials',
   'private',
   'access',
   'bearer',
+  'passkey',
 ]);
+const KEY_COMPOUND =
+  /^(?:api|secret|private|access|master|signing|encryption|auth|session|ssh|license|app|client|service|hmac|aws)keys?$/;
 
 function isSecretKeyName(key: string): boolean {
-  return key
-    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .some((word) => SECRET_KEY_WORDS.has(word));
+  const name = key.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase();
+  if (STRONG_KEY_WORD.test(name)) return true;
+  return name.split(/[^a-z]+/).some((word) => WEAK_KEY_WORDS.has(word) || KEY_COMPOUND.test(word));
 }
 
 // The key may be quoted (`"api_key": ...` in JSON or YAML). A quoted value runs to its
 // closing quote, so a passphrase with spaces is taken whole; an unquoted one stops at
 // whitespace and at brackets, quotes, commas and semicolons, but keeps `!`, `#`, `$` and
-// the other punctuation a password is allowed to contain.
+// the other punctuation a password is allowed to contain. `&` and `?` are left out so a
+// value in a query string stops where the next parameter starts.
 const KV_PATTERN =
-  /(?:^|[\s,;{])["']?([a-zA-Z0-9_.-]+)["']?\s*[:=]\s*(?:"([^"\r\n]{8,})"|'([^'\r\n]{8,})'|([A-Za-z0-9+/\-_.~@!#$%^&*=?:]{8,}))/gm;
+  /(?:^|[\s,;{])["']?([a-zA-Z0-9_.-]+)["']?\s*[:=]\s*(?:"([^"\r\n]{8,})"|'([^'\r\n]{8,})'|([A-Za-z0-9+/\-_.~@!#$%^*=:]{8,}))/gm;
 
 // --- Layer 3: High-entropy strings ---
 // Only fires when the value is surrounded by quotes or follows an = sign.
