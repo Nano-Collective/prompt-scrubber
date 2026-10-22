@@ -17,6 +17,11 @@ import { deleteSessionMap, listSessions, readSessionMap, writeSessionMap } from 
  */
 const PLACEHOLDER_TOKEN_REGEX = /«[^«»\s]+_\d+»/g;
 
+/** Every placeholder-shaped token that appears literally in `text`. */
+export function placeholderTokensIn(text: string): string[] {
+  return Array.from(text.matchAll(PLACEHOLDER_TOKEN_REGEX), (match) => match[0]);
+}
+
 export class SessionManager {
   private sessionId: string | undefined;
   private map: SessionMap;
@@ -55,8 +60,8 @@ export class SessionManager {
    * already-scrubbed output is scrubbed again.
    */
   public reservePlaceholdersIn(text: string): void {
-    for (const match of text.matchAll(PLACEHOLDER_TOKEN_REGEX)) {
-      this.reservedNames.add(match[0]);
+    for (const token of placeholderTokensIn(text)) {
+      this.reservedNames.add(token);
     }
   }
 
