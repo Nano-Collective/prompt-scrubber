@@ -47,9 +47,68 @@ test('handles bare API endpoint at start of string', (t) => {
 });
 
 test('handles URL ending with trailing punctuation', (t) => {
-  const findings = detector.detect('Visit https://example.com/path.');
+  const text = 'Visit https://example.com/path.';
+  const findings = detector.detect(text);
   t.is(findings.length, 1);
-  t.is(findings[0]?.value, 'https://example.com/path.');
+  t.is(findings[0]?.value, 'https://example.com/path');
+  const [start, end] = findings[0]!.span;
+  t.is(text.slice(start, end), 'https://example.com/path');
+});
+
+test('does not over-capture trailing closing parenthesis and punctuation in prose or Markdown', (t) => {
+  const text = 'Check (https://example.com/api).';
+  const findings = detector.detect(text);
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, 'https://example.com/api');
+  const [start, end] = findings[0]!.span;
+  t.is(text.slice(start, end), 'https://example.com/api');
+});
+
+test('handles Markdown links with query strings', (t) => {
+  const text = 'See [API](https://example.com/v1?limit=10).';
+  const findings = detector.detect(text);
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, 'https://example.com/v1?limit=10');
+  const [start, end] = findings[0]!.span;
+  t.is(text.slice(start, end), 'https://example.com/v1?limit=10');
+});
+
+test('preserves balanced parentheses in URL paths', (t) => {
+  const text = 'Reference: https://en.wikipedia.org/wiki/Rust_(programming_language)';
+  const findings = detector.detect(text);
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, 'https://en.wikipedia.org/wiki/Rust_(programming_language)');
+  const [start, end] = findings[0]!.span;
+  t.is(text.slice(start, end), 'https://en.wikipedia.org/wiki/Rust_(programming_language)');
+});
+
+test('preserves balanced parentheses in URL when wrapped in prose parentheses', (t) => {
+  const text = 'Check (https://en.wikipedia.org/wiki/Rust_(programming_language)).';
+  const findings = detector.detect(text);
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, 'https://en.wikipedia.org/wiki/Rust_(programming_language)');
+  const [start, end] = findings[0]!.span;
+  t.is(text.slice(start, end), 'https://en.wikipedia.org/wiki/Rust_(programming_language)');
+});
+
+test('strips various trailing sentence punctuation marks', (t) => {
+  for (const p of ['.', ',', ':', ';', '!', '?', "'", '*']) {
+    const text = `Look at https://example.com/api${p}`;
+    const findings = detector.detect(text);
+    t.is(findings.length, 1);
+    t.is(findings[0]?.value, 'https://example.com/api');
+    const [start, end] = findings[0]!.span;
+    t.is(text.slice(start, end), 'https://example.com/api');
+  }
+});
+
+test('strips trailing punctuation from bare API endpoints', (t) => {
+  const text = 'Call (api.example.com/v1/users).';
+  const findings = detector.detect(text);
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, 'api.example.com/v1/users');
+  const [start, end] = findings[0]!.span;
+  t.is(text.slice(start, end), 'api.example.com/v1/users');
 });
 
 test('returns correct span for a URL', (t) => {
