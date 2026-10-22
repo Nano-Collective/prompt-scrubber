@@ -1,7 +1,8 @@
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'ava';
 import { computeHash } from '../../src/cli/commands/inspect.js';
 
@@ -923,6 +924,56 @@ test('CLI: inspect --json with --min-confidence reports suppressed findings', (t
     ['Phone'],
   );
   t.regex(output.hash, /^[a-f0-9]{64}$/);
+});
+
+test.serial('CLI: runs when started through a symlink, as a global npm install does', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'prompt-bin-'));
+  t.teardown(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const link = path.join(dir, 'prompt-scrub.ts');
+  try {
+    fs.symlinkSync(cliEntry, link);
+  } catch {
+    t.log('SKIPPED: this system does not allow creating symlinks');
+    t.pass();
+    return;
+  }
+
+  const result = spawnSync(process.execPath, ['--import', 'tsx', link, 'scrub'], {
+    input: 'Contact alice@example.com',
+    encoding: 'utf-8',
+    env: {
+      ...process.env,
+      PROMPT_SCRUB_CONFIG_DIR: path.join(tmpConfigDir, 'prompt-scrub'),
+    },
+  });
+
+  t.is(result.status, 0);
+  t.true(result.stdout.includes('Contact «Email_1»'), result.stdout + result.stderr);
+});
+
+test.serial('CLI: importing the entry file does not run the CLI', (t) => {
+  // `-e` leaves argv[1] undefined, which is what any importer looks like. If the
+  // entry check accepted that, commander would parse an empty command line and
+  // print its help text instead of staying quiet.
+  const result = spawnSync(
+    process.execPath,
+    [
+      '--import',
+      'tsx',
+      '-e',
+      `import(${JSON.stringify(pathToFileURL(cliEntry).href)}).then(() => console.log('imported'))`,
+    ],
+    {
+      encoding: 'utf-8',
+      env: {
+        ...process.env,
+        PROMPT_SCRUB_CONFIG_DIR: path.join(tmpConfigDir, 'prompt-scrub'),
+      },
+    },
+  );
+
+  t.is(result.status, 0, result.stderr);
+  t.is(result.stdout.trim(), 'imported');
 });
 
 test.serial('CLI: scrub --session-id rejects a path traversal ID and writes nothing', (t) => {
