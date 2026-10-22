@@ -21,6 +21,8 @@ interface ProxyCommandOptions extends ScrubCliOptions {
   gc?: boolean;
   /** False when `--no-reload-config` was passed. */
   reloadConfig?: boolean;
+  /** Seconds the upstream may stay silent before the request is abandoned. */
+  upstreamTimeout?: string;
   /** True when `--strict` was passed: block requests that cannot be scrubbed. */
   strict?: boolean;
 }
@@ -53,6 +55,17 @@ export async function runProxyCommand(options: ProxyCommandOptions): Promise<voi
   const host = options.host ?? '127.0.0.1';
   if (!/^[a-z0-9.\-:[\]]+$/i.test(host)) {
     throw new Error(`Invalid --host "${host}".`);
+  }
+
+  let upstreamTimeoutMs: number | undefined;
+  if (options.upstreamTimeout !== undefined) {
+    const seconds = Number(options.upstreamTimeout);
+    if (options.upstreamTimeout.trim() === '' || !Number.isFinite(seconds) || seconds < 0) {
+      throw new Error(
+        `Invalid --upstream-timeout "${options.upstreamTimeout}". Use a number of seconds, or 0 for no timeout.`,
+      );
+    }
+    upstreamTimeoutMs = Math.round(seconds * 1000);
   }
 
   let auditLog: string | undefined;
@@ -102,6 +115,7 @@ export async function runProxyCommand(options: ProxyCommandOptions): Promise<voi
     reloadConfig: options.reloadConfig !== false,
     strict: options.strict === true,
     metrics: options.metrics !== false,
+    ...(upstreamTimeoutMs !== undefined ? { upstreamTimeoutMs } : {}),
     ...(auditLog !== undefined ? { auditLog } : {}),
     ...(options.version !== undefined ? { version: options.version } : {}),
     ...(Object.keys(scrubOptions).length > 0 ? { scrubOptions } : {}),
@@ -138,6 +152,10 @@ export function setupProxyCommand(program: Command) {
     .option(
       '--strict',
       'Fail closed: block requests whose body cannot be scrubbed (unknown endpoint, compressed or non-JSON body) instead of forwarding them',
+    )
+    .option(
+      '--upstream-timeout <seconds>',
+      'Seconds the upstream may stay silent before the request is abandoned (default 600, 0 for no timeout)',
     )
     .option('--no-reload-config', 'Do not reload config.json on SIGHUP or when it changes on disk')
     .option(

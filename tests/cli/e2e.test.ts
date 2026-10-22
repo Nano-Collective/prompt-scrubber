@@ -924,3 +924,19 @@ test('CLI: inspect --json with --min-confidence reports suppressed findings', (t
   );
   t.regex(output.hash, /^[a-f0-9]{64}$/);
 });
+
+test.serial('CLI: proxy rejects an invalid --upstream-timeout', (t) => {
+  for (const value of ['abc', '-1', '']) {
+    const result = runCli([
+      'proxy',
+      '--target',
+      'http://127.0.0.1:1',
+      '--port',
+      '0',
+      '--upstream-timeout',
+      value,
+    ]);
+    t.is(result.status, 1, value);
+    t.true(result.stderr.includes('Invalid --upstream-timeout'), result.stderr);
+  }
+});
