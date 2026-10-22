@@ -63,6 +63,10 @@ export class ProxyMetrics {
     'prompt_scrub_passthrough_total',
     'Requests forwarded without scrubbing, by reason.',
   );
+  private readonly blocked = new CounterFamily(
+    'prompt_scrub_blocked_total',
+    'Requests refused in strict mode because they could not be scrubbed, by reason.',
+  );
   private readonly errors = new CounterFamily(
     'prompt_scrub_errors_total',
     'Requests that ended in an error, by kind.',
@@ -93,6 +97,9 @@ export class ProxyMetrics {
       case 'passthrough':
         this.passthrough.inc({ reason: event.reason });
         return;
+      case 'blocked':
+        this.blocked.inc({ reason: event.reason });
+        return;
       default:
         return;
     }
@@ -113,6 +120,7 @@ export class ProxyMetrics {
       this.entities,
       this.rehydrated,
       this.passthrough,
+      this.blocked,
       this.errors,
       this.auditDropped,
     ]) {
@@ -167,6 +175,7 @@ export class ProxyMetrics {
       entitiesRedacted: this.entities.snapshot(),
       placeholdersRehydrated: this.rehydrated.snapshot(),
       passthrough: this.passthrough.snapshot(),
+      blocked: this.blocked.snapshot(),
       errors: this.errors.snapshot(),
       auditDropped: this.auditDropped.snapshot(),
       requestDurationSeconds: { count: this.durationCount, sum: this.durationSum, buckets },
