@@ -26,6 +26,8 @@ function response(overrides: Partial<ResponseEvent> = {}): ResponseEvent {
     outcome: 'ok',
     entities: 0,
     byCategory: {},
+    suppressed: 0,
+    suppressedByCategory: {},
     rehydrated: 0,
     ...overrides,
   };
@@ -63,6 +65,17 @@ test('latency histogram buckets are cumulative', (t) => {
   t.regex(text, /prompt_scrub_request_duration_seconds_bucket\{le="0.025"\} 1\n/);
   t.regex(text, /prompt_scrub_request_duration_seconds_bucket\{le="\+Inf"\} 1\n/);
   t.regex(text, /prompt_scrub_request_duration_seconds_count 1\n/);
+});
+
+test('findings left unredacted below minConfidence are counted by category', (t) => {
+  const metrics = new ProxyMetrics('x');
+  metrics.observe(response({ suppressed: 3, suppressedByCategory: { Url: 2, Phone: 1 } }));
+  metrics.observe(response({ suppressed: 1, suppressedByCategory: { Url: 1 } }));
+  metrics.observe(response());
+
+  const text = metrics.renderPrometheus();
+  t.regex(text, /prompt_scrub_suppressed_total\{category="Url"\} 3\n/);
+  t.regex(text, /prompt_scrub_suppressed_total\{category="Phone"\} 1\n/);
 });
 
 test('errors and passthrough are counted by kind and reason', (t) => {

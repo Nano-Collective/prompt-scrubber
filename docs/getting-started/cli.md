@@ -207,7 +207,9 @@ Responses are rehydrated in the same places as requests: message content, `tool_
 - `--no-gc`: Skip the startup session-garbage-collection pass.
 - `--no-reload-config`: Do not reload `config.json` while the proxy runs (see below).
 
-**Config reload:** the proxy re-reads `config.json` without restarting when it receives `SIGHUP` or when the file changes on disk. Only the `rulePacks` and `urlAllowlist` keys reload. Requests already in flight keep the old configuration, and sessions and their placeholders are kept.
+The proxy also reads `minConfidence` and `locale` from `config.json`, with the same meaning as for `scrub`: `locale` switches on locale-scoped rule pack detectors, and findings scored below `minConfidence` are **not redacted**. Those findings are forwarded upstream in clear text, so the proxy reports them: it logs the threshold at startup and on reload, each `response` event and audit record carries `suppressed` and `suppressedByCategory`, and `/metrics` exposes `prompt_scrub_suppressed_total{category}`.
+
+**Config reload:** the proxy re-reads `config.json` without restarting when it receives `SIGHUP` or when the file changes on disk. Only the `rulePacks`, `urlAllowlist`, `minConfidence` and `locale` keys reload. Requests already in flight keep the old configuration, and sessions and their placeholders are kept.
 
 - Reload on demand: `kill -HUP <pid>`, or `ExecReload=/bin/kill -HUP $MAINPID` in a systemd unit, then `systemctl reload`.
 - A file that is missing, invalid, or names a rule pack that fails to load is rejected. The previous configuration stays in force and the reason is logged.
@@ -220,7 +222,7 @@ Responses are rehydrated in the same places as requests: message content, `tool_
 - `GET /healthz` returns `{"status":"ok","uptimeSeconds":…,"version":"…"}`.
 - `GET /metrics` returns Prometheus text (`text/plain; version=0.0.4`). Add `?format=json` or `Accept: application/json` for JSON.
 
-Metrics: `prompt_scrub_requests_total{provider,status_class}`, `prompt_scrub_entities_redacted_total{category}`, `prompt_scrub_placeholders_rehydrated_total`, `prompt_scrub_passthrough_total{reason}`, `prompt_scrub_blocked_total{reason}`, `prompt_scrub_errors_total{kind}`, `prompt_scrub_audit_dropped_total`, `prompt_scrub_request_duration_seconds` (histogram), and the gauges `prompt_scrub_inflight_requests`, `prompt_scrub_uptime_seconds` and `prompt_scrub_build_info`. Rehydration counts for streamed responses are approximate.
+Metrics: `prompt_scrub_requests_total{provider,status_class}`, `prompt_scrub_entities_redacted_total{category}`, `prompt_scrub_suppressed_total{category}`, `prompt_scrub_placeholders_rehydrated_total`, `prompt_scrub_passthrough_total{reason}`, `prompt_scrub_blocked_total{reason}`, `prompt_scrub_errors_total{kind}`, `prompt_scrub_audit_dropped_total`, `prompt_scrub_request_duration_seconds` (histogram), and the gauges `prompt_scrub_inflight_requests`, `prompt_scrub_uptime_seconds` and `prompt_scrub_build_info`. Rehydration counts for streamed responses are approximate.
 
 ```yaml
 scrape_configs:
@@ -233,7 +235,7 @@ scrape_configs:
 An audit record looks like this:
 
 ```json
-{"ts":"2026-10-14T09:12:03.418Z","type":"response","requestId":"…","sessionId":"…","method":"POST","path":"/v1/chat/completions","provider":"openai","status":200,"durationMs":412.7,"streaming":false,"outcome":"ok","entities":1,"byCategory":{"Email":1},"rehydrated":1}
+{"ts":"2026-10-14T09:12:03.418Z","type":"response","requestId":"…","sessionId":"…","method":"POST","path":"/v1/chat/completions","provider":"openai","status":200,"durationMs":412.7,"streaming":false,"outcome":"ok","entities":1,"byCategory":{"Email":1},"suppressed":0,"suppressedByCategory":{},"rehydrated":1}
 ```
 
 `outcome` is one of `ok`, `passthrough` (forwarded without scrubbing), `rejected` (413, or 403 in strict mode) or `error`. When it is `rejected` or `error`, `errorKind` is one of `body_too_large`, `strict_blocked`, `upstream_timeout`, `upstream_error`, `client_aborted` or `internal`.

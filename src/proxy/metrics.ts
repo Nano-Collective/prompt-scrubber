@@ -55,6 +55,10 @@ export class ProxyMetrics {
     'prompt_scrub_entities_redacted_total',
     'Values replaced by the scrubber, by detector category.',
   );
+  private readonly suppressed = new CounterFamily(
+    'prompt_scrub_suppressed_total',
+    'Findings left unredacted because they scored below minConfidence, by detector category.',
+  );
   private readonly rehydrated = new CounterFamily(
     'prompt_scrub_placeholders_rehydrated_total',
     'Placeholders restored in upstream responses. Streaming counts are approximate.',
@@ -118,6 +122,7 @@ export class ProxyMetrics {
     for (const family of [
       this.requests,
       this.entities,
+      this.suppressed,
       this.rehydrated,
       this.passthrough,
       this.blocked,
@@ -173,6 +178,7 @@ export class ProxyMetrics {
       inflightRequests: this.inflight,
       requests: this.requests.snapshot(),
       entitiesRedacted: this.entities.snapshot(),
+      findingsSuppressed: this.suppressed.snapshot(),
       placeholdersRehydrated: this.rehydrated.snapshot(),
       passthrough: this.passthrough.snapshot(),
       blocked: this.blocked.snapshot(),
@@ -190,6 +196,9 @@ export class ProxyMetrics {
     });
     for (const [category, count] of Object.entries(event.byCategory)) {
       if (count > 0) this.entities.inc({ category }, count);
+    }
+    for (const [category, count] of Object.entries(event.suppressedByCategory)) {
+      if (count > 0) this.suppressed.inc({ category }, count);
     }
     if (event.rehydrated > 0) this.rehydrated.inc({}, event.rehydrated);
     if (event.errorKind) this.errors.inc({ kind: event.errorKind });

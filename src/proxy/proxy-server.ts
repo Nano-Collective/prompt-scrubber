@@ -2,7 +2,12 @@ import * as crypto from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import * as http from 'node:http';
 import * as https from 'node:https';
-import { getConfigDir, loadConfig, readConfigFile } from '../core/config.js';
+import {
+  getConfigDir,
+  loadConfig,
+  type PromptScrubConfig,
+  readConfigFile,
+} from '../core/config.js';
 import { loadConfiguredRulePacks } from '../core/rule-packs.js';
 import { scrub } from '../core/scrub.js';
 import { placeholderTokensIn } from '../session/session-manager.js';
@@ -80,6 +85,8 @@ interface RequestTrace {
   streaming: boolean;
   entities: number;
   byCategory: Record<string, number>;
+  suppressed: number;
+  suppressedByCategory: Record<string, number>;
   rehydrated: number;
   passthroughReason: string | undefined;
   finished: boolean;
@@ -100,11 +107,15 @@ export async function createProxyServer(
   // through a request.
   const { detectors: rulePackDetectors } = await loadConfiguredRulePacks();
   const scrubState = {
-    current: buildBaseScrubOptions(
-      options.scrubOptions,
-      rulePackDetectors,
-      loadConfig().urlAllowlist,
-    ),
+    current: buildBaseScrubOptions(options.scrubOptions, rulePackDetectors, loadConfig()),
+  };
+  const logThreshold = () => {
+    const threshold = scrubState.current.minConfidence;
+    if (threshold) {
+      log(
+        `[proxy] minConfidence ${threshold}: findings scored below it are not redacted. They are counted in prompt_scrub_suppressed_total.`,
+      );
+    }
   };
 
   // Opened before listening so an unwritable --audit-log fails startup.
@@ -150,11 +161,8 @@ export async function createProxyServer(
         `rule pack(s) failed to load, keeping the previous configuration: ${failed.join(', ')}`,
       );
     }
-    scrubState.current = buildBaseScrubOptions(
-      options.scrubOptions,
-      detectors,
-      file.config.urlAllowlist,
-    );
+    scrubState.current = buildBaseScrubOptions(options.scrubOptions, detectors, file.config);
+    logThreshold();
     return {
       rulePacks: file.config.rulePacks?.length ?? 0,
       detectors: detectors.length,
@@ -237,6 +245,7 @@ export async function createProxyServer(
       if (options.auditLog !== undefined) {
         log(`[proxy] Audit log: ${options.auditLog}`);
       }
+      logThreshold();
       if (options.strict) {
         log('[proxy] Strict mode: requests with a body that cannot be scrubbed are blocked.');
       }
@@ -263,13 +272,13 @@ export async function createProxyServer(
 /**
  * Translate the CLI-shaped `ScrubCliOptions` (comma-separated strings, etc.)
  * into the structured `ScrubOptions` accepted by `scrub()`. Merged with the
- * pre-loaded rule-pack detectors and the config-file allowlist, so the proxy
- * behaves like the standalone `scrub` command.
+ * pre-loaded rule-pack detectors and the config file's allowlist, confidence
+ * threshold and locale, so the proxy behaves like the standalone `scrub` command.
  */
 function buildBaseScrubOptions(
   raw: ProxyOptions['scrubOptions'],
   rulePackDetectors: import('../types/index.js').Detector[],
-  configUrlAllowlist: string[] = [],
+  config: Pick<PromptScrubConfig, 'urlAllowlist' | 'minConfidence' | 'locale'> = {},
 ): ScrubOptions {
   const scrub: ScrubOptions = { customDetectors: rulePackDetectors };
   const disabled = parseList(raw?.disable);
@@ -280,9 +289,11 @@ function buildBaseScrubOptions(
   const codeTellTerms = parseList(raw?.codeTellTerms);
   if (codeTellTerms.length > 0) scrub.codeTellTerms = codeTellTerms;
   const urlAllowlist = Array.from(
-    new Set([...configUrlAllowlist, ...parseList(raw?.urlAllowlist)]),
+    new Set([...(config.urlAllowlist ?? []), ...parseList(raw?.urlAllowlist)]),
   );
   if (urlAllowlist.length > 0) scrub.urlAllowlist = urlAllowlist;
+  if (config.minConfidence) scrub.minConfidence = config.minConfidence;
+  if (config.locale) scrub.locale = config.locale;
   return scrub;
 }
 
@@ -335,6 +346,8 @@ function createTrace(req: IncomingMessage, sessions: Sessions): RequestTrace {
     streaming: false,
     entities: 0,
     byCategory: {},
+    suppressed: 0,
+    suppressedByCategory: {},
     rehydrated: 0,
     passthroughReason: undefined,
     finished: false,
@@ -375,6 +388,8 @@ function finishTrace(
     outcome,
     entities: trace.entities,
     byCategory: trace.byCategory,
+    suppressed: trace.suppressed,
+    suppressedByCategory: trace.suppressedByCategory,
     rehydrated: trace.rehydrated,
     ...(errorKind ? { errorKind } : {}),
   });
@@ -471,6 +486,8 @@ async function handleClientRequest(
     const outcome = scrubChatBody(provider, parsed, (text) => {
       const scrubbed = scrubTextSync(text, sessionId, map, baseScrubOptions);
       mergeCounts(trace.byCategory, scrubbed.byCategory);
+      mergeCounts(trace.suppressedByCategory, scrubbed.suppressedByCategory);
+      trace.suppressed += scrubbed.suppressed;
       return scrubbed;
     });
     trace.entities = outcome.entities;
@@ -560,7 +577,13 @@ function scrubTextSync(
   sessionId: string,
   sessionMap: Record<string, string>,
   baseOptions: ScrubOptions,
-): { content: string; entities: number; byCategory: Record<string, number> } {
+): {
+  content: string;
+  entities: number;
+  byCategory: Record<string, number>;
+  suppressed: number;
+  suppressedByCategory: Record<string, number>;
+} {
   const result = scrub({
     content: text,
     sessionId,
@@ -572,6 +595,8 @@ function scrubTextSync(
     content: scrubbed,
     entities: result.stats.totalEntities,
     byCategory: result.stats.byCategory,
+    suppressed: result.stats.suppressed?.total ?? 0,
+    suppressedByCategory: result.stats.suppressed?.byCategory ?? {},
   };
 }
 

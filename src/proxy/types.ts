@@ -112,6 +112,9 @@ export type ProxyEvent =
       outcome: 'ok' | 'passthrough' | 'rejected' | 'error';
       entities: number;
       byCategory: Record<string, number>;
+      /** Findings a `minConfidence` threshold discarded, so they were forwarded unredacted. */
+      suppressed: number;
+      suppressedByCategory: Record<string, number>;
       rehydrated: number;
       errorKind?:
         | 'body_too_large'
