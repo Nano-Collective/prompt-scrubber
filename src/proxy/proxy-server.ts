@@ -498,7 +498,6 @@ async function handleClientRequest(
   }
 
   const upstreamHeaders = buildUpstreamHeaders(req.headers, options.target);
-  upstreamHeaders[SESSION_HEADER] = sessionId;
 
   const upstreamResponse = await dispatchUpstream(options.target, {
     method: trace.method,
@@ -752,7 +751,9 @@ function buildUpstreamHeaders(
   for (const [key, value] of Object.entries(incoming)) {
     if (value === undefined) continue;
     const lower = key.toLowerCase();
-    if (HOP_BY_HOP.has(lower)) continue;
+    // The session ID is between the client and this proxy. A provider that
+    // received it could link every request of a session, whoever sent them.
+    if (HOP_BY_HOP.has(lower) || lower === SESSION_HEADER) continue;
     headers[key] = value;
   }
   headers.host = target.host;
