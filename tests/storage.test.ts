@@ -479,10 +479,13 @@ test('getSessionStoragePath rejects IDs that could leave the sessions directory'
     '../../outside/pwned',
     'a/b',
     'a\\b',
-    '.hidden',
-    '..',
+    '/abs',
+    'C:\\x',
+    'c:x',
+    'a\0b',
+    'a\nb',
     '',
-    'a'.repeat(129),
+    'a'.repeat(256),
   ]) {
     t.throws(
       () => getSessionStoragePath(id),
@@ -492,15 +495,22 @@ test('getSessionStoragePath rejects IDs that could leave the sessions directory'
   }
 });
 
-test('getSessionStoragePath accepts UUIDs and ordinary names', (t) => {
+test('getSessionStoragePath accepts UUIDs, ordinary names and names from earlier versions', (t) => {
   for (const id of [
     '3f2b8c1e-7a44-4d5e-9c0a-1b2c3d4e5f60',
     'test-session',
     'a.b_c',
     'A1',
-    'x'.repeat(128),
+    'x'.repeat(255),
+    '.hidden',
+    '_draft',
+    'with space',
+    'josé',
+    '...',
   ]) {
-    t.true(getSessionStoragePath(id).endsWith(`${id}.json`));
+    const file = getSessionStoragePath(id);
+    t.is(path.dirname(file), path.join(path.dirname(getSessionStoragePath('probe')), ''), id);
+    t.true(file.endsWith(`${id}.json`));
   }
 });
 

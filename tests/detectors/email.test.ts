@@ -97,3 +97,10 @@ test('scans long runs of local-part characters in linear time', (t) => {
     t.true(Date.now() - start < 1000, `${JSON.stringify(run)} run took ${Date.now() - start}ms`);
   }
 });
+
+test('many addresses with an unfinished domain scan in linear time', (t) => {
+  const start = Date.now();
+  t.deepEqual(detector.detect('a@a.'.repeat(25_000)), []);
+  t.deepEqual(detector.detect('a@'.repeat(50_000)), []);
+  t.true(Date.now() - start < 1000, `took ${Date.now() - start}ms`);
+});

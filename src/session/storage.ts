@@ -10,16 +10,29 @@ import {
 import { getCachedKey } from '../core/key-manager.js';
 import type { SessionMap } from '../types/index.js';
 
-const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+// An ID becomes a file name, so it must not be able to name anything but a file in the
+// sessions directory: no path separators (which also rules out `..` as a component), no
+// drive or stream separator, no characters Windows reserves, and no control characters.
+// Nothing else is restricted, so sessions written by earlier versions (names starting
+// with `.` or `_`, spaces, non-ASCII) keep working.
+const FORBIDDEN_IN_SESSION_ID = /[\\/:*?"<>|]/;
+
+function isValidSessionId(id: string): boolean {
+  if (id.length < 1 || id.length > 255 || FORBIDDEN_IN_SESSION_ID.test(id)) return false;
+  for (let i = 0; i < id.length; i++) {
+    if (id.charCodeAt(i) < 0x20) return false;
+  }
+  return true;
+}
 
 /**
- * Gets the file path for a specific session ID. The ID becomes a file name, so
- * anything that could leave the sessions directory (separators, `..`) is rejected.
+ * Gets the file path for a specific session ID. IDs that could leave the sessions
+ * directory are rejected.
  */
 export function getSessionStoragePath(sessionId: string): string {
-  if (!SESSION_ID_PATTERN.test(sessionId)) {
+  if (!isValidSessionId(sessionId)) {
     throw new Error(
-      `Invalid session ID ${JSON.stringify(sessionId)}: use 1-128 letters, digits, ".", "_" or "-", starting with a letter or digit.`,
+      `Invalid session ID ${JSON.stringify(sessionId)}: it must be 1-255 characters and must not contain path separators (/ or \\), ":", "*", "?", quotes, "<", ">", "|" or control characters.`,
     );
   }
   return path.join(getConfigDir(), 'sessions', `${sessionId}.json`);

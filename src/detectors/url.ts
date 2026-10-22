@@ -84,6 +84,9 @@ const SECRET_PARAM_WORDS = new Set([
 ]);
 
 function hasSecretParam(url: string): boolean {
+  // The first `?` or `#` begins the query or fragment: neither is legal unescaped in the
+  // scheme, user info, host or path that come before it. The scheme may be absent (a
+  // bare `host/path`), which changes nothing here.
   const start = url.search(/[?#]/);
   if (start === -1) return false;
   return url

@@ -1194,3 +1194,24 @@ test('counts findings for a category named like an Object.prototype member', (t)
   t.is(Object.keys(result.stats.byCategory).join(), 'constructor');
   t.is(result.stats.byCategory.constructor, 1);
 });
+
+test('a connection string is one secret, not a secret beside an email fragment', (t) => {
+  for (const url of [
+    'postgres://admin:s3cretPass@db.internal:5432/app',
+    'mongodb+srv://u:p%40ss@cluster0.x.mongodb.net/test',
+    'https://user:pass@example.com/x',
+  ]) {
+    const result = scrub({ content: `connect with ${url} now`, sessionMap: {} });
+    t.is(result.scrubbedContent, 'connect with «Secret_1» now', url);
+    t.deepEqual(result.stats.byCategory, { Secret: 1 }, url);
+    t.deepEqual(result.sessionMap, { '«Secret_1»': url }, url);
+  }
+});
+
+test('a connection string stays one secret next to an email address', (t) => {
+  const result = scrub({
+    content: 'mail ops@example.com, db postgres://admin:pw@db.internal/app.',
+    sessionMap: {},
+  });
+  t.is(result.scrubbedContent, 'mail «Email_1», db «Secret_1».');
+});

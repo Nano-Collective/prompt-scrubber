@@ -4,7 +4,7 @@
 
 Hardening pass over the detectors, the session store and the proxy.
 
-- Session IDs are validated. `--session-id ../../x` could read, overwrite or delete any `.json` file outside the sessions directory. IDs must now be 1 to 128 letters, digits, `.`, `_` or `-`, starting with a letter or digit.
+- Session IDs are validated. `--session-id ../../x` could read, overwrite or delete any `.json` file outside the sessions directory. An ID must now be 1 to 255 characters without a path separator, `:`, a Windows-reserved character or a control character. Sessions saved earlier under other names keep working.
 - The email and bare-endpoint scans are linear on long hyphen, `+` and `%` runs. 100 KB of hyphens took 10 seconds and 100 KB of hyphenated text 5 seconds.
 - The proxy now scrubs `user`, `safety_identifier`, `metadata`, `prediction.content` and `response_format.json_schema` descriptions on OpenAI requests, and `document` blocks, `search_result` blocks and `metadata` on Anthropic requests.
 - An allowlisted host no longer exempts a URL with a user name, a password, or a credential-named query or fragment parameter such as `api_key`, `token` or `signature`.
