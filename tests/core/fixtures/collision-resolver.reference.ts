@@ -1,5 +1,5 @@
-// Verbatim copy of src/core/collision-resolver.ts before it was rewritten for speed.
-// The tests compare the current implementation with it, so do not edit it.
+// Copy of src/core/collision-resolver.ts from before it was rewritten for speed, with only
+// the import path changed. The tests compare the current implementation with it: do not edit.
 import type { Finding } from '../../../src/types/index.js';
 
 // Priority table: lower number = higher priority (wins collisions)
