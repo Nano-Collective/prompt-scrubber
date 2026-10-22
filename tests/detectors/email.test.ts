@@ -84,9 +84,10 @@ test('an address with no completing domain does not stall the scan', (t) => {
     `a@${'a.a-'.repeat(25_000)}`,
   ]) {
     const start = Date.now();
-    detector.detect(input);
+    t.deepEqual(detector.detect(input), []);
     t.true(Date.now() - start < 1000, `took ${Date.now() - start}ms`);
   }
+  t.is(detector.detect(`${'-'.repeat(50_000)} real@example.com`)[0]?.value, 'real@example.com');
 });
 
 test('still matches a local part that starts with a hyphen or plus', (t) => {
