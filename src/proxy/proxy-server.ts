@@ -242,7 +242,7 @@ export async function createProxyServer(
         },
       };
 
-      log(`[proxy] Listening on ${url} → ${options.target.href}`);
+      log(`[proxy] Listening on ${url} → ${options.target.origin}${options.target.pathname}`);
       if (options.auditLog !== undefined) {
         log(`[proxy] Audit log: ${options.auditLog}`);
       }
@@ -413,7 +413,7 @@ async function handleClientRequest(
   emit({
     type: 'request',
     method: trace.method,
-    path: incomingUrl,
+    path: trace.path,
     provider,
     sessionId,
   });

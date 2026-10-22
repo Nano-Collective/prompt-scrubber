@@ -1310,3 +1310,57 @@ test('the session header still reaches the client and pins the session', async (
     await upstream.close();
   }
 });
+
+test('verbose logging and events never include the query string', async (t) => {
+  const upstream = await startFakeUpstream((_req, _body, res) =>
+    jsonResponse(res, 200, { data: [] }),
+  );
+  const logs: string[] = [];
+  const events: ProxyEvent[] = [];
+  const proxy = await withProxy(upstream, { verbose: true, log: (msg) => logs.push(msg) }, events);
+  try {
+    const res = await makeRequest(`${proxy.url}/v1/models?api_key=secret_12345&key=abc`, {
+      method: 'GET',
+    });
+    t.is(res.status, 200);
+    await makeRequest(`${proxy.url}/openai/deployments/d/chat/completions?api-key=secret_67890`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }),
+    });
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+
+  const output = JSON.stringify(events) + logs.join('\n');
+  t.false(output.includes('secret_12345'));
+  t.false(output.includes('secret_67890'));
+  t.false(output.includes('api_key'));
+  const requests = events.filter((e) => e.type === 'request');
+  t.is(requests.length, 2);
+  t.like(requests[0], { method: 'GET', path: '/v1/models' });
+});
+
+test('the startup line does not print credentials or a query string from --target', async (t) => {
+  const upstream = await startFakeUpstream((_req, _body, res) => jsonResponse(res, 200, {}));
+  const logs: string[] = [];
+  const target = new URL(upstream.url);
+  target.username = 'user';
+  target.password = 'hunter2';
+  target.pathname = '/gateway';
+  target.search = '?key=secret_abc';
+  const proxy = await createProxyServer({
+    target,
+    port: 0,
+    host: '127.0.0.1',
+    log: (m) => logs.push(m),
+  });
+  await proxy.close();
+  await upstream.close();
+
+  const line = logs.find((l) => l.includes('Listening on')) ?? '';
+  t.true(line.includes(`${new URL(upstream.url).origin}/gateway`));
+  t.false(line.includes('hunter2'));
+  t.false(line.includes('secret_abc'));
+});
