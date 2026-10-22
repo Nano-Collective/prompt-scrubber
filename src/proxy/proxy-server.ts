@@ -8,6 +8,7 @@ import {
   type PromptScrubConfig,
   readConfigFile,
 } from '../core/config.js';
+import { addCount } from '../core/counts.js';
 import { loadConfiguredRulePacks } from '../core/rule-packs.js';
 import { scrub } from '../core/scrub.js';
 import { placeholderTokensIn } from '../session/session-manager.js';
@@ -623,7 +624,7 @@ function reserveLiteralPlaceholders(
 
 function mergeCounts(into: Record<string, number>, from: Record<string, number>): void {
   for (const [key, count] of Object.entries(from)) {
-    into[key] = (into[key] ?? 0) + count;
+    addCount(into, key, count);
   }
 }
 

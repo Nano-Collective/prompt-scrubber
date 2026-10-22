@@ -20,6 +20,7 @@ import type {
   ScrubStats,
 } from '../types/index.js';
 import { resolveCollisions } from './collision-resolver.js';
+import { addCount } from './counts.js';
 import { matchesLocale } from './locale.js';
 
 const DEFAULT_DETECTORS: Detector[] = [
@@ -136,7 +137,7 @@ function scrubString(
   for (const finding of suppressed) {
     const bucket = (stats.suppressed ??= { total: 0, byCategory: {} });
     bucket.total += 1;
-    bucket.byCategory[finding.category] = (bucket.byCategory[finding.category] ?? 0) + 1;
+    addCount(bucket.byCategory, finding.category);
   }
 
   if (findings.length === 0) {
@@ -145,7 +146,7 @@ function scrubString(
 
   for (const finding of findings) {
     stats.totalEntities += 1;
-    stats.byCategory[finding.category] = (stats.byCategory[finding.category] ?? 0) + 1;
+    addCount(stats.byCategory, finding.category);
   }
 
   // Replace right-to-left so earlier offsets stay valid

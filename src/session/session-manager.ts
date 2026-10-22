@@ -25,9 +25,11 @@ export function placeholderTokensIn(text: string): string[] {
 export class SessionManager {
   private sessionId: string | undefined;
   private map: SessionMap;
-  private valueToPlaceholder: Record<string, string>;
+  // Maps, not objects: the keys are text from the document being scrubbed, and a
+  // value such as `constructor` or `toString` would read back an inherited function.
+  private valueToPlaceholder: Map<string, string>;
   // Keeps track of the next index to use for each category to generate placeholders like "«Email_1»"
-  private categoryCounts: Record<string, number>;
+  private categoryCounts: Map<string, number>;
   // Placeholder names that already appear literally in the text being scrubbed.
   // They are not ours to hand out: reusing one collapses two different values
   // into a single token that rehydrates wrong in at least one position.
@@ -65,10 +67,10 @@ export class SessionManager {
     }
   }
 
-  private buildReverseLookup(map: SessionMap): Record<string, string> {
-    const reverse: Record<string, string> = {};
+  private buildReverseLookup(map: SessionMap): Map<string, string> {
+    const reverse = new Map<string, string>();
     for (const [placeholder, value] of Object.entries(map)) {
-      reverse[value] = placeholder;
+      reverse.set(value, placeholder);
     }
     return reverse;
   }
@@ -76,8 +78,8 @@ export class SessionManager {
   /**
    * Rebuilds the internal counters by inspecting the loaded session map.
    */
-  private rebuildCategoryCounts(map: SessionMap): Record<string, number> {
-    const counts: Record<string, number> = {};
+  private rebuildCategoryCounts(map: SessionMap): Map<string, number> {
+    const counts = new Map<string, number>();
 
     for (const placeholder of Object.keys(map)) {
       // Same free-form, whitespace-excluding prefix as PLACEHOLDER_TOKEN_REGEX —
@@ -88,8 +90,9 @@ export class SessionManager {
         const category = match[1];
         const index = parseInt(match[2], 10);
 
-        if (!counts[category] || index >= counts[category]) {
-          counts[category] = index + 1;
+        const current = counts.get(category);
+        if (!current || index >= current) {
+          counts.set(category, index + 1);
         }
       }
     }
@@ -118,7 +121,7 @@ export class SessionManager {
    * Finds the existing placeholder for a given original string, if any.
    */
   public getExistingPlaceholder(originalValue: string): string | undefined {
-    return this.valueToPlaceholder[originalValue];
+    return this.valueToPlaceholder.get(originalValue);
   }
 
   /**
@@ -130,16 +133,16 @@ export class SessionManager {
       return existing;
     }
 
-    let count = this.categoryCounts[category] || 1;
+    let count = this.categoryCounts.get(category) || 1;
     let newPlaceholder = `«${category}_${count}»`;
     while (this.reservedNames.has(newPlaceholder) || Object.hasOwn(this.map, newPlaceholder)) {
       count += 1;
       newPlaceholder = `«${category}_${count}»`;
     }
-    this.categoryCounts[category] = count + 1;
+    this.categoryCounts.set(category, count + 1);
 
     this.map[newPlaceholder] = originalValue;
-    this.valueToPlaceholder[originalValue] = newPlaceholder;
+    this.valueToPlaceholder.set(originalValue, newPlaceholder);
 
     return newPlaceholder;
   }
@@ -161,8 +164,8 @@ export class SessionManager {
       deleteSessionMap(this.sessionId);
     }
     this.map = {};
-    this.valueToPlaceholder = {};
-    this.categoryCounts = {};
+    this.valueToPlaceholder = new Map();
+    this.categoryCounts = new Map();
   }
 
   /**

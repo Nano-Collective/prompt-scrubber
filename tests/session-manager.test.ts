@@ -138,3 +138,30 @@ test('placeholderTokensIn finds every placeholder-shaped token and nothing else'
   ]);
   t.deepEqual(placeholderTokensIn('no tokens here'), []);
 });
+
+test('values named like Object.prototype members get ordinary placeholders', (t) => {
+  const session = new SessionManager('proto-values', {});
+  for (const value of ['constructor', 'toString', 'valueOf', 'hasOwnProperty', '__proto__']) {
+    t.is(session.getExistingPlaceholder(value), undefined, value);
+    const placeholder = session.createPlaceholder('Secret', value);
+    t.is(typeof placeholder, 'string');
+    t.regex(placeholder, /^«Secret_\d+»$/);
+    t.is(session.getExistingPlaceholder(value), placeholder);
+    t.is(session.getMap()[placeholder], value);
+  }
+});
+
+test('a category named like an Object.prototype member is numbered from 1', (t) => {
+  const session = new SessionManager('proto-category', {});
+  t.is(session.createPlaceholder('constructor', 'a'), '«constructor_1»');
+  t.is(session.createPlaceholder('constructor', 'b'), '«constructor_2»');
+  t.is(session.createPlaceholder('toString', 'c'), '«toString_1»');
+  t.is(session.createPlaceholder('__proto__', 'd'), '«__proto___1»');
+});
+
+test('numbering resumes after a reload for a prototype-named category', (t) => {
+  const first = new SessionManager('proto-reload', {});
+  first.createPlaceholder('constructor', 'a');
+  const second = new SessionManager('proto-reload', first.getMap());
+  t.is(second.createPlaceholder('constructor', 'b'), '«constructor_2»');
+});
