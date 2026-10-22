@@ -515,3 +515,114 @@ test('scrubAnthropicMessagesBody still scrubs normally nested tool_result blocks
   t.is(result.entities, 1);
   t.false(JSON.stringify(result.body).includes('john@example.com'));
 });
+
+const mark = (text: string) => ({
+  content: text.replace('bob@example.com', '«Email_1»'),
+  entities: text.includes('bob@example.com') ? 1 : 0,
+});
+
+test('scrubOpenAIChatBody scrubs user, metadata, prediction and response_format descriptions', (t) => {
+  const E = 'bob@example.com';
+  const result = scrubOpenAIChatBody(
+    {
+      model: 'gpt-4',
+      user: E,
+      safety_identifier: E,
+      metadata: { owner: E, ticket: '42' },
+      prediction: { type: 'content', content: `draft for ${E}` },
+      response_format: {
+        type: 'json_schema',
+        json_schema: {
+          name: 'reply',
+          description: `sent to ${E}`,
+          schema: { type: 'object', properties: { to: { type: 'string', description: E } } },
+        },
+      },
+      messages: [{ role: 'user', content: 'hi' }],
+    },
+    mark,
+  );
+  t.is(result.entities, 6);
+  const out = result.body as Record<string, any>;
+  t.is(out.user, '«Email_1»');
+  t.is(out.safety_identifier, '«Email_1»');
+  t.deepEqual(out.metadata, { owner: '«Email_1»', ticket: '42' });
+  t.is(out.prediction.content, 'draft for «Email_1»');
+  t.is(out.response_format.json_schema.description, 'sent to «Email_1»');
+  t.is(out.response_format.json_schema.schema.properties.to.description, '«Email_1»');
+  t.is(out.response_format.json_schema.name, 'reply');
+});
+
+test('scrubOpenAIChatBody leaves a body without those fields untouched', (t) => {
+  const body = { model: 'gpt-4', messages: [{ role: 'user', content: 'hi' }] };
+  const result = scrubOpenAIChatBody(body, mark);
+  t.is(result.body, body);
+  t.is(result.entities, 0);
+});
+
+test('scrubAnthropicMessagesBody scrubs document and search_result blocks and metadata', (t) => {
+  const E = 'bob@example.com';
+  const result = scrubAnthropicMessagesBody(
+    {
+      model: 'claude',
+      metadata: { user_id: E },
+      messages: [
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'document',
+              title: E,
+              context: E,
+              source: { type: 'text', media_type: 'text/plain', data: `mail ${E}` },
+            },
+            { type: 'document', source: { type: 'content', content: [{ type: 'text', text: E }] } },
+            {
+              type: 'document',
+              source: { type: 'base64', media_type: 'application/pdf', data: E },
+            },
+            {
+              type: 'search_result',
+              source: 'https://a.example',
+              title: E,
+              content: [{ type: 'text', text: E }],
+            },
+            {
+              type: 'tool_result',
+              tool_use_id: '1',
+              content: [
+                { type: 'document', source: { type: 'text', media_type: 'text/plain', data: E } },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+    mark,
+  );
+  const out = result.body as { metadata: any; messages: [{ content: any[] }] };
+  const [doc, nested, opaque, search, toolResult] = out.messages[0].content;
+  t.is(out.metadata.user_id, '«Email_1»');
+  t.is(doc.title, '«Email_1»');
+  t.is(doc.context, '«Email_1»');
+  t.is(doc.source.data, 'mail «Email_1»');
+  t.is(nested.source.content[0].text, '«Email_1»');
+  t.is(opaque.source.data, E);
+  t.is(search.title, '«Email_1»');
+  t.is(search.content[0].text, '«Email_1»');
+  t.is(toolResult.content[0].source.data, '«Email_1»');
+  t.is(result.entities, 8);
+});
+
+test('scrubAnthropicMessagesBody leaves thinking blocks alone, they hold placeholders already', (t) => {
+  const body = {
+    model: 'claude',
+    messages: [
+      {
+        role: 'assistant',
+        content: [{ type: 'thinking', thinking: 'bob@example.com', signature: 's' }],
+      },
+    ],
+  };
+  t.is(scrubAnthropicMessagesBody(body, mark).body, body);
+});

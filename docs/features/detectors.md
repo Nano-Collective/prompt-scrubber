@@ -35,12 +35,12 @@ export interface Detector {
 
 ## Built-in Detectors
 
-- `EmailDetector`: Detects RFC 5322 shaped email addresses.
+- `EmailDetector`: Detects RFC 5322 shaped email addresses, including internationalised ones (`josé@exämple.com`). The scan is linear in the input length.
 - `PhoneDetector`: Detects international and US-shaped phone numbers.
-- `UrlDetector`: Detects full URLs and bare API endpoints. Can be configured to pass-through trusted hosts via `urlAllowlist` in configuration or `--url-allowlist` in the CLI. Subdomains of allowlisted hosts are implicitly trusted.
+- `UrlDetector`: Detects full URLs and bare API endpoints. Can be configured to pass-through trusted hosts via `urlAllowlist` in configuration or `--url-allowlist` in the CLI. Subdomains of allowlisted hosts are implicitly trusted. An allowlisted host does not exempt a URL that carries a user name or password, or a query or fragment parameter named like a credential (`key`, `token`, `secret`, `password`, `auth`, `sig`, `signature`, `session`, `jwt`, ...): that URL is still redacted.
 - `PathDetector`: Detects absolute paths and home directories. Windows paths are matched in two forms: quoted (`"C:\Program Files\App\app.exe"`), where spaces are taken as part of the path, and unquoted, where a space continues the path when the next token contains a backslash, looks like a path component, or carries a file extension. So `C:\Users\john smith\creds.json` and `C:\data\quarterly report.xlsx` are matched in full, while `C:\app\cfg.ini owner` stops at the file. Where a path is genuinely ambiguous the detector errs towards matching more, since collision resolution narrows an over-broad `Path` against any email or secret inside it — over-redaction is recoverable, a dropped tail is a leak. A space never continues into a second drive spec, so `copy C:\src\bin D:\dest\bin` and `Files: C:\a\b, D:\c\d` stay two paths rather than one path swallowing the next path's `X:\` prefix. An all-caps word (`FAILED`, `ERROR`, `WARN`) after an extension-less path is treated as log-level prose rather than a path component, so `C:\src\build FAILED after 3 retries` stops at `build` — but a sentence-initial capital that isn't all-caps (`C:\app\cfg Error 404 occurred`) is indistinguishable from a genuine path component like `John Doe`, so it is still over-matched by the same "match more, not less" rule.
-- `SecretDetector`: Detects high-entropy strings, API keys, and tokens.
-- `AddressDetector`: Detects unambiguous postal addresses (e.g., street shapes).
+- `SecretDetector`: Detects high-entropy strings, API keys, and tokens, and credentials embedded in a URL or connection string (`postgres://user:pass@host/db`, `mongodb+srv://`, `redis://`, `amqp://`, `https://user:pass@host`), which are redacted as one unit. A URL with a user name but no password (`ssh://git@host`) is not a credential and is left to the other detectors.
+- `AddressDetector`: Detects unambiguous postal addresses (e.g., street shapes). A compass direction (`NW`) and a unit (`Apt 4B`, `Suite 300`) after the street are part of the address, and so is a `, City, ST 12345` tail when a ZIP code is present. Without a ZIP code the tail is left alone, so prose after a street name is never read as a city.
 - `CreditCardDetector`: Detects Visa, Mastercard (including the 2221-2720 range), Discover, Amex, JCB, Diners Club (14 and 16 digit), UnionPay, and Maestro numbers, validated with the Luhn (Mod-10) checksum so barcodes and serial numbers are rejected.
 - `IbanDetector`: Detects International Bank Account Numbers, validated against the ISO 13616 country registry (code and exact length) and the ISO 7064 MOD-97 checksum.
 - `SsnDetector`: Detects US Social Security Numbers, rejecting values that break SSA structural rules (area of `000`, `666`, or `900-999`; group of `00`; serial of `0000`). The hyphenated and space-separated `AAA-GG-SSSS` forms match on their own with a consistent separator, since a missed SSN is a breach. The continuous form requires a nearby `SSN`, `social security`, or `tax id` label, because an unlabelled `123456789` is more often an order ID than an SSN.
@@ -63,6 +63,7 @@ produced it.
 | --- | --- | --- | --- |
 | `SecretDetector` | Vendor key prefix (`sk-`, `ghp_`, `AKIA`, ...) | 0.99 | `exact-pattern` |
 | `SecretDetector` | `Bearer` token | 0.90 | `exact-pattern` |
+| `SecretDetector` | Credentials in a URL (`scheme://user:pass@host`) | 0.95 | `exact-pattern` |
 | `SecretDetector` | Suggestive key name (`API_KEY=...`) | 0.70 | `key-name` |
 | `SecretDetector` | High-entropy string | 0.60 | `entropy` |
 | `EmailDetector` | Any match | 0.95 | `exact-pattern` |

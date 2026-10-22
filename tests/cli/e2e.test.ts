@@ -975,3 +975,15 @@ test.serial('CLI: importing the entry file does not run the CLI', (t) => {
   t.is(result.status, 0, result.stderr);
   t.is(result.stdout.trim(), 'imported');
 });
+
+test.serial('CLI: scrub --session-id rejects a path traversal ID and writes nothing', (t) => {
+  const outside = path.join(tmpConfigDir, 'outside-session');
+  const result = runCli(
+    ['scrub', '--session-id', '../../outside-session/pwned'],
+    'Contact alice@example.com',
+  );
+
+  t.not(result.status, 0);
+  t.true(result.stderr.includes('Invalid session ID'));
+  t.false(fs.existsSync(path.join(outside, 'pwned.json')));
+});

@@ -141,3 +141,42 @@ test('a wider low-confidence overlap does not downgrade a vendor-prefixed key', 
   t.is(findings[0]?.confidence, 0.99);
   t.is(findings[0]?.method, 'exact-pattern');
 });
+
+test('detects credentials embedded in connection strings as one unit', (t) => {
+  for (const url of [
+    'postgres://admin:s3cretPass@db.internal:5432/app',
+    'mongodb+srv://u:p%40ss@cluster0.x.mongodb.net/test?retryWrites=true',
+    'redis://:pw@host:6379',
+    'redis://default:pw@host:6379/0',
+    'amqp://guest:guest@rabbit:5672/',
+    'ftp://bob:hunter22@ftp.example.com',
+    'https://user:pass@example.com/x',
+  ]) {
+    const findings = detector.detect(`connect with ${url} now`);
+    t.is(findings.length, 1, url);
+    t.is(findings[0]?.value, url);
+    t.is(findings[0]?.placeholderPrefix, 'Secret');
+  }
+});
+
+test('connection string credentials stop before trailing punctuation', (t) => {
+  t.is(
+    detector.detect('(see https://user:pass@example.com/x).')[0]?.value,
+    'https://user:pass@example.com/x',
+  );
+  t.is(
+    detector.detect('use postgres://admin:pw@db.internal:5432/app.')[0]?.value,
+    'postgres://admin:pw@db.internal:5432/app',
+  );
+});
+
+test('ignores URLs without a password', (t) => {
+  for (const text of [
+    'ssh://git@github.com/o/r',
+    'https://example.com/a:b@c',
+    'https://example.com/docs',
+    'mailto://nobody',
+  ]) {
+    t.is(detector.detect(text).length, 0, text);
+  }
+});

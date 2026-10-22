@@ -5,8 +5,10 @@ const FULL_URL_REGEX = /https?:\/\/(?:[a-zA-Z0-9\-._~:/?#[\]@!$&'()*+,;=%]+)/g;
 
 // Bare API endpoint pattern: hostname/path (no scheme).
 // Requires: a dot in the hostname (rejects bare words) + at least one path segment.
+// `(?<!\w-)` keeps a match from starting inside a hyphenated run, which would
+// rescan the rest of the run from every hyphen.
 const BARE_API_REGEX =
-  /(?<![/\w])([a-zA-Z0-9][a-zA-Z0-9-]*\.[a-zA-Z]{2,}(?:\.[a-zA-Z]{2,})?\/[a-zA-Z0-9\-._~:/?#[\]@!$&'()*+,;=%]+)/g;
+  /(?<![/\w])(?<!\w-)([a-zA-Z0-9][a-zA-Z0-9-]*\.[a-zA-Z]{2,}(?:\.[a-zA-Z]{2,})?\/[a-zA-Z0-9\-._~:/?#[\]@!$&'()*+,;=%]+)/g;
 
 // A scheme makes the match unambiguous; a bare host/path has to guess from a
 // dot and a slash, which also describes plenty of file paths and prose.
@@ -60,6 +62,43 @@ function isValidBareApi(url: string): boolean {
   return host.includes('.');
 }
 
+// Query or fragment parameters whose name says the value is a credential. An
+// allowlisted host does not make `?api_key=...` safe to forward.
+const SECRET_PARAM_WORDS = new Set([
+  'key',
+  'apikey',
+  'token',
+  'secret',
+  'password',
+  'passwd',
+  'pwd',
+  'auth',
+  'sig',
+  'signature',
+  'credential',
+  'credentials',
+  'session',
+  'sessionid',
+  'jwt',
+  'bearer',
+]);
+
+function hasSecretParam(url: string): boolean {
+  // The first `?` or `#` begins the query or fragment: neither is legal unescaped in the
+  // scheme, user info, host or path that come before it. The scheme may be absent (a
+  // bare `host/path`), which changes nothing here.
+  const start = url.search(/[?#]/);
+  if (start === -1) return false;
+  return url
+    .slice(start + 1)
+    .split(/[&;#?]/)
+    .some((pair) => {
+      if (!pair.includes('=')) return false;
+      const name = (pair.split('=')[0] ?? '').replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase();
+      return name.split(/[_.-]/).some((word) => SECRET_PARAM_WORDS.has(word));
+    });
+}
+
 export class UrlDetector implements Detector {
   readonly name = 'UrlDetector';
 
@@ -69,6 +108,7 @@ export class UrlDetector implements Detector {
     if (this.allowlist.length === 0) return false;
     try {
       const parsed = new URL(urlStr.startsWith('http') ? urlStr : `http://${urlStr}`);
+      if (parsed.username || parsed.password || hasSecretParam(urlStr)) return false;
       const host = parsed.hostname;
       return this.allowlist.some((allowed) => host === allowed || host.endsWith(`.${allowed}`));
     } catch {

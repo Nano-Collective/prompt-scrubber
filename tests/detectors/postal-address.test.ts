@@ -73,3 +73,37 @@ test('scores an address as a heuristic match', (t) => {
   t.is(findings[0]?.confidence, 0.7);
   t.is(findings[0]?.method, 'heuristic');
 });
+
+test('includes a compass direction after the street suffix', (t) => {
+  const findings = detector.detect('Visit 1600 Pennsylvania Ave NW today');
+  t.is(findings[0]?.value, '1600 Pennsylvania Ave NW');
+});
+
+test('includes city, state and ZIP when a ZIP code follows', (t) => {
+  t.is(
+    detector.detect('1600 Pennsylvania Ave NW, Washington, DC 20500')[0]?.value,
+    '1600 Pennsylvania Ave NW, Washington, DC 20500',
+  );
+  t.is(
+    detector.detect('Send to 123 Main St Apt 4B, Springfield, IL 62704-1234 please')[0]?.value,
+    '123 Main St Apt 4B, Springfield, IL 62704-1234',
+  );
+  t.is(
+    detector.detect('500 Market St Suite 300, San Francisco, CA 94105.')[0]?.value,
+    '500 Market St Suite 300, San Francisco, CA 94105',
+  );
+});
+
+test('does not read prose after the street as a city and state', (t) => {
+  t.is(detector.detect('Go to 5 Church St, then go on')[0]?.value, '5 Church St');
+  t.is(detector.detect('221B Baker St, London')[0]?.value, '221B Baker St');
+  t.is(detector.detect('I live at 42 Elm Street e.g. near the park')[0]?.value, '42 Elm Street');
+  t.is(detector.detect('99 Broad St unit tests pass')[0]?.value, '99 Broad St');
+});
+
+test('scans repeated address fragments in linear time', (t) => {
+  const start = Date.now();
+  detector.detect('Main St, '.repeat(20_000));
+  detector.detect(`${'1 '.repeat(20_000)}Main St`);
+  t.true(Date.now() - start < 1000);
+});
