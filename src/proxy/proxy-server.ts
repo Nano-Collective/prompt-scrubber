@@ -246,7 +246,7 @@ export async function createProxyServer(
         },
       };
 
-      log(`[proxy] Listening on ${url} → ${options.target.href}`);
+      log(`[proxy] Listening on ${url} → ${options.target.origin}${options.target.pathname}`);
       if (options.auditLog !== undefined) {
         log(`[proxy] Audit log: ${options.auditLog}`);
       }
@@ -417,7 +417,7 @@ async function handleClientRequest(
   emit({
     type: 'request',
     method: trace.method,
-    path: incomingUrl,
+    path: trace.path,
     provider,
     sessionId,
   });
@@ -850,11 +850,14 @@ function dispatchUpstream(target: URL, req: DispatchRequest): Promise<UpstreamRe
  */
 function joinTargetPath(target: URL, incomingUrl: string): string {
   const incomingPath = parsePath(incomingUrl);
+  // The query string is part of the request: Azure OpenAI needs `?api-version=`,
+  // Gemini takes `?key=`, and `/v1/models?limit=` pages its results with it.
+  const query = incomingUrl.slice(incomingPath.length);
   const base = target.pathname.replace(/\/$/, '');
   if (incomingPath === '/' || incomingPath === '') {
-    return `${base}/`;
+    return `${base}/${query}`;
   }
-  return `${base}${incomingPath}`;
+  return `${base}${incomingPath}${query}`;
 }
 
 function pipeStreamingResponse(
