@@ -38,6 +38,18 @@ export interface ProxyOptions {
   /** Maximum request body size in bytes. Defaults to 10 MB. */
   maxBodyBytes?: number;
   /**
+   * How many sessions to keep before the least recently used is forgotten.
+   * Defaults to 1000. A session that holds no placeholders is not kept at all.
+   */
+  maxSessions?: number;
+  /**
+   * Require this token in the `x-prompt-scrub-token` header of every request
+   * except `/healthz`; others get `401`. The header is never forwarded upstream.
+   * Without it the proxy is open to anyone who can reach its port, which only
+   * matters when `host` is not a loopback address.
+   */
+  authToken?: string;
+  /**
    * Fail closed: refuse with `403` any request that carries a body the proxy
    * cannot scrub (an unrecognised endpoint, a compressed body, or a body that
    * is not JSON) instead of forwarding it untouched. Defaults to `false`.
@@ -122,6 +134,7 @@ export type ProxyEvent =
         | 'upstream_error'
         | 'client_aborted'
         | 'strict_blocked'
+        | 'unauthorized'
         | 'internal';
     };
 

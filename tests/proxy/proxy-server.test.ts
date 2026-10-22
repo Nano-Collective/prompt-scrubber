@@ -1310,3 +1310,163 @@ test('the session header still reaches the client and pins the session', async (
     await upstream.close();
   }
 });
+
+test('requests that scrub nothing leave no session behind', async (t) => {
+  const upstream = await startFakeUpstream(chatResponder('ok'));
+  const sessionStore = new Map<string, Record<string, string>>();
+  const proxy = await withProxy(upstream, { sessionStore });
+  try {
+    for (let i = 0; i < 25; i++) {
+      await chat(proxy.url, [{ role: 'user', content: `plain message ${i}` }]);
+    }
+    await makeRequest(`${proxy.url}/v1/models`, { method: 'GET' });
+    t.is(sessionStore.size, 0);
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+});
+
+test('the session store is capped and keeps the most recently used sessions', async (t) => {
+  const upstream = await startFakeUpstream(chatResponder('mailing «Email_1»'));
+  const sessionStore = new Map<string, Record<string, string>>();
+  const proxy = await withProxy(upstream, { sessionStore, maxSessions: 5 });
+  try {
+    const sessions: string[] = [];
+    for (let i = 0; i < 20; i++) {
+      const res = await chat(proxy.url, [{ role: 'user', content: `mail user${i}@example.com` }]);
+      sessions.push(res.session);
+      t.true(sessionStore.size <= 5);
+    }
+    t.is(sessionStore.size, 5);
+    t.deepEqual([...sessionStore.keys()], sessions.slice(-5));
+
+    const recent = await chat(proxy.url, [{ role: 'user', content: 'again' }], sessions[19]);
+    t.is(recent.reply, 'mailing user19@example.com');
+
+    const evicted = await chat(proxy.url, [{ role: 'user', content: 'again' }], sessions[0]);
+    t.is(evicted.reply, 'mailing «Email_1»');
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+});
+
+test('a session in use is not evicted by newer sessions that it outlives', async (t) => {
+  const upstream = await startFakeUpstream(chatResponder('mailing «Email_1»'));
+  const sessionStore = new Map<string, Record<string, string>>();
+  const proxy = await withProxy(upstream, { sessionStore, maxSessions: 3 });
+  try {
+    const first = await chat(proxy.url, [{ role: 'user', content: 'mail keep@example.com' }]);
+    for (let i = 0; i < 6; i++) {
+      await chat(proxy.url, [{ role: 'user', content: `mail other${i}@example.com` }]);
+      await chat(proxy.url, [{ role: 'user', content: 'ping' }], first.session);
+    }
+    const again = await chat(proxy.url, [{ role: 'user', content: 'ping' }], first.session);
+    t.is(again.reply, 'mailing keep@example.com');
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+});
+
+test('without an auth token the proxy accepts requests and does not warn on loopback', async (t) => {
+  const upstream = await startFakeUpstream(chatResponder('ok'));
+  const logs: string[] = [];
+  const proxy = await withProxy(upstream, { log: (m) => logs.push(m) });
+  try {
+    const res = await chat(proxy.url, [{ role: 'user', content: 'hi' }]);
+    t.is(res.reply, 'ok');
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+  t.false(logs.some((line) => line.includes('Warning')));
+});
+
+test('binding a non-loopback host without a token logs a warning', async (t) => {
+  const upstream = await startFakeUpstream(chatResponder('ok'));
+  const logs: string[] = [];
+  const proxy = await withProxy(upstream, { host: '0.0.0.0', log: (m) => logs.push(m) });
+  await proxy.close();
+  await upstream.close();
+  t.true(
+    logs.some(
+      (line) => line.includes('not a loopback address') && line.includes('no --auth-token'),
+    ),
+    logs.join('\n'),
+  );
+});
+
+test('binding a non-loopback host with a token logs the requirement instead of a warning', async (t) => {
+  const upstream = await startFakeUpstream(chatResponder('ok'));
+  const logs: string[] = [];
+  const proxy = await withProxy(upstream, {
+    host: '0.0.0.0',
+    authToken: 'sekret',
+    log: (m) => logs.push(m),
+  });
+  await proxy.close();
+  await upstream.close();
+  t.true(logs.some((line) => line.includes('x-prompt-scrub-token')));
+  t.false(logs.some((line) => line.includes('Warning')));
+});
+
+const CHAT = JSON.stringify({ model: 'gpt-4', messages: [{ role: 'user', content: 'hello' }] });
+
+test('with an auth token, requests without a valid token are rejected and never forwarded', async (t) => {
+  const seen: http.IncomingHttpHeaders[] = [];
+  const upstream = await startFakeUpstream((req, _body, res) => {
+    seen.push(req.headers);
+    jsonResponse(res, 200, { choices: [{ message: { role: 'assistant', content: 'ok' } }] });
+  });
+  const events: ProxyEvent[] = [];
+  const proxy = await withProxy(upstream, { authToken: 'sekret', host: '127.0.0.1' }, events);
+  const post = (headers: Record<string, string>) =>
+    makeRequest(`${proxy.url}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...headers },
+      body: CHAT,
+    });
+  try {
+    const none = await post({});
+    t.is(none.status, 401);
+    t.true(none.body.includes('x-prompt-scrub-token'));
+    t.is((await post({ 'x-prompt-scrub-token': 'wrong' })).status, 401);
+    t.is((await post({ 'x-prompt-scrub-token': 'sekret-and-more' })).status, 401);
+    t.is(upstream.requestCount(), 0);
+
+    const ok = await post({
+      'x-prompt-scrub-token': 'sekret',
+      authorization: 'Bearer upstream-key',
+    });
+    t.is(ok.status, 200);
+    t.is(upstream.requestCount(), 1);
+    t.false('x-prompt-scrub-token' in seen[0]!);
+    t.is(seen[0]?.authorization, 'Bearer upstream-key');
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+  const rejected = events.filter((e) => e.type === 'response' && e.errorKind === 'unauthorized');
+  t.is(rejected.length, 3);
+  t.like(rejected[0], { status: 401, outcome: 'rejected' });
+});
+
+test('with an auth token, /healthz stays open and /metrics needs the token', async (t) => {
+  const upstream = await startFakeUpstream(chatResponder('ok'));
+  const proxy = await withProxy(upstream, { authToken: 'sekret' });
+  try {
+    t.is((await makeRequest(`${proxy.url}/healthz`, { method: 'GET' })).status, 200);
+    t.is((await makeRequest(`${proxy.url}/metrics`, { method: 'GET' })).status, 401);
+    const metrics = await makeRequest(`${proxy.url}/metrics`, {
+      method: 'GET',
+      headers: { 'x-prompt-scrub-token': 'sekret' },
+    });
+    t.is(metrics.status, 200);
+    t.regex(metrics.body, /prompt_scrub_errors_total\{kind="unauthorized"\} 1/);
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+});

@@ -924,3 +924,17 @@ test('CLI: inspect --json with --min-confidence reports suppressed findings', (t
   );
   t.regex(output.hash, /^[a-f0-9]{64}$/);
 });
+
+test.serial('CLI: proxy rejects an invalid --max-sessions and an empty --auth-token', (t) => {
+  for (const [flag, value, message] of [
+    ['--max-sessions', '0', 'Invalid --max-sessions'],
+    ['--max-sessions', '-3', 'Invalid --max-sessions'],
+    ['--max-sessions', '1.5', 'Invalid --max-sessions'],
+    ['--max-sessions', 'abc', 'Invalid --max-sessions'],
+    ['--auth-token', ' ', 'Invalid --auth-token'],
+  ] as const) {
+    const result = runCli(['proxy', '--target', 'http://127.0.0.1:1', '--port', '0', flag, value]);
+    t.is(result.status, 1, `${flag} ${value}`);
+    t.true(result.stderr.includes(message), result.stderr);
+  }
+});

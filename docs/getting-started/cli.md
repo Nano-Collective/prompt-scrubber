@@ -187,6 +187,8 @@ Messages are never dropped. An entry the proxy does not recognise — an assista
 
 Responses are rehydrated in the same places as requests: message content, `tool_calls[].function.arguments` and `tool_use.input`. The client executes those tool calls on its own machine, so they are handed back with the real values in them.
 
+**Session limits:** sessions live in memory only. The proxy keeps the most recent `--max-sessions` of them and forgets the rest, and a request that scrubs nothing leaves no session behind. A client that sends the ID of a forgotten session gets a fresh, empty one, so a placeholder from before the eviction is left as written in the response.
+
 **Session continuity:** the proxy threads a session ID through every request via the `x-prompt-scrub-session` header. When the client sends the header back on a follow-up call, the same placeholder map is reused, so `«Email_1»` stays `«Email_1»` across turns. If the client does not send the header, the proxy generates a UUID and echoes it in the response so the client can pin it. The header only travels between the client and the proxy: it is removed from the request before it is forwarded, so the upstream provider never sees the session ID. A placeholder-shaped token that a request already contains literally, such as `«Email_1»` in a message that discusses placeholders, is reserved for the rest of the session. It is forwarded and rehydrated as written, and no real value is ever given that name.
 
 **Streaming:** Server-Sent Events (SSE) are rehydrated incrementally, and a placeholder can be split in two different ways. A *chunk* boundary can fall anywhere, so the proxy buffers bytes that do not yet form a complete event. An *event* boundary is the interesting one: vendors emit roughly one token per event, so `«Email_1»` genuinely arrives as `«Email_` then `1»` in the next event. For streamed tool-call arguments (`delta.tool_calls[].function.arguments`, `input_json_delta.partial_json`) the proxy holds the trailing partial placeholder back and prepends it to the next fragment of that same call, so what the client reassembles carries the real value. `data: [DONE]` sentinels and non-JSON payloads pass through untouched.
@@ -203,6 +205,8 @@ Responses are rehydrated in the same places as requests: message content, `tool_
 - `-v, --verbose`: Log a one-line summary of every proxied request to `stderr` (including the scrubbed/rehydrated counts and session ID).
 - `--strict`: Fail closed. Refuse with `403` any request whose body cannot be scrubbed (unknown endpoint, compressed body, or non-JSON body) instead of forwarding it. Off by default.
 - `--audit-log <path>`: Append one JSON line per completed request to this file. Records hold counts, detector categories, timings and the request path. They never hold values, bodies, headers or query strings. The file is created with mode `0600`.
+- `--auth-token <token>`: Require this token in the `x-prompt-scrub-token` header of every request except `/healthz`; anything else gets `401`. The header is not forwarded upstream. Without the flag the proxy is open to anyone who can reach its port, so use it whenever `--host` is not a loopback address. Prefer the `PROMPT_SCRUB_AUTH_TOKEN` environment variable over the flag, which shows in the process list. A Prometheus scrape of `/metrics` then needs the header too.
+- `--max-sessions <n>`: How many sessions to keep in memory before the least recently used is dropped (default `1000`). A session that holds no placeholders is not kept at all.
 - `--no-metrics`: Do not serve `/healthz` and `/metrics`. Those paths are then forwarded upstream like any other path.
 - `--no-gc`: Skip the startup session-garbage-collection pass.
 - `--no-reload-config`: Do not reload `config.json` while the proxy runs (see below).
@@ -238,7 +242,7 @@ An audit record looks like this:
 {"ts":"2026-10-14T09:12:03.418Z","type":"response","requestId":"…","sessionId":"…","method":"POST","path":"/v1/chat/completions","provider":"openai","status":200,"durationMs":412.7,"streaming":false,"outcome":"ok","entities":1,"byCategory":{"Email":1},"suppressed":0,"suppressedByCategory":{},"rehydrated":1}
 ```
 
-`outcome` is one of `ok`, `passthrough` (forwarded without scrubbing), `rejected` (413, or 403 in strict mode) or `error`. When it is `rejected` or `error`, `errorKind` is one of `body_too_large`, `strict_blocked`, `upstream_timeout`, `upstream_error`, `client_aborted` or `internal`.
+`outcome` is one of `ok`, `passthrough` (forwarded without scrubbing), `rejected` (413, or 403 in strict mode) or `error`. When it is `rejected` or `error`, `errorKind` is one of `body_too_large`, `strict_blocked`, `unauthorized`, `upstream_timeout`, `upstream_error`, `client_aborted` or `internal`.
 
 **Limitations:**
 
