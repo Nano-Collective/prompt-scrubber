@@ -204,3 +204,53 @@ test('scores a scheme-qualified URL above a bare host/path', (t) => {
   t.is(bare[0]?.confidence, 0.7);
   t.is(bare[0]?.method, 'heuristic');
 });
+
+test('scans hyphenated runs in linear time', (t) => {
+  for (const input of [
+    '-'.repeat(100_000),
+    'A-'.repeat(50_000),
+    'the-quick-brown-fox-'.repeat(5_000),
+  ]) {
+    const start = Date.now();
+    detector.detect(input);
+    t.true(Date.now() - start < 1000, `took ${Date.now() - start}ms`);
+  }
+});
+
+test('still detects a bare endpoint with a hyphenated host', (t) => {
+  const findings = detector.detect('see foo-bar.example.org/a and --host=cdn.example.net/z');
+  t.deepEqual(
+    findings.map((f) => f.value),
+    ['foo-bar.example.org/a', 'cdn.example.net/z'],
+  );
+});
+
+test('an allowlisted host does not exempt a URL carrying a credential parameter', (t) => {
+  const allowlisted = new UrlDetector(['example.com']);
+  for (const url of [
+    'https://example.com/cb?api_key=abcd1234efgh5678',
+    'https://example.com/a?X-Amz-Signature=abc123',
+    'https://example.com/a?accessToken=xyz',
+    'https://example.com/a?page=2&session=Zm9vYmFy',
+    'https://example.com/a#access_token=xyz',
+  ]) {
+    t.is(allowlisted.detect(url).length, 1, url);
+  }
+});
+
+test('an allowlisted host does not exempt a URL with a user name or password', (t) => {
+  const allowlisted = new UrlDetector(['example.com']);
+  t.is(allowlisted.detect('https://user@example.com/x').length, 1);
+  t.is(allowlisted.detect('https://user:pw@example.com/x').length, 1);
+});
+
+test('an allowlisted host still exempts ordinary query strings and fragments', (t) => {
+  const allowlisted = new UrlDetector(['example.com']);
+  for (const url of [
+    'https://example.com/docs/guide',
+    'https://example.com/a?page=2&sort=asc#top',
+    'https://sub.example.com/a?author=bob&keyword=cats',
+  ]) {
+    t.is(allowlisted.detect(url).length, 0, url);
+  }
+});

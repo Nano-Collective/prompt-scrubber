@@ -76,6 +76,35 @@ test('scores a matched address as a high-confidence exact pattern', (t) => {
   t.is(findings[0]?.method, 'exact-pattern');
 });
 
+test('detects internationalised addresses', (t) => {
+  const findings = detector.detect('Write to josé@exämple.com or 李雷@例子.中国 today');
+  t.deepEqual(
+    findings.map((f) => f.value),
+    ['josé@exämple.com', '李雷@例子.中国'],
+  );
+});
+
+test('still matches a local part that starts with a hyphen or plus', (t) => {
+  t.is(detector.detect('mail -lead@example.com now')[0]?.value, '-lead@example.com');
+  t.is(detector.detect('mail +tag@example.com now')[0]?.value, '+tag@example.com');
+});
+
+test('scans long runs of local-part characters in linear time', (t) => {
+  for (const run of ['-', '+', '%', '.-', 'a-']) {
+    const input = run.repeat(100_000 / run.length);
+    const start = Date.now();
+    t.is(detector.detect(input).length, 0);
+    t.true(Date.now() - start < 1000, `${JSON.stringify(run)} run took ${Date.now() - start}ms`);
+  }
+});
+
+test('many addresses with an unfinished domain scan in linear time', (t) => {
+  const start = Date.now();
+  t.deepEqual(detector.detect('a@a.'.repeat(25_000)), []);
+  t.deepEqual(detector.detect('a@'.repeat(50_000)), []);
+  t.true(Date.now() - start < 1000, `took ${Date.now() - start}ms`);
+});
+
 test('detects an address at the end of a sentence', (t) => {
   t.is(detector.detect('Contact alice@example.com.')[0]?.value, 'alice@example.com');
   t.is(detector.detect('Mail bob@example.com. Then call.')[0]?.value, 'bob@example.com');
