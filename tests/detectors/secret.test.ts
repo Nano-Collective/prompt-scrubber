@@ -171,3 +171,29 @@ test('a long key leaves no tail behind after scrubbing', (t) => {
   const result = scrub({ content: `rotate ${key} today`, sessionMap: {} });
   t.is(result.scrubbedContent, 'rotate «Secret_1» today');
 });
+
+test('does not treat a short sk- string as a key', (t) => {
+  for (const text of [
+    'sk-',
+    'sk-short',
+    'sk-abc123 is not a key',
+    'use sk-0123456789abcdefghi now',
+  ]) {
+    t.is(detector.detect(text).length, 0, text);
+  }
+});
+
+test('a hyphenated word joined onto a key is redacted with it, never left behind', (t) => {
+  const key = 'sk-0123456789abcdefghijklmnop';
+  const findings = detector.detect(`token ${key}-rotate-now please`);
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, `${key}-rotate-now`);
+  t.is(detector.detect(`token ${key} -rotate-now`)[0]?.value, key);
+});
+
+test('a long key next to another detector is redacted separately', (t) => {
+  const key = `sk-proj-${'0123456789'.repeat(16)}`;
+  const result = scrub({ content: `bob@example.com ${key}`, sessionMap: {} });
+  t.is(result.scrubbedContent, '«Email_1» «Secret_1»');
+  t.deepEqual(result.stats.byCategory, { Email: 1, Secret: 1 });
+});

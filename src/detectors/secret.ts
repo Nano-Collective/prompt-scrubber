@@ -14,7 +14,10 @@ const ENTROPY_CONFIDENCE = 0.6;
 const PREFIX_PATTERNS: { regex: RegExp; name: string; confidence?: number }[] = [
   // OpenAI and Anthropic: sk-... with no upper bound on the length. Project keys
   // (sk-proj-) run to about 164 characters and Anthropic keys to about 108, so a
-  // cap would redact the head of a key and leave the tail in the clear.
+  // cap would redact the head of a key and leave the tail in the clear. The match
+  // runs over letters, digits, `-` and `_`, and ends at anything else (whitespace,
+  // quotes, commas, brackets). A hyphenated word joined straight onto a key is
+  // therefore redacted with it: over-redacting is the safe side of that trade.
   {
     regex: /sk-(?:proj-|svcacct-|ant-api\d+-)?[A-Za-z0-9_-]{20,}/g,
     name: 'OpenAI/Anthropic key',
