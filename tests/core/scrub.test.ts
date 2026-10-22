@@ -1148,3 +1148,49 @@ test('scrub handles URL with trailing markdown punctuation adjacent to email', (
   });
   t.is(restored.content, 'Contact us at alice@example.com or visit (https://example.com/support).');
 });
+
+test('scrubs a value named like an Object.prototype member and restores it', (t) => {
+  for (const word of ['constructor', 'toString', 'valueOf', 'hasOwnProperty', '__proto__']) {
+    const result = scrub({
+      content: `call ${word}() now`,
+      sessionMap: {},
+      options: { codeTellTerms: [word] },
+    });
+    t.is(result.scrubbedContent, 'call «CodeTell_1»() now', word);
+    t.deepEqual(result.sessionMap, { '«CodeTell_1»': word }, word);
+    t.deepEqual(result.stats.byCategory, { CodeTell: 1 });
+  }
+});
+
+test('scrubs the issue example: a key whose value is "constructor"', (t) => {
+  const result = scrub({ content: 'api_key = constructor', sessionMap: {} });
+  t.is(result.scrubbedContent, 'api_key = «Secret_1»');
+  t.deepEqual(result.sessionMap, { '«Secret_1»': 'constructor' });
+});
+
+test('counts findings for a category named like an Object.prototype member', (t) => {
+  const detector = {
+    name: 'ProtoDetector',
+    detect: (text: string) => {
+      const i = text.indexOf('zz');
+      return i < 0
+        ? []
+        : [
+            {
+              category: 'constructor',
+              span: [i, i + 2] as [number, number],
+              value: 'zz',
+              placeholderPrefix: 'constructor',
+            },
+          ];
+    },
+  };
+  const result = scrub({
+    content: 'a zz b',
+    sessionMap: {},
+    options: { customDetectors: [detector] },
+  });
+  t.is(result.scrubbedContent, 'a «constructor_1» b');
+  t.is(Object.keys(result.stats.byCategory).join(), 'constructor');
+  t.is(result.stats.byCategory.constructor, 1);
+});
