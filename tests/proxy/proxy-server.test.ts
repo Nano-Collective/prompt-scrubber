@@ -1437,6 +1437,7 @@ test('hanging up while the upstream is still sending a JSON body cancels it', as
   t.like(
     events.find((e) => e.type === 'response'),
     {
+      status: 499,
       outcome: 'error',
       errorKind: 'client_aborted',
     },

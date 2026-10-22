@@ -926,7 +926,7 @@ test('CLI: inspect --json with --min-confidence reports suppressed findings', (t
 });
 
 test.serial('CLI: proxy rejects an invalid --upstream-timeout', (t) => {
-  for (const value of ['abc', '-1', '']) {
+  for (const value of ['abc', '-1', '', '0x10', '1e3', '5s', ' ']) {
     const result = runCli([
       'proxy',
       '--target',

@@ -513,9 +513,10 @@ async function handleClientRequest(
   // upstream and stop it generating one. Streamed responses are cancelled by
   // `pipeStreamingResponse`, which owns the response once its headers are out.
   const clientGone = new AbortController();
-  res.once('close', () => {
+  const onClientClose = () => {
     if (!res.writableFinished) clientGone.abort();
-  });
+  };
+  res.once('close', onClientClose);
   const abandon = () => {
     finishTrace(trace, emit, CLIENT_CLOSED_STATUS, 'client_aborted');
   };
@@ -547,6 +548,8 @@ async function handleClientRequest(
   trace.streaming = isStreaming;
 
   if (isStreaming) {
+    // From here `pipeStreamingResponse` owns the response and its cleanup.
+    res.off('close', onClientClose);
     res.writeHead(status, responseHeaders);
     pipeStreamingResponse(
       upstreamResponse,

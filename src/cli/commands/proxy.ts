@@ -59,8 +59,10 @@ export async function runProxyCommand(options: ProxyCommandOptions): Promise<voi
 
   let upstreamTimeoutMs: number | undefined;
   if (options.upstreamTimeout !== undefined) {
-    const seconds = Number(options.upstreamTimeout);
-    if (options.upstreamTimeout.trim() === '' || !Number.isFinite(seconds) || seconds < 0) {
+    const text = options.upstreamTimeout.trim();
+    const seconds = Number(text);
+    // Plain decimal numbers only: `Number()` would also read `0x10` as 16 and `1e3` as 1000.
+    if (!/^\d+(\.\d+)?$/.test(text) || !Number.isFinite(seconds)) {
       throw new Error(
         `Invalid --upstream-timeout "${options.upstreamTimeout}". Use a number of seconds, or 0 for no timeout.`,
       );
