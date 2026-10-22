@@ -3,6 +3,7 @@ import * as http from 'node:http';
 import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'ava';
+import { resetLocaleWarning } from '../../src/cli/locale.js';
 import { createProxyServer } from '../../src/proxy/proxy-server.js';
 import type { ProxyEvent, ProxyHandle, ProxyOptions } from '../../src/proxy/types.js';
 
@@ -458,6 +459,51 @@ test.serial('a locale change applies on reload', async (t) => {
     await waitForEvent(events, (e) => e.type === 'config_reloaded');
     await postChat(proxy.url, text);
     t.false(sentContent(upstream).includes(CPF));
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+});
+
+test.serial('a locale that activates no detector is warned about at startup', async (t) => {
+  resetLocaleWarning();
+  t.teardown(resetLocaleWarning);
+  writeConfig({ locale: 'de-DE' });
+  const upstream = await startFakeUpstream();
+  const logs: string[] = [];
+  const proxy = await startProxy(upstream, { log: (msg) => logs.push(msg) });
+  await proxy.close();
+  await upstream.close();
+
+  t.true(logs.some((line) => line.includes('locale "de-DE" activated no detectors')));
+});
+
+test.serial('a locale that a rule pack activates is not warned about', async (t) => {
+  resetLocaleWarning();
+  t.teardown(resetLocaleWarning);
+  writeConfig({ rulePacks: [writeCpfPack()], locale: 'pt-BR' });
+  const upstream = await startFakeUpstream();
+  const logs: string[] = [];
+  const proxy = await startProxy(upstream, { log: (msg) => logs.push(msg) });
+  await proxy.close();
+  await upstream.close();
+
+  t.false(logs.some((line) => line.includes('activated no detectors')));
+});
+
+test.serial('a reload that sets an unused locale is warned about', async (t) => {
+  resetLocaleWarning();
+  t.teardown(resetLocaleWarning);
+  writeConfig({});
+  const upstream = await startFakeUpstream();
+  const logs: string[] = [];
+  const events: ProxyEvent[] = [];
+  const proxy = await startProxy(upstream, { log: (msg) => logs.push(msg) }, events);
+  try {
+    writeConfig({ locale: 'fr-FR' });
+    process.emit('SIGHUP');
+    await waitForEvent(events, (e) => e.type === 'config_reloaded');
+    t.true(logs.some((line) => line.includes('locale "fr-FR" activated no detectors')));
   } finally {
     await proxy.close();
     await upstream.close();

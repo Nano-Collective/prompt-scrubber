@@ -2,6 +2,7 @@ import * as crypto from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import * as http from 'node:http';
 import * as https from 'node:https';
+import { warnIfLocaleUnused } from '../cli/locale.js';
 import {
   getConfigDir,
   loadConfig,
@@ -107,9 +108,11 @@ export async function createProxyServer(
   // holder is read once per request, so a reload never changes options midway
   // through a request.
   const { detectors: rulePackDetectors } = await loadConfiguredRulePacks();
+  const startConfig = loadConfig();
   const scrubState = {
-    current: buildBaseScrubOptions(options.scrubOptions, rulePackDetectors, loadConfig()),
+    current: buildBaseScrubOptions(options.scrubOptions, rulePackDetectors, startConfig),
   };
+  warnIfLocaleUnused(startConfig.locale ?? '', rulePackDetectors, log);
   const logThreshold = () => {
     const threshold = scrubState.current.minConfidence;
     if (threshold) {
@@ -163,6 +166,7 @@ export async function createProxyServer(
       );
     }
     scrubState.current = buildBaseScrubOptions(options.scrubOptions, detectors, file.config);
+    warnIfLocaleUnused(file.config.locale ?? '', detectors, log);
     logThreshold();
     return {
       rulePacks: file.config.rulePacks?.length ?? 0,
@@ -242,7 +246,7 @@ export async function createProxyServer(
         },
       };
 
-      log(`[proxy] Listening on ${url} → ${options.target.href}`);
+      log(`[proxy] Listening on ${url} → ${options.target.origin}${options.target.pathname}`);
       if (options.auditLog !== undefined) {
         log(`[proxy] Audit log: ${options.auditLog}`);
       }
@@ -413,7 +417,7 @@ async function handleClientRequest(
   emit({
     type: 'request',
     method: trace.method,
-    path: incomingUrl,
+    path: trace.path,
     provider,
     sessionId,
   });
@@ -846,11 +850,14 @@ function dispatchUpstream(target: URL, req: DispatchRequest): Promise<UpstreamRe
  */
 function joinTargetPath(target: URL, incomingUrl: string): string {
   const incomingPath = parsePath(incomingUrl);
+  // The query string is part of the request: Azure OpenAI needs `?api-version=`,
+  // Gemini takes `?key=`, and `/v1/models?limit=` pages its results with it.
+  const query = incomingUrl.slice(incomingPath.length);
   const base = target.pathname.replace(/\/$/, '');
   if (incomingPath === '/' || incomingPath === '') {
-    return `${base}/`;
+    return `${base}/${query}`;
   }
-  return `${base}${incomingPath}`;
+  return `${base}${incomingPath}${query}`;
 }
 
 function pipeStreamingResponse(

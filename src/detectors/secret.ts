@@ -5,6 +5,7 @@ import type { Detector, Finding, ScoredFinding } from '../types/index.js';
 // entropy alone is only ever a hint.
 const PREFIX_CONFIDENCE = 0.99;
 const BEARER_CONFIDENCE = 0.9;
+const URL_CREDENTIALS_CONFIDENCE = 0.95;
 const KEY_NAME_CONFIDENCE = 0.7;
 const ENTROPY_CONFIDENCE = 0.6;
 
@@ -14,7 +15,7 @@ const ENTROPY_CONFIDENCE = 0.6;
 const PREFIX_PATTERNS: { regex: RegExp; name: string; confidence?: number }[] = [
   // OpenAI: sk-...48 alphanumeric chars (new format: sk-proj-..., sk-svcacct-...)
   {
-    regex: /sk-(?:proj-|svcacct-|ant-api\d+-)?[A-Za-z0-9_-]{20,80}/g,
+    regex: /(?<![A-Za-z0-9_-])sk-(?:proj-|svcacct-|ant-api\d+-)?[A-Za-z0-9_-]{20,80}/g,
     name: 'OpenAI/Anthropic key',
   },
   // GitHub personal access tokens
@@ -30,9 +31,17 @@ const PREFIX_PATTERNS: { regex: RegExp; name: string; confidence?: number }[] = 
   { regex: /ya29\.[0-9A-Za-z\-_]{60,200}/g, name: 'Google OAuth token' },
   // AWS Access Key ID
   { regex: /(?<![A-Z0-9])(AKIA[0-9A-Z]{16})(?![A-Z0-9])/g, name: 'AWS Access Key ID' },
+  // Credentials embedded in a URL or connection string, e.g. postgres://user:pass@host/db.
+  // Matches the whole string so the user name, password and host go as one unit.
+  {
+    regex:
+      /(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]{1,30}:\/\/[^\s:@/?#'"<>]*:[^\s@/?#'"<>]+@[^\s/?#'"<>]*[^\s/?#'"<>.,;:!?)\]](?:[/?#](?:[^\s'"<>]*[^\s'"<>.,;:!?)\]])?)?/g,
+    name: 'URL credentials',
+    confidence: URL_CREDENTIALS_CONFIDENCE,
+  },
   // Bearer token in Authorization header
   {
-    regex: /(?:Bearer|bearer)\s+([A-Za-z0-9\-._~+/]{20,}={0,2})/g,
+    regex: /bearer\s+([A-Za-z0-9\-._~+/]{20,}={0,2})/gi,
     name: 'Bearer token',
     confidence: BEARER_CONFIDENCE,
   },
@@ -40,9 +49,51 @@ const PREFIX_PATTERNS: { regex: RegExp; name: string; confidence?: number }[] = 
 
 // --- Layer 2: Key-value heuristic ---
 // Matches KEY=value or KEY: value where the key name suggests it's a secret.
-const SECRET_KEY_NAMES =
-  /(?:key|secret|token|password|pass|pwd|api|auth|cred|credential|private|access)[_-]?(?:id|key|secret|token)?/i;
-const KV_PATTERN = /(?:^|[\s,;{])([a-zA-Z0-9_.-]+)\s*[:=]\s*["']?([A-Za-z0-9+/\-_.~@]{8,})["']?/gm;
+// A key name suggests a secret in two ways, because the words differ in how often they
+// appear inside an unrelated word.
+//
+// Strong words (`token`, `secret`, `password`, ...) are matched as substrings, so compounds
+// such as `refreshtoken`, `clientsecret` and `dbpassword` are found. Hardly any ordinary
+// word contains one of them.
+const STRONG_KEY_WORD = /token|secret|passw(?:or)?d|passphrase|credential/;
+
+// Weak words (`key`, `pass`, `auth`, `api`, ...) sit inside `monkey`, `compass`, `author`,
+// so each must be a whole word of the name: the name is split at punctuation, case changes
+// and digits (`key2` is `key`). A few compounds that glue one on without a separator are
+// listed, since splitting cannot find them.
+const WEAK_KEY_WORDS = new Set([
+  'key',
+  'keys',
+  'pass',
+  'pwd',
+  'api',
+  'apikey',
+  'auth',
+  'oauth',
+  'authorization',
+  'cred',
+  'creds',
+  'private',
+  'access',
+  'bearer',
+  'passkey',
+]);
+const KEY_COMPOUND =
+  /^(?:api|secret|private|access|master|signing|encryption|auth|session|ssh|license|app|client|service|hmac|aws)keys?$/;
+
+function isSecretKeyName(key: string): boolean {
+  const name = key.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase();
+  if (STRONG_KEY_WORD.test(name)) return true;
+  return name.split(/[^a-z]+/).some((word) => WEAK_KEY_WORDS.has(word) || KEY_COMPOUND.test(word));
+}
+
+// The key may be quoted (`"api_key": ...` in JSON or YAML). A quoted value runs to its
+// closing quote, so a passphrase with spaces is taken whole; an unquoted one stops at
+// whitespace and at brackets, quotes, commas and semicolons, but keeps `!`, `#`, `$` and
+// the other punctuation a password is allowed to contain. `&` and `?` are left out so a
+// value in a query string stops where the next parameter starts.
+const KV_PATTERN =
+  /(?:^|[\s,;{])["']?([a-zA-Z0-9_.-]+)["']?\s*[:=]\s*(?:"([^"\r\n]{8,})"|'([^'\r\n]{8,})'|([A-Za-z0-9+/\-_.~@!#$%^*=:]{8,}))/gm;
 
 // --- Layer 3: High-entropy strings ---
 // Only fires when the value is surrounded by quotes or follows an = sign.
@@ -93,10 +144,10 @@ export class SecretDetector implements Detector {
     let match: RegExpExecArray | null;
     while ((match = KV_PATTERN.exec(text)) !== null) {
       const key = match[1] ?? '';
-      const value = match[2] ?? '';
-      if (!SECRET_KEY_NAMES.test(key)) continue;
+      const value = match[2] ?? match[3] ?? match[4] ?? '';
+      if (!isSecretKeyName(key)) continue;
 
-      const valueStart = match.index + match[0].indexOf(value);
+      const valueStart = match.index + match[0].lastIndexOf(value);
       raw.push({
         category: 'Secret',
         span: [valueStart, valueStart + value.length],
