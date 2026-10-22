@@ -52,7 +52,9 @@ const MAX_DEPTH = 64;
  *
  * Covered: `messages[].content` (string or `text` parts),
  * `messages[].tool_calls[].function.arguments` (JSON encoded as a string),
- * and the free-text `description` fields of `tools[]`. The deprecated
+ * the free-text `description` fields of `tools[]`, the end-user identifiers
+ * `user`, `safety_identifier` and `metadata`, `prediction.content`, and the
+ * descriptions inside `response_format.json_schema`. The deprecated
  * function-calling fields (`messages[].function_call.arguments` and the
  * top-level `functions[]`) are covered too — the API still accepts them, so
  * a client on an older SDK or Azure api-version needs the same protection.
@@ -72,6 +74,7 @@ export function scrubOpenAIChatBody(body: unknown, scrub: ScrubFn): ScrubOutcome
     schemaKey: 'parameters',
     tools: scrubOpenAIToolDefinitions,
     legacyTools: 'functions',
+    requestFields: scrubOpenAIRequestFields,
   });
 }
 
@@ -80,8 +83,8 @@ export function scrubOpenAIChatBody(body: unknown, scrub: ScrubFn): ScrubOutcome
  *
  * Covered: the top-level `system` prompt (string or `text` blocks),
  * `messages[].content` (string, `text` blocks, `tool_result` blocks and
- * `tool_use.input` objects), and the free-text `description` fields of
- * `tools[]`.
+ * `tool_use.input` objects, `document` and `search_result` blocks), the
+ * free-text `description` fields of `tools[]`, and `metadata`.
  *
  * Deliberately untouched: tool names, `tool_use`/`tool_result` ids, and
  * `input_schema` property keys and `enum` values - see
@@ -94,6 +97,7 @@ export function scrubAnthropicMessagesBody(body: unknown, scrub: ScrubFn): Scrub
     schemaKey: 'input_schema',
     tools: scrubFlatToolDefinitions,
     system: true,
+    requestFields: scrubAnthropicRequestFields,
   });
 }
 
@@ -128,6 +132,13 @@ interface ProviderShape {
    * `{name, description, <schemaKey>}` entries — OpenAI's `functions[]`.
    */
   legacyTools?: string;
+  /** Scrubs the vendor's remaining request-level fields. Returns the keys to replace. */
+  requestFields: (
+    root: Record<string, unknown>,
+    scrub: ScrubFn,
+    add: Accumulate,
+    shape: ProviderShape,
+  ) => Record<string, unknown>;
 }
 
 /**
@@ -170,6 +181,8 @@ function scrubBody(body: unknown, scrub: ScrubFn, shape: ProviderShape): ScrubOu
     if (legacy !== root[key]) patch[key] = legacy;
   }
 
+  Object.assign(patch, shape.requestFields(root, scrub, add, shape));
+
   if (Object.keys(patch).length === 0) return { body, entities };
   return { body: { ...root, ...patch }, entities };
 }
@@ -191,6 +204,54 @@ function scrubContent(
     return mapPreservingIdentity(content, (entry) => part(entry, scrub, add, depth));
   }
   return content;
+}
+
+function scrubOpenAIRequestFields(
+  root: Record<string, unknown>,
+  scrub: ScrubFn,
+  add: Accumulate,
+  shape: ProviderShape,
+): Record<string, unknown> {
+  const patch: Record<string, unknown> = {};
+
+  for (const key of ['user', 'safety_identifier']) {
+    const next = scrubText(root[key], scrub, add);
+    if (next !== root[key]) patch[key] = next;
+  }
+
+  const metadata = scrubStringValues(root.metadata, scrub, add);
+  if (metadata !== root.metadata) patch.metadata = metadata;
+
+  const prediction = asRecord(root.prediction);
+  if (prediction) {
+    const content = scrubContent(prediction.content, scrub, add, shape.part);
+    if (content !== prediction.content) patch.prediction = { ...prediction, content };
+  }
+
+  const format = asRecord(root.response_format);
+  const jsonSchema = asRecord(format?.json_schema);
+  if (format && jsonSchema) {
+    const next = scrubToolDescriptions(jsonSchema, scrub, add, 'schema');
+    if (next !== jsonSchema) patch.response_format = { ...format, json_schema: next };
+  }
+
+  return patch;
+}
+
+function scrubAnthropicRequestFields(
+  root: Record<string, unknown>,
+  scrub: ScrubFn,
+  add: Accumulate,
+): Record<string, unknown> {
+  const metadata = scrubStringValues(root.metadata, scrub, add);
+  return metadata === root.metadata ? {} : { metadata };
+}
+
+/** Scrub every string leaf of a JSON value, leaving keys and structure alone. */
+function scrubStringValues(value: unknown, scrub: ScrubFn, add: Accumulate): unknown {
+  const { value: next, count } = mapJsonStrings(value, asJsonTransform(scrub));
+  add(count);
+  return next;
 }
 
 function scrubOpenAIMessage(
@@ -251,8 +312,10 @@ function scrubOpenAIContentPart(part: unknown, scrub: ScrubFn, add: Accumulate):
 /**
  * Anthropic content blocks. `text` blocks carry prose; `tool_result` nests
  * the tool's own output (usually the richest PII in a conversation) one level
- * further down; `tool_use` carries the arguments as a real object. Everything
- * else (`image`, `document`, `thinking`, ...) passes through unchanged.
+ * further down; `tool_use` carries the arguments as a real object. `document`
+ * and `search_result` blocks carry text the client supplies for the model to
+ * read. Everything else (`image`, `thinking`, ...) passes through unchanged:
+ * `thinking` is model output and holds placeholders, not the real values.
  */
 function scrubAnthropicContentPart(
   part: unknown,
@@ -286,7 +349,48 @@ function scrubAnthropicContentPart(
     return { ...record, input: value };
   }
 
+  if (record.type === 'document') return scrubAnthropicDocument(record, scrub, add, depth);
+
+  if (record.type === 'search_result') {
+    const patch: Record<string, unknown> = {};
+    const title = scrubText(record.title, scrub, add);
+    if (title !== record.title) patch.title = title;
+    const content = scrubContent(record.content, scrub, add, scrubAnthropicContentPart, depth + 1);
+    if (content !== record.content) patch.content = content;
+    return Object.keys(patch).length === 0 ? part : { ...record, ...patch };
+  }
+
   return part;
+}
+
+/**
+ * A `document` block: the `title` and `context` strings, plus the text of a
+ * `text` source or the nested blocks of a `content` source. `base64` and `url`
+ * sources are opaque and pass through.
+ */
+function scrubAnthropicDocument(
+  record: Record<string, unknown>,
+  scrub: ScrubFn,
+  add: Accumulate,
+  depth: number,
+): unknown {
+  const patch: Record<string, unknown> = {};
+
+  for (const key of ['title', 'context']) {
+    const next = scrubText(record[key], scrub, add);
+    if (next !== record[key]) patch[key] = next;
+  }
+
+  const source = asRecord(record.source);
+  if (source?.type === 'text') {
+    const data = scrubText(source.data, scrub, add);
+    if (data !== source.data) patch.source = { ...source, data };
+  } else if (source?.type === 'content') {
+    const content = scrubContent(source.content, scrub, add, scrubAnthropicContentPart, depth + 1);
+    if (content !== source.content) patch.source = { ...source, content };
+  }
+
+  return Object.keys(patch).length === 0 ? record : { ...record, ...patch };
 }
 
 /**

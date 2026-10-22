@@ -924,3 +924,15 @@ test('CLI: inspect --json with --min-confidence reports suppressed findings', (t
   );
   t.regex(output.hash, /^[a-f0-9]{64}$/);
 });
+
+test.serial('CLI: scrub --session-id rejects a path traversal ID and writes nothing', (t) => {
+  const outside = path.join(tmpConfigDir, 'outside-session');
+  const result = runCli(
+    ['scrub', '--session-id', '../../outside-session/pwned'],
+    'Contact alice@example.com',
+  );
+
+  t.not(result.status, 0);
+  t.true(result.stderr.includes('Invalid session ID'));
+  t.false(fs.existsSync(path.join(outside, 'pwned.json')));
+});
