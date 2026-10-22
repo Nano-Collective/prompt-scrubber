@@ -1215,3 +1215,34 @@ test('a connection string stays one secret next to an email address', (t) => {
   });
   t.is(result.scrubbedContent, 'mail «Email_1», db «Secret_1».');
 });
+
+test('secrets and emails on one line keep their own spans', (t) => {
+  const json = scrub({
+    content: '{ "api_key": "mysecretvalue123", "user": "alice@example.com" }',
+    sessionMap: {},
+  });
+  t.is(json.scrubbedContent, '{ "api_key": "«Secret_1»", "user": "«Email_1»" }');
+  t.deepEqual(json.sessionMap, {
+    '«Secret_1»': 'mysecretvalue123',
+    '«Email_1»': 'alice@example.com',
+  });
+
+  const mixed = scrub({
+    content: 'path /home/alice/.env then password=hunter2hunter2 and bob@example.org.',
+    sessionMap: {},
+  });
+  t.is(mixed.scrubbedContent, 'path «Path_1» then password=«Secret_1» and «Email_1».');
+});
+
+test('an email before a full stop and a phone number both survive on one line', (t) => {
+  const result = scrub({ content: 'Contact alice@example.com. Call 555-123-4567', sessionMap: {} });
+  t.is(result.scrubbedContent, 'Contact «Email_1». Call «Phone_1»');
+});
+
+test('a token in a URL query is redacted with its URL, not split from it', (t) => {
+  const result = scrub({
+    content: 'https://api.example.com/v1?token=abcdefghijklmnop',
+    sessionMap: {},
+  });
+  t.is(result.scrubbedContent, '«Url_1»');
+});
