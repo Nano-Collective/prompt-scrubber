@@ -2,18 +2,26 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { getConfigDir, loadConfig } from '../core/config.js';
 import {
-  SessionDecryptionError,
   decryptSession,
   encryptSession,
   isEncryptedEnvelope,
+  SessionDecryptionError,
 } from '../core/crypto.js';
 import { getCachedKey } from '../core/key-manager.js';
 import type { SessionMap } from '../types/index.js';
 
+const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
 /**
- * Gets the file path for a specific session ID.
+ * Gets the file path for a specific session ID. The ID becomes a file name, so
+ * anything that could leave the sessions directory (separators, `..`) is rejected.
  */
 export function getSessionStoragePath(sessionId: string): string {
+  if (!SESSION_ID_PATTERN.test(sessionId)) {
+    throw new Error(
+      `Invalid session ID ${JSON.stringify(sessionId)}: use 1-128 letters, digits, ".", "_" or "-", starting with a letter or digit.`,
+    );
+  }
   return path.join(getConfigDir(), 'sessions', `${sessionId}.json`);
 }
 

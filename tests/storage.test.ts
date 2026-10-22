@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'ava';
-import { SessionDecryptionError, clearDerivedKeyCache } from '../src/core/crypto.js';
+import { clearDerivedKeyCache, SessionDecryptionError } from '../src/core/crypto.js';
 import { clearCachedEncryptionKey, setCachedEncryptionKey } from '../src/core/key-manager.js';
 import {
   deleteSessionMap,
@@ -471,4 +471,49 @@ test.serial('isSessionEncrypted is true for envelopes and false for plaintext', 
   clearCachedEncryptionKey();
   delete process.env.PROMPT_SCRUB_KEY;
   fs.rmSync(globalConfigPath);
+});
+
+test('getSessionStoragePath rejects IDs that could leave the sessions directory', (t) => {
+  for (const id of [
+    '../x',
+    '../../outside/pwned',
+    'a/b',
+    'a\\b',
+    '.hidden',
+    '..',
+    '',
+    'a'.repeat(129),
+  ]) {
+    t.throws(
+      () => getSessionStoragePath(id),
+      { message: /Invalid session ID/ },
+      JSON.stringify(id),
+    );
+  }
+});
+
+test('getSessionStoragePath accepts UUIDs and ordinary names', (t) => {
+  for (const id of [
+    '3f2b8c1e-7a44-4d5e-9c0a-1b2c3d4e5f60',
+    'test-session',
+    'a.b_c',
+    'A1',
+    'x'.repeat(128),
+  ]) {
+    t.true(getSessionStoragePath(id).endsWith(`${id}.json`));
+  }
+});
+
+test('writeSessionMap and readSessionMap refuse a traversal ID and touch nothing outside', (t) => {
+  const outside = path.join(tmpConfigDir, 'outside');
+  fs.mkdirSync(outside, { recursive: true });
+  fs.writeFileSync(path.join(outside, 'victim.json'), '{"«Email_1»":"secret"}');
+
+  t.throws(() => writeSessionMap('../../outside/pwned', { '«Email_1»': 'x' }), {
+    message: /Invalid session ID/,
+  });
+  t.throws(() => readSessionMap('../../outside/victim'), { message: /Invalid session ID/ });
+  t.throws(() => deleteSessionMap('../../outside/victim'), { message: /Invalid session ID/ });
+  t.false(fs.existsSync(path.join(outside, 'pwned.json')));
+  t.true(fs.existsSync(path.join(outside, 'victim.json')));
 });
