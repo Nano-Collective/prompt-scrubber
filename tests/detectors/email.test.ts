@@ -121,3 +121,17 @@ test('the span of an address followed by a full stop excludes the full stop', (t
 test('still skips a domain that continues past its top-level label', (t) => {
   t.is(detector.detect('a@b.com.x').length, 0);
 });
+
+test('an address with no completing domain does not stall the scan', (t) => {
+  for (const input of [
+    `a@${'-'.repeat(100_000)}`,
+    `a@${'a-'.repeat(50_000)}`,
+    `a@a.${'b-'.repeat(50_000)}`,
+    `a@${'a.a-'.repeat(25_000)}`,
+  ]) {
+    const start = Date.now();
+    t.deepEqual(detector.detect(input), []);
+    t.true(Date.now() - start < 1000, `took ${Date.now() - start}ms`);
+  }
+  t.is(detector.detect(`${'-'.repeat(50_000)} real@example.com`)[0]?.value, 'real@example.com');
+});
