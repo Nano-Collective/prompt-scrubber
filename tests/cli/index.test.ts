@@ -3,7 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'ava';
-import { getVersion } from '../../src/cli/index.js';
+import { getVersion, isMainModule } from '../../src/cli/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -43,4 +43,24 @@ test('getVersion falls back to 1.0.0 when no package.json is found', (t) => {
   t.is(v, '1.0.0');
 
   fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test('isMainModule matches the same path and rejects other scripts', (t) => {
+  t.true(isMainModule(__filename, __filename));
+  t.false(isMainModule(path.join(__dirname, 'e2e.test.ts'), __filename));
+  t.false(isMainModule(undefined, __filename));
+  t.false(isMainModule(path.join(os.tmpdir(), 'does-not-exist.js'), __filename));
+});
+
+test('isMainModule resolves a symlink to the script, as a global npm install uses', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'prompt-bin-'));
+  t.teardown(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const link = path.join(dir, 'prompt-scrub');
+  try {
+    fs.symlinkSync(__filename, link);
+  } catch {
+    t.pass('symlinks are not permitted here');
+    return;
+  }
+  t.true(isMainModule(link, __filename));
 });

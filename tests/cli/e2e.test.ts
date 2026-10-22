@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'ava';
@@ -923,4 +924,28 @@ test('CLI: inspect --json with --min-confidence reports suppressed findings', (t
     ['Phone'],
   );
   t.regex(output.hash, /^[a-f0-9]{64}$/);
+});
+
+test.serial('CLI: runs when started through a symlink, as a global npm install does', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'prompt-bin-'));
+  t.teardown(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const link = path.join(dir, 'prompt-scrub.ts');
+  try {
+    fs.symlinkSync(cliEntry, link);
+  } catch {
+    t.pass('symlinks are not permitted here');
+    return;
+  }
+
+  const result = spawnSync(process.execPath, ['--import', 'tsx', link, 'scrub'], {
+    input: 'Contact alice@example.com',
+    encoding: 'utf-8',
+    env: {
+      ...process.env,
+      PROMPT_SCRUB_CONFIG_DIR: path.join(tmpConfigDir, 'prompt-scrub'),
+    },
+  });
+
+  t.is(result.status, 0);
+  t.true(result.stdout.includes('Contact «Email_1»'), result.stdout + result.stderr);
 });
