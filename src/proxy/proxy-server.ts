@@ -85,6 +85,8 @@ interface RequestTrace {
   streaming: boolean;
   entities: number;
   byCategory: Record<string, number>;
+  suppressed: number;
+  suppressedByCategory: Record<string, number>;
   rehydrated: number;
   passthroughReason: string | undefined;
   finished: boolean;
@@ -106,6 +108,14 @@ export async function createProxyServer(
   const { detectors: rulePackDetectors } = await loadConfiguredRulePacks();
   const scrubState = {
     current: buildBaseScrubOptions(options.scrubOptions, rulePackDetectors, loadConfig()),
+  };
+  const logThreshold = () => {
+    const threshold = scrubState.current.minConfidence;
+    if (threshold) {
+      log(
+        `[proxy] minConfidence ${threshold}: findings scored below it are not redacted. They are counted in prompt_scrub_suppressed_total.`,
+      );
+    }
   };
 
   // Opened before listening so an unwritable --audit-log fails startup.
@@ -152,6 +162,7 @@ export async function createProxyServer(
       );
     }
     scrubState.current = buildBaseScrubOptions(options.scrubOptions, detectors, file.config);
+    logThreshold();
     return {
       rulePacks: file.config.rulePacks?.length ?? 0,
       detectors: detectors.length,
@@ -234,6 +245,7 @@ export async function createProxyServer(
       if (options.auditLog !== undefined) {
         log(`[proxy] Audit log: ${options.auditLog}`);
       }
+      logThreshold();
       if (options.strict) {
         log('[proxy] Strict mode: requests with a body that cannot be scrubbed are blocked.');
       }
@@ -334,6 +346,8 @@ function createTrace(req: IncomingMessage, sessions: Sessions): RequestTrace {
     streaming: false,
     entities: 0,
     byCategory: {},
+    suppressed: 0,
+    suppressedByCategory: {},
     rehydrated: 0,
     passthroughReason: undefined,
     finished: false,
@@ -374,6 +388,8 @@ function finishTrace(
     outcome,
     entities: trace.entities,
     byCategory: trace.byCategory,
+    suppressed: trace.suppressed,
+    suppressedByCategory: trace.suppressedByCategory,
     rehydrated: trace.rehydrated,
     ...(errorKind ? { errorKind } : {}),
   });
@@ -470,6 +486,8 @@ async function handleClientRequest(
     const outcome = scrubChatBody(provider, parsed, (text) => {
       const scrubbed = scrubTextSync(text, sessionId, map, baseScrubOptions);
       mergeCounts(trace.byCategory, scrubbed.byCategory);
+      mergeCounts(trace.suppressedByCategory, scrubbed.suppressedByCategory);
+      trace.suppressed += scrubbed.suppressed;
       return scrubbed;
     });
     trace.entities = outcome.entities;
@@ -559,7 +577,13 @@ function scrubTextSync(
   sessionId: string,
   sessionMap: Record<string, string>,
   baseOptions: ScrubOptions,
-): { content: string; entities: number; byCategory: Record<string, number> } {
+): {
+  content: string;
+  entities: number;
+  byCategory: Record<string, number>;
+  suppressed: number;
+  suppressedByCategory: Record<string, number>;
+} {
   const result = scrub({
     content: text,
     sessionId,
@@ -571,6 +595,8 @@ function scrubTextSync(
     content: scrubbed,
     entities: result.stats.totalEntities,
     byCategory: result.stats.byCategory,
+    suppressed: result.stats.suppressed?.total ?? 0,
+    suppressedByCategory: result.stats.suppressed?.byCategory ?? {},
   };
 }
 

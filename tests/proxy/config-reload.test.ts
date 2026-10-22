@@ -355,22 +355,29 @@ test.serial('minConfidence from the config file applies from startup', async (t)
   let proxy = await startProxy(upstream);
   try {
     await postChat(proxy.url, BARE_ENDPOINT);
-    t.false(sentContent(upstream).includes('api.example.org'));
+    t.not(sentContent(upstream), BARE_ENDPOINT);
   } finally {
     await proxy.close();
   }
 
   writeConfig({ minConfidence: 0.85 });
-  proxy = await startProxy(upstream);
+  const logs: string[] = [];
+  const events: ProxyEvent[] = [];
+  proxy = await startProxy(upstream, { log: (msg) => logs.push(msg) }, events);
   try {
     await postChat(proxy.url, BARE_ENDPOINT);
     t.is(sentContent(upstream), BARE_ENDPOINT);
     await postChat(proxy.url, FULL_URL);
-    t.false(sentContent(upstream).includes('docs.example.net'));
+    t.not(sentContent(upstream), FULL_URL);
   } finally {
     await proxy.close();
     await upstream.close();
   }
+
+  t.true(logs.some((line) => line.includes('minConfidence 0.85')));
+  const responses = events.filter((e) => e.type === 'response');
+  t.like(responses[0], { suppressed: 1, suppressedByCategory: { Url: 1 } });
+  t.like(responses[1], { suppressed: 0, entities: 1 });
 });
 
 test.serial('a minConfidence change applies on reload, and removing it reverses it', async (t) => {
@@ -392,7 +399,7 @@ test.serial('a minConfidence change applies on reload, and removing it reverses 
     const before = reloads();
     writeConfig({});
     process.emit('SIGHUP');
-    while (reloads() <= before) await sleep(20);
+    await waitForEvent(events, () => reloads() > before);
     await postChat(proxy.url, BARE_ENDPOINT);
     t.not(sentContent(upstream), BARE_ENDPOINT);
   } finally {
