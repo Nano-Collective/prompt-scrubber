@@ -2,7 +2,12 @@ import * as crypto from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import * as http from 'node:http';
 import * as https from 'node:https';
-import { getConfigDir, loadConfig, readConfigFile } from '../core/config.js';
+import {
+  getConfigDir,
+  loadConfig,
+  type PromptScrubConfig,
+  readConfigFile,
+} from '../core/config.js';
 import { loadConfiguredRulePacks } from '../core/rule-packs.js';
 import { scrub } from '../core/scrub.js';
 import { placeholderTokensIn } from '../session/session-manager.js';
@@ -100,11 +105,7 @@ export async function createProxyServer(
   // through a request.
   const { detectors: rulePackDetectors } = await loadConfiguredRulePacks();
   const scrubState = {
-    current: buildBaseScrubOptions(
-      options.scrubOptions,
-      rulePackDetectors,
-      loadConfig().urlAllowlist,
-    ),
+    current: buildBaseScrubOptions(options.scrubOptions, rulePackDetectors, loadConfig()),
   };
 
   // Opened before listening so an unwritable --audit-log fails startup.
@@ -150,11 +151,7 @@ export async function createProxyServer(
         `rule pack(s) failed to load, keeping the previous configuration: ${failed.join(', ')}`,
       );
     }
-    scrubState.current = buildBaseScrubOptions(
-      options.scrubOptions,
-      detectors,
-      file.config.urlAllowlist,
-    );
+    scrubState.current = buildBaseScrubOptions(options.scrubOptions, detectors, file.config);
     return {
       rulePacks: file.config.rulePacks?.length ?? 0,
       detectors: detectors.length,
@@ -263,13 +260,13 @@ export async function createProxyServer(
 /**
  * Translate the CLI-shaped `ScrubCliOptions` (comma-separated strings, etc.)
  * into the structured `ScrubOptions` accepted by `scrub()`. Merged with the
- * pre-loaded rule-pack detectors and the config-file allowlist, so the proxy
- * behaves like the standalone `scrub` command.
+ * pre-loaded rule-pack detectors and the config file's allowlist, confidence
+ * threshold and locale, so the proxy behaves like the standalone `scrub` command.
  */
 function buildBaseScrubOptions(
   raw: ProxyOptions['scrubOptions'],
   rulePackDetectors: import('../types/index.js').Detector[],
-  configUrlAllowlist: string[] = [],
+  config: Pick<PromptScrubConfig, 'urlAllowlist' | 'minConfidence' | 'locale'> = {},
 ): ScrubOptions {
   const scrub: ScrubOptions = { customDetectors: rulePackDetectors };
   const disabled = parseList(raw?.disable);
@@ -280,9 +277,11 @@ function buildBaseScrubOptions(
   const codeTellTerms = parseList(raw?.codeTellTerms);
   if (codeTellTerms.length > 0) scrub.codeTellTerms = codeTellTerms;
   const urlAllowlist = Array.from(
-    new Set([...configUrlAllowlist, ...parseList(raw?.urlAllowlist)]),
+    new Set([...(config.urlAllowlist ?? []), ...parseList(raw?.urlAllowlist)]),
   );
   if (urlAllowlist.length > 0) scrub.urlAllowlist = urlAllowlist;
+  if (config.minConfidence) scrub.minConfidence = config.minConfidence;
+  if (config.locale) scrub.locale = config.locale;
   return scrub;
 }
 

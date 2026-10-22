@@ -200,6 +200,8 @@ Responses are rehydrated in the same places as requests: message content, `tool_
 - `--port <port>`: Local port (default `8080`). Use `0` to bind a random free port.
 - `--host <host>`: Local interface to bind (default `127.0.0.1`).
 - `--disable <detectors>`, `--enable <detectors>`, `--strict-name`, `--code-tell-terms`, `--url-allowlist`: Same scrubber options as the `scrub` command.
+
+The proxy also reads `minConfidence` and `locale` from `config.json`, with the same meaning as for `scrub`: findings scored below `minConfidence` are not redacted, and `locale` switches on locale-scoped rule pack detectors.
 - `-v, --verbose`: Log a one-line summary of every proxied request to `stderr` (including the scrubbed/rehydrated counts and session ID).
 - `--strict`: Fail closed. Refuse with `403` any request whose body cannot be scrubbed (unknown endpoint, compressed body, or non-JSON body) instead of forwarding it. Off by default.
 - `--audit-log <path>`: Append one JSON line per completed request to this file. Records hold counts, detector categories, timings and the request path. They never hold values, bodies, headers or query strings. The file is created with mode `0600`.
@@ -207,7 +209,7 @@ Responses are rehydrated in the same places as requests: message content, `tool_
 - `--no-gc`: Skip the startup session-garbage-collection pass.
 - `--no-reload-config`: Do not reload `config.json` while the proxy runs (see below).
 
-**Config reload:** the proxy re-reads `config.json` without restarting when it receives `SIGHUP` or when the file changes on disk. Only the `rulePacks` and `urlAllowlist` keys reload. Requests already in flight keep the old configuration, and sessions and their placeholders are kept.
+**Config reload:** the proxy re-reads `config.json` without restarting when it receives `SIGHUP` or when the file changes on disk. Only the `rulePacks`, `urlAllowlist`, `minConfidence` and `locale` keys reload. Requests already in flight keep the old configuration, and sessions and their placeholders are kept.
 
 - Reload on demand: `kill -HUP <pid>`, or `ExecReload=/bin/kill -HUP $MAINPID` in a systemd unit, then `systemctl reload`.
 - A file that is missing, invalid, or names a rule pack that fails to load is rejected. The previous configuration stays in force and the reason is logged.

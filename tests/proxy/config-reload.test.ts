@@ -328,3 +328,131 @@ test.serial('a missing config directory still starts the proxy', async (t) => {
     await upstream.close();
   }
 });
+
+const BARE_ENDPOINT = 'call api.example.org/v1/users now';
+const FULL_URL = 'see https://docs.example.net/page';
+const CPF = '123.456.789-09';
+
+function writeCpfPack(): string {
+  const packDir = path.join(configDir, 'packs');
+  fs.mkdirSync(packDir, { recursive: true });
+  const packPath = path.join(packDir, 'cpf-pack.mjs');
+  fs.writeFileSync(
+    packPath,
+    `export const detectors = [{ name: 'CpfDetector', locales: ['pt-BR'], detect(text) {
+  const i = text.indexOf('${CPF}');
+  return i === -1 ? [] : [{ category: 'Cpf', span: [i, i + ${CPF.length}], value: '${CPF}', placeholderPrefix: 'Cpf' }];
+} }];\n`,
+    'utf8',
+  );
+  return pathToFileURL(packPath).href;
+}
+
+test.serial('minConfidence from the config file applies from startup', async (t) => {
+  const upstream = await startFakeUpstream();
+
+  writeConfig({});
+  let proxy = await startProxy(upstream);
+  try {
+    await postChat(proxy.url, BARE_ENDPOINT);
+    t.false(sentContent(upstream).includes('api.example.org'));
+  } finally {
+    await proxy.close();
+  }
+
+  writeConfig({ minConfidence: 0.85 });
+  proxy = await startProxy(upstream);
+  try {
+    await postChat(proxy.url, BARE_ENDPOINT);
+    t.is(sentContent(upstream), BARE_ENDPOINT);
+    await postChat(proxy.url, FULL_URL);
+    t.false(sentContent(upstream).includes('docs.example.net'));
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+});
+
+test.serial('a minConfidence change applies on reload, and removing it reverses it', async (t) => {
+  writeConfig({});
+  const upstream = await startFakeUpstream();
+  const events: ProxyEvent[] = [];
+  const proxy = await startProxy(upstream, {}, events);
+  const reloads = () => events.filter((e) => e.type === 'config_reloaded').length;
+  try {
+    await postChat(proxy.url, BARE_ENDPOINT);
+    t.not(sentContent(upstream), BARE_ENDPOINT);
+
+    writeConfig({ minConfidence: 0.85 });
+    process.emit('SIGHUP');
+    await waitForEvent(events, (e) => e.type === 'config_reloaded');
+    await postChat(proxy.url, BARE_ENDPOINT);
+    t.is(sentContent(upstream), BARE_ENDPOINT);
+
+    const before = reloads();
+    writeConfig({});
+    process.emit('SIGHUP');
+    while (reloads() <= before) await sleep(20);
+    await postChat(proxy.url, BARE_ENDPOINT);
+    t.not(sentContent(upstream), BARE_ENDPOINT);
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+});
+
+test.serial('locale from the config file enables locale-scoped rule pack detectors', async (t) => {
+  const pack = writeCpfPack();
+  const upstream = await startFakeUpstream();
+  const text = `cpf ${CPF} here`;
+
+  writeConfig({ rulePacks: [pack] });
+  let proxy = await startProxy(upstream);
+  try {
+    await postChat(proxy.url, text);
+    t.is(sentContent(upstream), text);
+  } finally {
+    await proxy.close();
+  }
+
+  writeConfig({ rulePacks: [pack], locale: 'de-DE' });
+  proxy = await startProxy(upstream);
+  try {
+    await postChat(proxy.url, text);
+    t.is(sentContent(upstream), text);
+  } finally {
+    await proxy.close();
+  }
+
+  writeConfig({ rulePacks: [pack], locale: 'pt-BR' });
+  proxy = await startProxy(upstream);
+  try {
+    await postChat(proxy.url, text);
+    t.false(sentContent(upstream).includes(CPF));
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+});
+
+test.serial('a locale change applies on reload', async (t) => {
+  const pack = writeCpfPack();
+  writeConfig({ rulePacks: [pack] });
+  const upstream = await startFakeUpstream();
+  const events: ProxyEvent[] = [];
+  const proxy = await startProxy(upstream, {}, events);
+  const text = `cpf ${CPF} here`;
+  try {
+    await postChat(proxy.url, text);
+    t.is(sentContent(upstream), text);
+
+    writeConfig({ rulePacks: [pack], locale: 'pt-BR' });
+    process.emit('SIGHUP');
+    await waitForEvent(events, (e) => e.type === 'config_reloaded');
+    await postChat(proxy.url, text);
+    t.false(sentContent(upstream).includes(CPF));
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+});
