@@ -88,6 +88,7 @@ export interface ProxyHandle {
  * transformed.
  */
 export type ProxyEvent =
+  /** `path` has no query string: it often carries credentials such as `?api-key=...`. */
   | { type: 'request'; method: string; path: string; provider: ProxyProvider; sessionId: string }
   | { type: 'scrubbed'; sessionId: string; entities: number }
   | { type: 'rehydrated'; sessionId: string; placeholders: number }

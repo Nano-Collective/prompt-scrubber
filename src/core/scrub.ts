@@ -149,14 +149,24 @@ function scrubString(
     addCount(stats.byCategory, finding.category);
   }
 
-  // Replace right-to-left so earlier offsets stay valid
-  let result = text;
-  for (const finding of [...findings].reverse()) {
-    const placeholder = session.createPlaceholder(finding.placeholderPrefix, finding.value);
-    result = result.slice(0, finding.span[0]) + placeholder + result.slice(finding.span[1]);
+  // Placeholders are minted right-to-left, which fixes how they are numbered. The
+  // text is then rebuilt in one left-to-right pass: slicing the whole string for
+  // every finding is quadratic in the number of findings.
+  const placeholders: string[] = new Array(findings.length);
+  for (let i = findings.length - 1; i >= 0; i--) {
+    const finding = findings[i]!;
+    placeholders[i] = session.createPlaceholder(finding.placeholderPrefix, finding.value);
   }
 
-  return result;
+  const parts: string[] = [];
+  let cursor = 0;
+  findings.forEach((finding, i) => {
+    parts.push(text.slice(cursor, finding.span[0]), placeholders[i]!);
+    cursor = finding.span[1];
+  });
+  parts.push(text.slice(cursor));
+
+  return parts.join('');
 }
 
 export function getActiveDetectors(options?: ScrubRequest['options']): Detector[] {

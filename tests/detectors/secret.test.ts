@@ -1,4 +1,5 @@
 import test from 'ava';
+import { scrub } from '../../src/core/scrub.js';
 import { SecretDetector } from '../../src/detectors/secret.js';
 
 const detector = new SecretDetector();
@@ -140,4 +141,232 @@ test('a wider low-confidence overlap does not downgrade a vendor-prefixed key', 
   t.is(findings[0]?.value, 'AKIAIOSFODNN7EXAMPLE.');
   t.is(findings[0]?.confidence, 0.99);
   t.is(findings[0]?.method, 'exact-pattern');
+});
+
+test('detects credentials embedded in connection strings as one unit', (t) => {
+  for (const url of [
+    'postgres://admin:s3cretPass@db.internal:5432/app',
+    'mongodb+srv://u:p%40ss@cluster0.x.mongodb.net/test?retryWrites=true',
+    'redis://:pw@host:6379',
+    'redis://default:pw@host:6379/0',
+    'amqp://guest:guest@rabbit:5672/',
+    'ftp://bob:hunter22@ftp.example.com',
+    'https://user:pass@example.com/x',
+  ]) {
+    const findings = detector.detect(`connect with ${url} now`);
+    t.is(findings.length, 1, url);
+    t.is(findings[0]?.value, url);
+    t.is(findings[0]?.placeholderPrefix, 'Secret');
+  }
+});
+
+test('connection string credentials stop before trailing punctuation', (t) => {
+  t.is(
+    detector.detect('(see https://user:pass@example.com/x).')[0]?.value,
+    'https://user:pass@example.com/x',
+  );
+  t.is(
+    detector.detect('use postgres://admin:pw@db.internal:5432/app.')[0]?.value,
+    'postgres://admin:pw@db.internal:5432/app',
+  );
+});
+
+test('ignores URLs without a password', (t) => {
+  for (const text of [
+    'ssh://git@github.com/o/r',
+    'https://example.com/a:b@c',
+    'https://example.com/docs',
+    'mailto://nobody',
+  ]) {
+    t.is(detector.detect(text).length, 0, text);
+  }
+});
+
+test('detects a secret under a quoted key', (t) => {
+  for (const [text, value] of [
+    ['{"api_key": "mysecretvalue123"}', 'mysecretvalue123'],
+    ["{'password': 'hunter2hunter2'}", 'hunter2hunter2'],
+    ['"client_secret":"abcd1234efgh5678"', 'abcd1234efgh5678'],
+  ] as const) {
+    const findings = detector.detect(text);
+    t.is(findings.length, 1, text);
+    t.is(findings[0]?.value, value, text);
+  }
+});
+
+test('takes a password with punctuation whole', (t) => {
+  for (const [text, value] of [
+    ['password: Secret!Pass123', 'Secret!Pass123'],
+    ['DB_PASSWORD=P@ss!w0rd#2024', 'P@ss!w0rd#2024'],
+    ['password: "my long pass phrase 99"', 'my long pass phrase 99'],
+    ['token=abc$def%ghi^jkl', 'abc$def%ghi^jkl'],
+  ] as const) {
+    const findings = detector.detect(text);
+    t.is(findings.length, 1, text);
+    t.is(findings[0]?.value, value, text);
+  }
+});
+
+test('an unquoted value stops at brackets, quotes and commas', (t) => {
+  t.is(detector.detect('call password=abcd1234efgh) now')[0]?.value, 'abcd1234efgh');
+  t.is(detector.detect('use [ token=abcd1234efgh], next')[0]?.value, 'abcd1234efgh');
+  t.is(detector.detect("run token=abcd1234efgh'")[0]?.value, 'abcd1234efgh');
+});
+
+test('a weak key word must be a whole word of the name, not a piece of another word', (t) => {
+  for (const text of [
+    'author: jonathan-smith-the-third',
+    'monkey=bananabananabanana',
+    'compass=northnorthnorthnorth',
+    'keyword=somethingverylong',
+    'turkey=roastroastroast',
+    'hockey=stickstickstick',
+    'bypass=roadroadroadroad',
+    'trespass=signsignsignsign',
+    'keynote=slidesslidesslides',
+    'apiary=beesbeesbeesbees',
+    'authority=governmentgov',
+  ]) {
+    t.is(detector.detect(text).length, 0, text);
+  }
+});
+
+test('finds compound key names that glue a secret word onto another word', (t) => {
+  for (const text of [
+    'refreshtoken=abcdefgh1234',
+    'accesstoken=abcdefgh1234',
+    'privatekey=abcdefgh1234',
+    'masterkey=abcdefgh1234',
+    'signingkey=abcdefgh1234',
+    'secretkey=abcdefgh1234',
+    'clientsecret=abcdefgh1234',
+    'awssecretaccesskey=abcdefgh1234',
+    'AWS_SECRET_ACCESS_KEY=abcdefgh1234',
+    'DB_PASSWORD=abcdefgh1234',
+    'password1=abcdefgh1234',
+    'key2=abcdefgh1234',
+    'token_2=abcdefgh1234',
+    'apikey=abcdefgh1234',
+    'passkey=abcdefgh1234',
+    'oauth=abcdefgh1234',
+    'sessionkey=abcdefgh1234',
+    'x-api-key: abcdefgh1234',
+    'creds=abcdefgh1234',
+  ]) {
+    t.is(detector.detect(text).length, 1, text);
+  }
+});
+
+test('an unquoted value stops where the next query parameter starts', (t) => {
+  for (const text of [
+    'token=abcdefghij&redirect=/home',
+    'token=abcdefghij?page=2',
+    'token=abcdefghij&next=1',
+  ]) {
+    t.is(detector.detect(text)[0]?.value, 'abcdefghij', text);
+  }
+});
+
+test('keeps base64 padding on an unquoted value', (t) => {
+  t.is(
+    detector.detect('token=QWxhZGRpbjpvcGVuIHNlc2FtZQ==')[0]?.value,
+    'QWxhZGRpbjpvcGVuIHNlc2FtZQ==',
+  );
+});
+
+test('recognises secret words in snake, kebab, camel and upper case', (t) => {
+  for (const text of [
+    'secret_key=abcdefgh12345678',
+    'client-secret=abcdefgh12345678',
+    'accessToken: abcdefgh12345678',
+    'API_KEY=abcdefgh12345678',
+    'apikey=abcdefgh12345678',
+    'x.auth.token=abcdefgh12345678',
+  ]) {
+    t.is(detector.detect(text).length, 1, text);
+  }
+});
+
+test('does not start an sk- key in the middle of a word', (t) => {
+  t.is(detector.detect('risk-assessment_2024').length, 0);
+  t.is(detector.detect('see task-force-leader-abcdefghijklmnop').length, 0);
+  t.is(detector.detect('use sk-aBcDeFgHiJkLmNoPqRsTuVwXyZ1234567890 now').length, 1);
+  t.is(detector.detect('"sk-aBcDeFgHiJkLmNoPqRsTuVwXyZ1234567890"').length, 1);
+});
+
+test('detects an upper-case Bearer scheme', (t) => {
+  for (const scheme of ['Bearer', 'bearer', 'BEARER']) {
+    const findings = detector.detect(`Authorization: ${scheme} aaaaaaaaaaaaaaaaaaaaa`);
+    t.is(findings.length, 1, scheme);
+    t.is(findings[0]?.value, 'aaaaaaaaaaaaaaaaaaaaa');
+  }
+});
+
+test('scans pathological key-value input in linear time', (t) => {
+  for (const input of [
+    ` ${'a='.repeat(50_000)}`,
+    `password: ${'!'.repeat(100_000)}`,
+    `password="${'a'.repeat(100_000)}`,
+    'sk-'.repeat(30_000),
+    'Bearer '.repeat(20_000),
+  ]) {
+    const start = Date.now();
+    detector.detect(input);
+    t.true(Date.now() - start < 1000, `took ${Date.now() - start}ms`);
+  }
+});
+
+test('detects an OpenAI project key in full, past 80 characters', (t) => {
+  const key = `sk-proj-${'A1b2C3d4_-'.repeat(15)}T3BlbkFJ${'x9Y8z7W6'.repeat(2)}`;
+  t.true(key.length > 160);
+  const findings = detector.detect(`rotate ${key} today`);
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, key);
+});
+
+test('detects an Anthropic key in full', (t) => {
+  const key = `sk-ant-api03-${'Zz9Yy8Xx-_'.repeat(9)}AA`;
+  t.true(key.length > 100);
+  const findings = detector.detect(`the key is "${key}" in the logs`);
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, key);
+});
+
+test('a long key ends at the first character that cannot be part of it', (t) => {
+  const key = `sk-svcacct-${'Qq1Ww2Ee3Rr4'.repeat(10)}`;
+  const findings = detector.detect(`use (${key}), then rotate`);
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, key);
+});
+
+test('a long key leaves no tail behind after scrubbing', (t) => {
+  const key = `sk-proj-${'0123456789'.repeat(16)}`;
+  const result = scrub({ content: `rotate ${key} today`, sessionMap: {} });
+  t.is(result.scrubbedContent, 'rotate «Secret_1» today');
+});
+
+test('does not treat a short sk- string as a key', (t) => {
+  for (const text of [
+    'sk-',
+    'sk-short',
+    'sk-abc123 is not a key',
+    'use sk-0123456789abcdefghi now',
+  ]) {
+    t.is(detector.detect(text).length, 0, text);
+  }
+});
+
+test('a hyphenated word joined onto a key is redacted with it, never left behind', (t) => {
+  const key = 'sk-0123456789abcdefghijklmnop';
+  const findings = detector.detect(`token ${key}-rotate-now please`);
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, `${key}-rotate-now`);
+  t.is(detector.detect(`token ${key} -rotate-now`)[0]?.value, key);
+});
+
+test('a long key next to another detector is redacted separately', (t) => {
+  const key = `sk-proj-${'0123456789'.repeat(16)}`;
+  const result = scrub({ content: `bob@example.com ${key}`, sessionMap: {} });
+  t.is(result.scrubbedContent, '«Email_1» «Secret_1»');
+  t.deepEqual(result.stats.byCategory, { Email: 1, Secret: 1 });
 });
