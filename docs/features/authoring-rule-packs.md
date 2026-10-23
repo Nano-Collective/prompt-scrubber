@@ -125,6 +125,8 @@ Let's build a rule pack that detects "Project X" codenames.
    ProjectXDetector   rule-pack: prompt-scrub-projectx     on
    ```
 
+   A pack that cannot be imported (a misspelt name, a package that is not installed, an error thrown while it loads) is skipped, and `scrub`, `inspect`, `rules list`, `watch` and `proxy` say so on `stderr`, once per run, naming the pack and the reason: `Warning: rule pack "prompt-scrub-projectx" failed to load, so its detectors are not active: Cannot find package ...`. The run carries on with the other packs.
+
 ## Locale-Scoped Rule Packs
 
 The built-in detectors are shaped around English and US/UK formats, so locale-specific PII is best distributed as its own rule pack. A detector that declares `locales` only runs when the user has that locale active, which keeps the default path free of regexes nobody in that locale needs.

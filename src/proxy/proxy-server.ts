@@ -2,7 +2,7 @@ import * as crypto from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import * as http from 'node:http';
 import * as https from 'node:https';
-import { warnIfLocaleUnused } from '../cli/locale.js';
+import { warnIfLocaleUnused, warnRulePackFailures } from '../cli/locale.js';
 import {
   getConfigDir,
   loadConfig,
@@ -120,11 +120,12 @@ export async function createProxyServer(
   // Load rule pack detectors once at startup so each request stays sync. The
   // holder is read once per request, so a reload never changes options midway
   // through a request.
-  const { detectors: rulePackDetectors } = await loadConfiguredRulePacks();
+  const { detectors: rulePackDetectors, failed } = await loadConfiguredRulePacks();
   const startConfig = loadConfig();
   const scrubState = {
     current: buildBaseScrubOptions(options.scrubOptions, rulePackDetectors, startConfig),
   };
+  warnRulePackFailures(failed, log);
   warnIfLocaleUnused(startConfig.locale ?? '', rulePackDetectors, log);
   const logThreshold = () => {
     const threshold = scrubState.current.minConfidence;
@@ -168,14 +169,11 @@ export async function createProxyServer(
         `config is invalid; keeping the previous configuration. ${file.errors.join(' ')}`,
       );
     }
-    const { detectors, metadata } = await loadConfiguredRulePacks();
-    const loaded = new Set(metadata.map((m) => m.source));
-    const failed = (file.config.rulePacks ?? []).filter(
-      (name) => !loaded.has(`rule-pack: ${name}`),
-    );
-    if (failed.length > 0) {
+    const { detectors, failed: reloadFailed } = await loadConfiguredRulePacks();
+    if (reloadFailed.length > 0) {
+      const reasons = reloadFailed.map((f) => `${f.name} (${f.message})`).join(', ');
       throw new Error(
-        `rule pack(s) failed to load, keeping the previous configuration: ${failed.join(', ')}`,
+        `rule pack(s) failed to load, keeping the previous configuration: ${reasons}`,
       );
     }
     scrubState.current = buildBaseScrubOptions(options.scrubOptions, detectors, file.config);

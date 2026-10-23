@@ -1,7 +1,7 @@
 import type { Command } from 'commander';
 import { loadConfig } from '../../core/config.js';
 import { type DetectorMetadata, getAvailableDetectorsAsync } from '../../core/detectors.js';
-import { resolveLocale } from '../locale.js';
+import { resolveLocale, warnRulePackFailures } from '../locale.js';
 
 function localesOf(detector: DetectorMetadata): string {
   return detector.locales && detector.locales.length > 0 ? detector.locales.join(', ') : '-';
@@ -54,7 +54,7 @@ export function setupRulesCommands(program: Command) {
         return;
       }
 
-      const detectors = await getAvailableDetectorsAsync(locale);
+      const detectors = await getAvailableDetectorsAsync(locale, warnRulePackFailures);
 
       if (detectors.length === 0) {
         console.log('No detectors found.');

@@ -6,7 +6,7 @@ import { resolveEncryptionKeyOrExit, runCliAction } from '../../core/cli-key-res
 import { loadConfig } from '../../core/config.js';
 import { loadConfiguredRulePacks } from '../../core/rule-packs.js';
 import { isSessionEncrypted, sessionExists } from '../../session/storage.js';
-import { resolveLocale, warnIfLocaleUnused } from '../locale.js';
+import { resolveLocale, warnIfLocaleUnused, warnRulePackFailures } from '../locale.js';
 import { parseConfidence } from '../options.js';
 import { formatSuppressionNotice, handleScrub, pluralize } from './scrub.js';
 
@@ -294,11 +294,13 @@ export async function handleWatch(
   const log = options.logFn ?? console.log;
   const intervalMs = Number.parseInt(options.interval || '1000', 10) || 1000;
 
-  // Resolved up front: a watch that only reports a bad locale once the first
-  // change lands would run for minutes looking like it was working.
+  // Resolved up front: a watch that only reports a bad locale or a rule pack
+  // that failed to load once the first change lands would run for minutes
+  // looking like it was working.
   const locale = resolveLocale(options.locale, loadConfig().locale);
+  const { detectors, failed } = await loadConfiguredRulePacks();
+  warnRulePackFailures(failed);
   if (locale) {
-    const { detectors } = await loadConfiguredRulePacks();
     warnIfLocaleUnused(locale, detectors);
   }
 

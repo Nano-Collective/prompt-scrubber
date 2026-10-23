@@ -1026,3 +1026,40 @@ test.serial('CLI: proxy rejects a blank PROMPT_SCRUB_AUTH_TOKEN instead of runni
   t.is(result.status, 1);
   t.true(result.stderr.includes('Invalid PROMPT_SCRUB_AUTH_TOKEN'), result.stderr);
 });
+
+// A rule pack that cannot be imported must not look like a working setup: the CLI
+// warns on stderr, names the pack and the reason, and carries on without it.
+function brokenPackEnv(): NodeJS.ProcessEnv {
+  const dir = path.join(tmpConfigDir, 'broken-pack');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, 'config.json'),
+    JSON.stringify({ rulePacks: ['non-existent-pack'] }),
+    'utf8',
+  );
+  return { PROMPT_SCRUB_CONFIG_DIR: dir };
+}
+
+test('CLI: rules list warns when a configured rule pack fails to load', (t) => {
+  const result = runCli(['rules', 'list'], undefined, brokenPackEnv());
+
+  t.is(result.status, 0);
+  t.regex(result.stderr, /rule pack "non-existent-pack" failed to load/);
+  t.true(result.stdout.includes('EmailDetector'));
+});
+
+test('CLI: scrub warns when a configured rule pack fails to load, and still scrubs', (t) => {
+  const result = runCli(['scrub'], 'mail bob@example.com', brokenPackEnv());
+
+  t.is(result.status, 0);
+  t.regex(result.stderr, /rule pack "non-existent-pack" failed to load/);
+  t.true(result.stdout.includes('«Email_1»'));
+});
+
+test('CLI: scrub --json keeps stdout parseable when a rule pack fails to load', (t) => {
+  const result = runCli(['scrub', '--json', '-q'], 'mail bob@example.com', brokenPackEnv());
+
+  t.is(result.status, 0);
+  t.regex(result.stderr, /rule pack "non-existent-pack" failed to load/);
+  t.is(JSON.parse(result.stdout).content, 'mail «Email_1»');
+});

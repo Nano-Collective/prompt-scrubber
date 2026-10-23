@@ -3,7 +3,7 @@ import * as http from 'node:http';
 import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'ava';
-import { resetLocaleWarning } from '../../src/cli/locale.js';
+import { resetCliWarnings } from '../../src/cli/locale.js';
 import { createProxyServer } from '../../src/proxy/proxy-server.js';
 import type { ProxyEvent, ProxyHandle, ProxyOptions } from '../../src/proxy/types.js';
 
@@ -276,12 +276,38 @@ test.serial('a rule pack that fails to load rejects the reload', async (t) => {
     writeConfig({ rulePacks: ['@prompt-scrub/does-not-exist-pack'] });
     process.emit('SIGHUP');
     const event = await waitForEvent(events, (e) => e.type === 'config_reload_failed');
-    t.regex(event.type === 'config_reload_failed' ? event.reason : '', /failed to load/);
+    const reason = event.type === 'config_reload_failed' ? event.reason : '';
+    t.regex(reason, /failed to load/);
+    t.regex(reason, /@prompt-scrub\/does-not-exist-pack \(/);
   } finally {
     await proxy.close();
     await upstream.close();
   }
 });
+
+test.serial(
+  'a pack that imports but exports no valid detectors does not reject the reload',
+  async (t) => {
+    writeConfig({});
+    const packDir = path.join(configDir, 'packs');
+    fs.mkdirSync(packDir, { recursive: true });
+    const packPath = path.join(packDir, 'empty-pack.mjs');
+    fs.writeFileSync(packPath, 'export const detectors = [{ name: "NoDetect" }];\n', 'utf8');
+
+    const upstream = await startFakeUpstream();
+    const events: ProxyEvent[] = [];
+    const proxy = await startProxy(upstream, {}, events);
+    try {
+      writeConfig({ rulePacks: [pathToFileURL(packPath).href] });
+      process.emit('SIGHUP');
+      const event = await waitForEvent(events, (e) => e.type === 'config_reloaded');
+      t.is(event.type, 'config_reloaded');
+    } finally {
+      await proxy.close();
+      await upstream.close();
+    }
+  },
+);
 
 test.serial('closing the proxy removes its SIGHUP listener', async (t) => {
   writeConfig({});
@@ -466,8 +492,8 @@ test.serial('a locale change applies on reload', async (t) => {
 });
 
 test.serial('a locale that activates no detector is warned about at startup', async (t) => {
-  resetLocaleWarning();
-  t.teardown(resetLocaleWarning);
+  resetCliWarnings();
+  t.teardown(resetCliWarnings);
   writeConfig({ locale: 'de-DE' });
   const upstream = await startFakeUpstream();
   const logs: string[] = [];
@@ -479,8 +505,8 @@ test.serial('a locale that activates no detector is warned about at startup', as
 });
 
 test.serial('a locale that a rule pack activates is not warned about', async (t) => {
-  resetLocaleWarning();
-  t.teardown(resetLocaleWarning);
+  resetCliWarnings();
+  t.teardown(resetCliWarnings);
   writeConfig({ rulePacks: [writeCpfPack()], locale: 'pt-BR' });
   const upstream = await startFakeUpstream();
   const logs: string[] = [];
@@ -492,8 +518,8 @@ test.serial('a locale that a rule pack activates is not warned about', async (t)
 });
 
 test.serial('a reload that sets an unused locale is warned about', async (t) => {
-  resetLocaleWarning();
-  t.teardown(resetLocaleWarning);
+  resetCliWarnings();
+  t.teardown(resetCliWarnings);
   writeConfig({});
   const upstream = await startFakeUpstream();
   const logs: string[] = [];
@@ -508,4 +534,21 @@ test.serial('a reload that sets an unused locale is warned about', async (t) => 
     await proxy.close();
     await upstream.close();
   }
+});
+
+test.serial('a rule pack that fails to load is warned about at startup', async (t) => {
+  resetCliWarnings();
+  t.teardown(resetCliWarnings);
+  writeConfig({ rulePacks: ['@prompt-scrub/does-not-exist-pack'] });
+  const upstream = await startFakeUpstream();
+  const logs: string[] = [];
+  const proxy = await startProxy(upstream, { log: (msg) => logs.push(msg) });
+  await proxy.close();
+  await upstream.close();
+
+  t.true(
+    logs.some((line) =>
+      line.includes('rule pack "@prompt-scrub/does-not-exist-pack" failed to load'),
+    ),
+  );
 });

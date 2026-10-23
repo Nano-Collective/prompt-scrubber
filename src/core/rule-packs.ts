@@ -2,9 +2,17 @@ import type { Detector } from '../types/index.js';
 import { loadConfig } from './config.js';
 import type { DetectorMetadata } from './detectors.js';
 
+/** A configured rule pack that could not be imported, and why. */
+export interface RulePackFailure {
+  name: string;
+  message: string;
+}
+
 export interface RulePackResult {
   detectors: Detector[];
   metadata: DetectorMetadata[];
+  /** Packs that failed to import. The caller decides how to report them. */
+  failed: RulePackFailure[];
 }
 
 /**
@@ -42,11 +50,12 @@ function withValidatedLocales(detector: Detector): Detector {
 export async function loadConfiguredRulePacks(): Promise<RulePackResult> {
   const config = loadConfig();
   if (!config.rulePacks || config.rulePacks.length === 0) {
-    return { detectors: [], metadata: [] };
+    return { detectors: [], metadata: [], failed: [] };
   }
 
   const loadedDetectors: Detector[] = [];
   const metadata: DetectorMetadata[] = [];
+  const failed: RulePackFailure[] = [];
 
   for (const packName of config.rulePacks) {
     try {
@@ -82,11 +91,15 @@ export async function loadConfiguredRulePacks(): Promise<RulePackResult> {
           }
         }
       }
-    } catch {
-      // Rule pack could not be loaded (e.g. not installed). Best-effort:
-      // skip it silently rather than logging, for the reason noted above.
+    } catch (error) {
+      // Rule pack could not be loaded (e.g. not installed). Skip it and hand the
+      // reason back rather than logging, for the reason noted above.
+      failed.push({
+        name: packName,
+        message: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
-  return { detectors: loadedDetectors, metadata };
+  return { detectors: loadedDetectors, metadata, failed };
 }
