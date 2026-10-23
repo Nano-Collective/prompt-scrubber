@@ -656,6 +656,38 @@ test('streams an SSE chat-completion response with rehydration', async (t) => {
   }
 });
 
+test('rehydrates a streamed placeholder split across two SSE events', async (t) => {
+  const upstream = await startFakeUpstream((_req, _body, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write('data: {"choices":[{"index":0,"delta":{"content":"Contact «Email_"}}]}\n\n');
+    res.write('data: {"choices":[{"index":0,"delta":{"content":"1» today."}}]}\n\n');
+    res.write('data: [DONE]\n\n');
+    res.end();
+  });
+
+  const proxy = await withProxy(upstream);
+  try {
+    const res = await makeRequest(`${proxy.url}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-4',
+        stream: true,
+        messages: [{ role: 'user', content: 'Hello alice@example.com' }],
+      }),
+    });
+    const text = res.body
+      .split('\n')
+      .filter((line) => line.startsWith('data: {'))
+      .map((line) => JSON.parse(line.slice('data: '.length)).choices[0].delta.content)
+      .join('');
+    t.is(text, 'Contact alice@example.com today.');
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+});
+
 test('forwards a non-JSON upstream response without trying to rewrite it', async (t) => {
   const upstream = await startFakeUpstream((_req, _body, res) => {
     res.writeHead(200, { 'content-type': 'text/plain' });

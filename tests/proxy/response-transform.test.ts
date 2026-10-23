@@ -588,3 +588,81 @@ test('createSseRehydrator keeps non-data fields of a CRLF event', (t) => {
   ]);
   t.is(out.trimEnd(), `id: 7\nevent: delta\n${contentEvent('x alice@example.com')}\nretry: 100`);
 });
+
+/** Concatenate the streamed text of an OpenAI `delta.content` or Anthropic `text_delta` stream. */
+function collectText(sse: string): string {
+  let out = '';
+  for (const line of sse.split('\n')) {
+    if (!line.startsWith('data: ')) continue;
+    const payload = line.slice('data: '.length).trim();
+    if (payload === '[DONE]' || payload === '') continue;
+    const parsed = JSON.parse(payload) as {
+      choices?: Array<{ delta?: { content?: string } }>;
+      delta?: { text?: string };
+    };
+    out += parsed.choices?.[0]?.delta?.content ?? parsed.delta?.text ?? '';
+  }
+  return out;
+}
+
+test('createSseRehydrator restores a delta.content placeholder split across events', (t) => {
+  const rehydrator = createSseRehydrator('openai', ESCAPING_SESSION);
+  const out =
+    rehydrator.push(Buffer.from(`${contentEvent('Contact «Email_')}\n\n`)) +
+    rehydrator.push(Buffer.from(`${contentEvent('1» today.')}\n\n`)) +
+    rehydrator.flush();
+
+  t.is(collectText(out), 'Contact alice@example.com today.');
+});
+
+test('createSseRehydrator does not escape a restored value in delta.content', (t) => {
+  const rehydrator = createSseRehydrator('openai', ESCAPING_SESSION);
+  const out =
+    rehydrator.push(Buffer.from(`${contentEvent('Hi «Name_')}\n\n`)) +
+    rehydrator.push(Buffer.from(`${contentEvent('1»')}\n\n`)) +
+    rehydrator.flush();
+
+  t.is(collectText(out), 'Hi Alice "Al" Smith');
+});
+
+test('createSseRehydrator keeps parallel choices apart in delta.content', (t) => {
+  const rehydrator = createSseRehydrator('openai', ESCAPING_SESSION);
+  const event = (index: number, text: string) =>
+    `data: ${JSON.stringify({ choices: [{ index, delta: { content: text } }] })}\n\n`;
+  const out =
+    rehydrator.push(Buffer.from(event(0, '«Em'))) +
+    rehydrator.push(Buffer.from(event(1, 'plain '))) +
+    rehydrator.push(Buffer.from(event(0, 'ail_1»'))) +
+    rehydrator.flush();
+
+  t.is(collectText(out), 'plain alice@example.com');
+});
+
+test('createSseRehydrator does not hold back delta.content that merely contains a guillemet', (t) => {
+  const rehydrator = createSseRehydrator('openai', ESCAPING_SESSION);
+  const chunk = `${contentEvent('il a dit « bonjour')}\n\n`;
+  t.is(rehydrator.push(Buffer.from(chunk)), chunk);
+});
+
+test('createSseRehydrator does not lose delta.content when the stream ends mid-placeholder', (t) => {
+  const rehydrator = createSseRehydrator('openai', ESCAPING_SESSION);
+  const out = rehydrator.push(Buffer.from(`${contentEvent('see «Em')}\n\n`)) + rehydrator.flush();
+  t.is(collectText(out), 'see «Em');
+});
+
+test('createSseRehydrator restores an Anthropic text_delta split across events', (t) => {
+  const rehydrator = createSseRehydrator('anthropic', ESCAPING_SESSION);
+  const event = (text: string) =>
+    `data: ${JSON.stringify({
+      type: 'content_block_delta',
+      index: 0,
+      delta: { type: 'text_delta', text },
+    })}\n\n`;
+
+  const out =
+    rehydrator.push(Buffer.from(event('Contact «Email_'))) +
+    rehydrator.push(Buffer.from(event('1» today.'))) +
+    rehydrator.flush();
+
+  t.is(collectText(out), 'Contact alice@example.com today.');
+});

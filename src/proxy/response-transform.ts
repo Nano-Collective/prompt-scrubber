@@ -134,14 +134,10 @@ interface PendingTail {
  *
  * An *event* boundary is the harder one: vendors emit roughly one token per
  * event, so `«Email_1»` genuinely arrives as `«Email_` in one event and `1»`
- * in the next. For tool-call arguments that is the common case rather than an
- * edge case, and leaving it unresolved hands the client's own tool a literal
- * placeholder, so a trailing partial placeholder is held back and prepended
- * to the next fragment for that same call (see `rehydrateFragment`).
- *
- * `delta.content` deliberately keeps the simpler per-event behaviour: a split
- * placeholder there is cosmetic — the reader sees `«Email_1»` — whereas tool
- * arguments are executed by code.
+ * in the next. Leaving it unresolved hands the reader, or for tool-call
+ * arguments the client's own tool, a literal placeholder, so a trailing
+ * partial placeholder is held back and prepended to the next fragment of that
+ * same text or call (see `rehydrateFragment`).
  */
 export function createSseRehydrator(
   provider: ProxyProvider,
@@ -298,13 +294,20 @@ function rehydrateOpenAIStreamChunk(payload: unknown, state: StreamState): unkno
     if (!delta) return raw;
 
     const patch: Record<string, unknown> = {};
+    const choiceIndex = typeof choice.index === 'number' ? choice.index : 0;
 
     if (typeof delta.content === 'string') {
-      const { content, replaced } = rehydrateText(delta.content, state.sessionMap);
-      if (replaced > 0) patch.content = content;
+      const content = rehydrateFragment(
+        delta.content,
+        `openai:${choiceIndex}:content`,
+        state,
+        (text) => synthesizeOpenAIEvent(choiceIndex, { content: text }),
+        false,
+      );
+      if (content !== delta.content) patch.content = content;
     }
 
-    const toolCalls = rehydrateStreamedToolCalls(delta.tool_calls, choice.index, state);
+    const toolCalls = rehydrateStreamedToolCalls(delta.tool_calls, choiceIndex, state);
     if (toolCalls !== delta.tool_calls) patch.tool_calls = toolCalls;
 
     if (Object.keys(patch).length === 0) return raw;
@@ -331,16 +334,23 @@ function rehydrateAnthropicStreamChunk(payload: unknown, state: StreamState): un
   const delta = asRecord(root.delta);
   if (!delta) return payload;
 
+  const index = typeof root.index === 'number' ? root.index : 0;
+
   if (typeof delta.text === 'string') {
-    const { content: text, replaced } = rehydrateText(delta.text, state.sessionMap);
-    if (replaced === 0) return payload;
+    const text = rehydrateFragment(
+      delta.text,
+      `anthropic:${index}:text`,
+      state,
+      (held) => synthesizeAnthropicEvent(index, { type: 'text_delta', text: held }),
+      false,
+    );
+    if (text === delta.text) return payload;
     return { ...root, delta: { ...delta, text } };
   }
 
   if (typeof delta.partial_json === 'string') {
-    const index = typeof root.index === 'number' ? root.index : 0;
     const next = rehydrateFragment(delta.partial_json, `anthropic:${index}`, state, (text) =>
-      synthesizeAnthropicEvent(index, text),
+      synthesizeAnthropicEvent(index, { type: 'input_json_delta', partial_json: text }),
     );
     if (next === delta.partial_json) return payload;
     return { ...root, delta: { ...delta, partial_json: next } };
@@ -398,11 +408,7 @@ function rehydrateCallArguments(
 }
 
 /** Streaming counterpart: one fragment of an argument string per event. */
-function rehydrateStreamedToolCalls(
-  value: unknown,
-  choiceIndex: unknown,
-  state: StreamState,
-): unknown {
+function rehydrateStreamedToolCalls(value: unknown, choice: number, state: StreamState): unknown {
   if (!Array.isArray(value)) return value;
 
   let changed = false;
@@ -412,10 +418,9 @@ function rehydrateStreamedToolCalls(
     const fn = asRecord(call.function);
     if (!fn || typeof fn.arguments !== 'string') return raw;
 
-    const choice = typeof choiceIndex === 'number' ? choiceIndex : 0;
     const index = typeof call.index === 'number' ? call.index : 0;
     const args = rehydrateFragment(fn.arguments, `openai:${choice}:${index}`, state, (text) =>
-      synthesizeOpenAIEvent(choice, index, text),
+      synthesizeOpenAIEvent(choice, { tool_calls: [{ index, function: { arguments: text } }] }),
     );
     if (args === fn.arguments) return raw;
     changed = true;
@@ -433,24 +438,27 @@ function rehydrateStreamedToolCalls(
 const MAX_HELD_TAIL = 48;
 
 /**
- * Restore placeholders in a *fragment* of a JSON string — a streamed slice of
- * `arguments` / `partial_json`, which is not parseable on its own.
+ * Restore placeholders in a streamed *fragment* of a field, which is not
+ * complete on its own.
  *
  * Two things make this different from rehydrating a whole field:
  *
- * 1. The fragment sits inside a JSON string literal that the client will
- *    reassemble, so a substituted value must be escaped as that literal's
- *    contents: `C:\Users\alice` has to land as `C:\\Users\\alice`.
- * 2. A placeholder may straddle the boundary between two events. The part
+ * 1. A placeholder may straddle the boundary between two events. The part
  *    from an unterminated `«` onwards is withheld and prepended to the next
- *    fragment for the same call, so the client's reassembled arguments carry
- *    the real value.
+ *    fragment for the same text or call, so the client's reassembled output
+ *    carries the real value.
+ * 2. A slice of `arguments` / `partial_json` sits inside a JSON string literal
+ *    that the client will reassemble, so a substituted value must be escaped
+ *    as that literal's contents: `C:\Users\alice` has to land as
+ *    `C:\\Users\\alice`. Plain text (`inJsonString` false) is serialised with
+ *    the rest of its event, so its values go in unescaped.
  */
 function rehydrateFragment(
   fragment: string,
   key: string,
   state: StreamState,
   synthesize: (text: string) => string,
+  inJsonString = true,
 ): string {
   const previous = state.tails.get(key);
   const combined = previous === undefined ? fragment : previous.text + fragment;
@@ -460,7 +468,7 @@ function rehydrateFragment(
   else state.tails.delete(key);
 
   if (!ready.includes('«')) return ready;
-  return rehydrateText(ready, state.escaped()).content;
+  return rehydrateText(ready, inJsonString ? state.escaped() : state.sessionMap).content;
 }
 
 /**
@@ -482,24 +490,13 @@ function splitAtOpenPlaceholder(text: string): { ready: string; held: string } {
   return { ready: text.slice(0, start), held: candidate };
 }
 
-function synthesizeOpenAIEvent(choiceIndex: number, callIndex: number, text: string): string {
-  const payload = {
-    choices: [
-      {
-        index: choiceIndex,
-        delta: { tool_calls: [{ index: callIndex, function: { arguments: text } }] },
-      },
-    ],
-  };
+function synthesizeOpenAIEvent(choiceIndex: number, delta: Record<string, unknown>): string {
+  const payload = { choices: [{ index: choiceIndex, delta }] };
   return `data: ${JSON.stringify(payload)}\n\n`;
 }
 
-function synthesizeAnthropicEvent(blockIndex: number, text: string): string {
-  const payload = {
-    type: 'content_block_delta',
-    index: blockIndex,
-    delta: { type: 'input_json_delta', partial_json: text },
-  };
+function synthesizeAnthropicEvent(blockIndex: number, delta: Record<string, unknown>): string {
+  const payload = { type: 'content_block_delta', index: blockIndex, delta };
   return `data: ${JSON.stringify(payload)}\n\n`;
 }
 
