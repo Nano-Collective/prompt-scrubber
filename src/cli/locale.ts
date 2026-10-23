@@ -1,4 +1,5 @@
 import { LOCALE_PATTERN, matchesLocale } from '../core/locale.js';
+import type { RulePackFailure } from '../core/rule-packs.js';
 import type { Detector } from '../types/index.js';
 
 /**
@@ -26,10 +27,12 @@ export function resolveLocale(flag: string | undefined, configured: string | und
 }
 
 let localeWarningShown = false;
+const reportedRulePackFailures = new Set<string>();
 
-/** Reset the once-per-process "locale matched nothing" latch (used by tests). */
+/** Reset the once-per-process warning latches (used by tests). */
 export function resetLocaleWarning(): void {
   localeWarningShown = false;
+  reportedRulePackFailures.clear();
 }
 
 /**
@@ -54,4 +57,26 @@ export function warnIfLocaleUnused(
   warn(
     `Warning: locale "${locale}" activated no detectors. Install a rule pack that declares it and list it under "rulePacks" — \`prompt-scrub rules list\` shows the locales currently loaded.`,
   );
+}
+
+/**
+ * Warns about each configured rule pack that failed to import. A misspelt or
+ * uninstalled pack otherwise looks identical to a working setup, and the
+ * detectors the user relied on silently never run. The run continues without
+ * the pack. Each failure is reported once per process because `watch` scrubs
+ * (and so loads the packs) on every change.
+ */
+export function warnRulePackFailures(
+  failed: RulePackFailure[],
+  warn: (message: string) => void = console.error,
+): void {
+  for (const { name, message } of failed) {
+    const key = `${name}\n${message}`;
+    if (reportedRulePackFailures.has(key)) continue;
+
+    reportedRulePackFailures.add(key);
+    warn(
+      `Warning: rule pack "${name}" failed to load, so its detectors are not active: ${message}`,
+    );
+  }
 }

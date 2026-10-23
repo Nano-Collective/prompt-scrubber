@@ -1,6 +1,6 @@
 import { loadConfig } from './config.js';
 import { matchesLocale } from './locale.js';
-import { loadConfiguredRulePacks } from './rule-packs.js';
+import { loadConfiguredRulePacks, type RulePackFailure } from './rule-packs.js';
 
 export interface DetectorMetadata {
   name: string;
@@ -36,9 +36,16 @@ const BUILT_IN_DETECTORS: DetectorMetadata[] = [
  *
  * `locale` resolves the locale gate, so callers can preview another locale
  * than the configured one. Omit it to fall back to the configuration.
+ *
+ * `onRulePackFailures` receives the rule packs that failed to import, so the
+ * caller can report them; this module stays silent.
  */
-export async function getAvailableDetectorsAsync(locale?: string): Promise<DetectorMetadata[]> {
-  const { metadata } = await loadConfiguredRulePacks();
+export async function getAvailableDetectorsAsync(
+  locale?: string,
+  onRulePackFailures?: (failed: RulePackFailure[]) => void,
+): Promise<DetectorMetadata[]> {
+  const { metadata, failed } = await loadConfiguredRulePacks();
+  onRulePackFailures?.(failed);
   const activeLocale = locale ?? loadConfig().locale;
 
   return [...BUILT_IN_DETECTORS, ...metadata].map((detector) =>

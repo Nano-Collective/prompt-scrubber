@@ -2,7 +2,7 @@ import * as crypto from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import * as http from 'node:http';
 import * as https from 'node:https';
-import { warnIfLocaleUnused } from '../cli/locale.js';
+import { warnIfLocaleUnused, warnRulePackFailures } from '../cli/locale.js';
 import {
   getConfigDir,
   loadConfig,
@@ -120,11 +120,12 @@ export async function createProxyServer(
   // Load rule pack detectors once at startup so each request stays sync. The
   // holder is read once per request, so a reload never changes options midway
   // through a request.
-  const { detectors: rulePackDetectors } = await loadConfiguredRulePacks();
+  const { detectors: rulePackDetectors, failed } = await loadConfiguredRulePacks();
   const startConfig = loadConfig();
   const scrubState = {
     current: buildBaseScrubOptions(options.scrubOptions, rulePackDetectors, startConfig),
   };
+  warnRulePackFailures(failed, log);
   warnIfLocaleUnused(startConfig.locale ?? '', rulePackDetectors, log);
   const logThreshold = () => {
     const threshold = scrubState.current.minConfidence;

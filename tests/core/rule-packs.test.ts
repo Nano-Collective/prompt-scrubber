@@ -65,10 +65,14 @@ test.serial('loadConfiguredRulePacks handles missing package gracefully', async 
     'utf8',
   );
 
-  const { detectors, metadata } = await loadConfiguredRulePacks();
+  const { detectors, metadata, failed } = await loadConfiguredRulePacks();
 
   t.is(detectors.length, 0);
   t.is(metadata.length, 0);
+  // The run goes on without the pack, but the caller is told which one and why.
+  t.is(failed.length, 1);
+  t.is(failed[0]?.name, 'this-package-does-not-exist');
+  t.regex(failed[0]?.message ?? '', /this-package-does-not-exist/);
 });
 
 /**
@@ -105,10 +109,47 @@ test.serial('loadConfiguredRulePacks keeps a well-formed locales array', async (
   );
   t.teardown(cleanup);
 
-  const { detectors, metadata } = await loadConfiguredRulePacks();
+  const { detectors, metadata, failed } = await loadConfiguredRulePacks();
 
   t.deepEqual(detectors[0]?.locales, ['de-DE', 'de-AT']);
   t.deepEqual(metadata[0]?.locales, ['de-DE', 'de-AT']);
+  t.deepEqual(failed, []);
+});
+
+test.serial('loadConfiguredRulePacks reports a pack that throws when imported', async (t) => {
+  const { cleanup } = withPack('throws', 'throw new Error("boom from the pack");');
+  t.teardown(cleanup);
+
+  const { detectors, failed } = await loadConfiguredRulePacks();
+
+  t.is(detectors.length, 0);
+  t.is(failed.length, 1);
+  t.regex(failed[0]?.message ?? '', /boom from the pack/);
+});
+
+test.serial('a pack that fails to load does not stop the others', async (t) => {
+  const { dir, cleanup } = withPack(
+    'partial',
+    'export const detectors = [{ name: "GoodDetector", detect: () => [] }];',
+  );
+  t.teardown(cleanup);
+  const good = pathToFileURL(path.join(dir, 'pack.mjs')).href;
+  fs.writeFileSync(
+    path.join(dir, 'config.json'),
+    JSON.stringify({ rulePacks: ['this-package-does-not-exist', good] }),
+    'utf8',
+  );
+
+  const { detectors, failed } = await loadConfiguredRulePacks();
+
+  t.deepEqual(
+    detectors.map((d) => d.name),
+    ['GoodDetector'],
+  );
+  t.deepEqual(
+    failed.map((f) => f.name),
+    ['this-package-does-not-exist'],
+  );
 });
 
 test.serial('loadConfiguredRulePacks drops a locales field that is not an array', async (t) => {

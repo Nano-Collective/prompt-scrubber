@@ -1,5 +1,10 @@
 import test from 'ava';
-import { resetLocaleWarning, resolveLocale, warnIfLocaleUnused } from '../../src/cli/locale.js';
+import {
+  resetLocaleWarning,
+  resolveLocale,
+  warnIfLocaleUnused,
+  warnRulePackFailures,
+} from '../../src/cli/locale.js';
 import type { Detector } from '../../src/types/index.js';
 
 const noop: Detector = { name: 'NoopDetector', detect: () => [] };
@@ -76,4 +81,40 @@ test('warnIfLocaleUnused warns at most once per process', (t) => {
   warnIfLocaleUnused('pt-BR', [], (m) => messages.push(m));
   warnIfLocaleUnused('ja-JP', [], (m) => messages.push(m));
   t.is(messages.length, 1);
+});
+
+test('warnRulePackFailures stays silent when every pack loaded', (t) => {
+  t.teardown(resetLocaleWarning);
+  const messages: string[] = [];
+  warnRulePackFailures([], (m) => messages.push(m));
+  t.deepEqual(messages, []);
+});
+
+test('warnRulePackFailures names each failed pack and the reason', (t) => {
+  t.teardown(resetLocaleWarning);
+  const messages: string[] = [];
+  warnRulePackFailures(
+    [
+      { name: '@acme/pack', message: "Cannot find package '@acme/pack'" },
+      { name: 'other-pack', message: 'boom' },
+    ],
+    (m) => messages.push(m),
+  );
+  t.is(messages.length, 2);
+  t.true(messages[0]?.startsWith('Warning: rule pack "@acme/pack" failed to load'));
+  t.true(messages[0]?.includes("Cannot find package '@acme/pack'"));
+  t.true(messages[1]?.includes('"other-pack"') && messages[1].endsWith('boom'));
+});
+
+test('warnRulePackFailures reports a failure once per process, but a new one again', (t) => {
+  t.teardown(resetLocaleWarning);
+  const messages: string[] = [];
+  const failure = { name: 'pack-a', message: 'boom' };
+  warnRulePackFailures([failure], (m) => messages.push(m));
+  warnRulePackFailures([failure], (m) => messages.push(m));
+  t.is(messages.length, 1);
+
+  warnRulePackFailures([{ name: 'pack-a', message: 'different reason' }], (m) => messages.push(m));
+  warnRulePackFailures([{ name: 'pack-b', message: 'boom' }], (m) => messages.push(m));
+  t.is(messages.length, 3);
 });

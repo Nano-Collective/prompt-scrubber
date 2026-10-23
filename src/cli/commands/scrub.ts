@@ -8,7 +8,7 @@ import { CodeTellDetector } from '../../detectors/code-tell.js';
 import { gcSessions, isSessionEncrypted, sessionExists } from '../../session/storage.js';
 import type { ScrubStats } from '../../types/index.js';
 import { addDetectorOptions, readInput } from '../io.js';
-import { resolveLocale, warnIfLocaleUnused } from '../locale.js';
+import { resolveLocale, warnIfLocaleUnused, warnRulePackFailures } from '../locale.js';
 import { parseConfidence } from '../options.js';
 import { emitError, emitJson } from '../output.js';
 
@@ -49,8 +49,9 @@ export async function handleScrub(
   // An explicit flag overrides the configured floor; both default to 0.
   const minConfidence = options.minConfidence ?? config.minConfidence ?? 0;
 
-  const { detectors: rulePackDetectors } = await loadConfiguredRulePacks();
+  const { detectors: rulePackDetectors, failed } = await loadConfiguredRulePacks();
 
+  warnRulePackFailures(failed);
   warnIfLocaleUnused(locale, rulePackDetectors);
 
   const result = scrub({

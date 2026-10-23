@@ -509,3 +509,20 @@ test.serial('a reload that sets an unused locale is warned about', async (t) => 
     await upstream.close();
   }
 });
+
+test.serial('a rule pack that fails to load is warned about at startup', async (t) => {
+  resetLocaleWarning();
+  t.teardown(resetLocaleWarning);
+  writeConfig({ rulePacks: ['@prompt-scrub/does-not-exist-pack'] });
+  const upstream = await startFakeUpstream();
+  const logs: string[] = [];
+  const proxy = await startProxy(upstream, { log: (msg) => logs.push(msg) });
+  await proxy.close();
+  await upstream.close();
+
+  t.true(
+    logs.some((line) =>
+      line.includes('rule pack "@prompt-scrub/does-not-exist-pack" failed to load'),
+    ),
+  );
+});

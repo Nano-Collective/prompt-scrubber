@@ -6,7 +6,7 @@ import { getActiveDetectors, runDetectors } from '../../core/scrub.js';
 import { SessionManager } from '../../session/session-manager.js';
 import type { ScoredFinding } from '../../types/index.js';
 import { addDetectorOptions, readInput } from '../io.js';
-import { resolveLocale, warnIfLocaleUnused } from '../locale.js';
+import { resolveLocale, warnIfLocaleUnused, warnRulePackFailures } from '../locale.js';
 import { parseConfidence } from '../options.js';
 import { emitJson } from '../output.js';
 import { sanitizeLine } from '../sanitize.js';
@@ -65,8 +65,9 @@ export async function handleInspect(
   // An explicit flag overrides the configured floor; both default to 0.
   const minConfidence = options.minConfidence ?? config.minConfidence ?? 0;
 
-  const { detectors: rulePackDetectors } = await loadConfiguredRulePacks();
+  const { detectors: rulePackDetectors, failed } = await loadConfiguredRulePacks();
 
+  warnRulePackFailures(failed);
   warnIfLocaleUnused(locale, rulePackDetectors);
 
   const detectors = getActiveDetectors({
