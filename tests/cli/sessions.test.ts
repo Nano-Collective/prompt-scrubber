@@ -4,8 +4,8 @@ import { fileURLToPath } from 'node:url';
 import test from 'ava';
 import { Command } from 'commander';
 import { setupSessionsCommands } from '../../src/cli/commands/sessions.js';
-import { deleteSessionMap, readSessionMap, writeSessionMap } from '../../src/session/storage.js';
 import { clearCachedEncryptionKey, setCachedEncryptionKey } from '../../src/core/key-manager.js';
+import { deleteSessionMap, readSessionMap, writeSessionMap } from '../../src/session/storage.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -171,4 +171,52 @@ test.serial('sessions encrypt skips already-encrypted sessions', async (t) => {
   delete process.env.PROMPT_SCRUB_KEY;
   deleteSessionMap('already-encrypted');
   fs.rmSync(configPath);
+});
+
+test.serial(
+  'sessions list keeps working when a saved session has an unusual file name',
+  async (t) => {
+    const dir = path.join(process.env.PROMPT_SCRUB_CONFIG_DIR!, 'sessions');
+    fs.mkdirSync(dir, { recursive: true });
+    const names = ['.hidden', '_draft', 'with space', 'josé', 'plain'];
+    for (const name of names) {
+      fs.writeFileSync(path.join(dir, `${name}.json`), JSON.stringify({ '«Email_1»': 'a@b.com' }));
+    }
+    t.teardown(() => {
+      for (const name of names) fs.rmSync(path.join(dir, `${name}.json`), { force: true });
+    });
+
+    const program = new Command();
+    setupSessionsCommands(program);
+    const originalLog = console.log;
+    const lines: string[] = [];
+    console.log = (...args: unknown[]) => {
+      lines.push(args.join(' '));
+    };
+    try {
+      await program.parseAsync(['node', 'prompt-scrub', 'sessions', 'list']);
+    } finally {
+      console.log = originalLog;
+    }
+
+    const output = lines.join('\n');
+    for (const name of names) t.true(output.includes(name), `${name} missing from:\n${output}`);
+  },
+);
+
+test.serial('sessions rm removes a session whose name starts with a dot', async (t) => {
+  const dir = path.join(process.env.PROMPT_SCRUB_CONFIG_DIR!, 'sessions');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, '.legacy.json'), JSON.stringify({ '«Email_1»': 'a@b.com' }));
+
+  const program = new Command();
+  setupSessionsCommands(program);
+  const originalLog = console.log;
+  console.log = () => {};
+  try {
+    await program.parseAsync(['node', 'prompt-scrub', 'sessions', 'rm', '.legacy']);
+  } finally {
+    console.log = originalLog;
+  }
+  t.false(fs.existsSync(path.join(dir, '.legacy.json')));
 });

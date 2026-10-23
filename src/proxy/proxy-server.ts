@@ -2,6 +2,7 @@ import * as crypto from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import * as http from 'node:http';
 import * as https from 'node:https';
+import { warnIfLocaleUnused } from '../cli/locale.js';
 import {
   getConfigDir,
   loadConfig,
@@ -49,8 +50,17 @@ export const SESSION_HEADER = 'x-prompt-scrub-session';
 const TOKEN_HEADER = 'x-prompt-scrub-token';
 
 const DEFAULT_MAX_BODY_BYTES = 10 * 1024 * 1024;
-const UPSTREAM_TIMEOUT_MS = 30_000;
+/**
+ * How long the upstream may go without sending a byte. Reasoning models can
+ * think for minutes before the first token, so this matches the 10 minute
+ * default of the vendors' own SDKs rather than cutting a request they would
+ * still be waiting on.
+ */
+const DEFAULT_UPSTREAM_TIMEOUT_MS = 600_000;
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
+
+/** Recorded for a request whose client hung up before any response was sent (nginx's 499). */
+const CLIENT_CLOSED_STATUS = 499;
 
 type ErrorKind = NonNullable<Extract<ProxyEvent, { type: 'response' }>['errorKind']>;
 
@@ -111,9 +121,11 @@ export async function createProxyServer(
   // holder is read once per request, so a reload never changes options midway
   // through a request.
   const { detectors: rulePackDetectors } = await loadConfiguredRulePacks();
+  const startConfig = loadConfig();
   const scrubState = {
-    current: buildBaseScrubOptions(options.scrubOptions, rulePackDetectors, loadConfig()),
+    current: buildBaseScrubOptions(options.scrubOptions, rulePackDetectors, startConfig),
   };
+  warnIfLocaleUnused(startConfig.locale ?? '', rulePackDetectors, log);
   const logThreshold = () => {
     const threshold = scrubState.current.minConfidence;
     if (threshold) {
@@ -167,6 +179,7 @@ export async function createProxyServer(
       );
     }
     scrubState.current = buildBaseScrubOptions(options.scrubOptions, detectors, file.config);
+    warnIfLocaleUnused(file.config.locale ?? '', detectors, log);
     logThreshold();
     return {
       rulePacks: file.config.rulePacks?.length ?? 0,
@@ -251,7 +264,7 @@ export async function createProxyServer(
         },
       };
 
-      log(`[proxy] Listening on ${url} → ${options.target.href}`);
+      log(`[proxy] Listening on ${url} → ${options.target.origin}${options.target.pathname}`);
       if (options.auditLog !== undefined) {
         log(`[proxy] Audit log: ${options.auditLog}`);
       }
@@ -451,7 +464,7 @@ async function handleClientRequest(
   emit({
     type: 'request',
     method: trace.method,
-    path: incomingUrl,
+    path: trace.path,
     provider,
     sessionId,
   });
@@ -544,12 +557,35 @@ async function handleClientRequest(
 
   const upstreamHeaders = buildUpstreamHeaders(req.headers, options.target);
 
-  const upstreamResponse = await dispatchUpstream(options.target, {
-    method: trace.method,
-    path: joinTargetPath(options.target, incomingUrl),
-    headers: upstreamHeaders,
-    ...(upstreamBody !== undefined ? { body: upstreamBody } : {}),
-  });
+  // A client that hangs up has no use for the answer, so stop waiting on the
+  // upstream and stop it generating one. Streamed responses are cancelled by
+  // `pipeStreamingResponse`, which owns the response once its headers are out.
+  const clientGone = new AbortController();
+  const onClientClose = () => {
+    if (!res.writableFinished) clientGone.abort();
+  };
+  res.once('close', onClientClose);
+  const abandon = () => {
+    finishTrace(trace, emit, CLIENT_CLOSED_STATUS, 'client_aborted');
+  };
+
+  let upstreamResponse: UpstreamResponse;
+  try {
+    upstreamResponse = await dispatchUpstream(
+      options.target,
+      {
+        method: trace.method,
+        path: joinTargetPath(options.target, incomingUrl),
+        headers: upstreamHeaders,
+        ...(upstreamBody !== undefined ? { body: upstreamBody } : {}),
+      },
+      options.upstreamTimeoutMs ?? DEFAULT_UPSTREAM_TIMEOUT_MS,
+      clientGone.signal,
+    );
+  } catch (err) {
+    if (clientGone.signal.aborted) return abandon();
+    throw err;
+  }
 
   const responseHeaders = filterResponseHeaders(upstreamResponse.headers);
   responseHeaders[SESSION_HEADER] = sessionId;
@@ -560,6 +596,8 @@ async function handleClientRequest(
   trace.streaming = isStreaming;
 
   if (isStreaming) {
+    // From here `pipeStreamingResponse` owns the response and its cleanup.
+    res.off('close', onClientClose);
     res.writeHead(status, responseHeaders);
     pipeStreamingResponse(
       upstreamResponse,
@@ -573,12 +611,19 @@ async function handleClientRequest(
     return;
   }
 
+  const dropUpstreamIfClientGone = () => {
+    if (clientGone.signal.aborted) upstreamResponse.destroy();
+  };
+  res.once('close', dropUpstreamIfClientGone);
+  dropUpstreamIfClientGone();
+
   const chunks: Buffer[] = [];
   try {
     for await (const chunk of upstreamResponse.body) {
       chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     }
   } catch (err) {
+    if (clientGone.signal.aborted) return abandon();
     throw toUpstreamFailure(err);
   }
   let payload = Buffer.concat(chunks);
@@ -839,6 +884,12 @@ interface UpstreamResponse {
   statusCode: number;
   headers: http.IncomingHttpHeaders;
   body: AsyncIterable<Buffer>;
+  /** Drop the upstream connection without waiting for the rest of the body. */
+  destroy: () => void;
+}
+
+function formatSeconds(ms: number): string {
+  return `${Number((ms / 1000).toFixed(3))}s`;
 }
 
 function toUpstreamFailure(err: unknown): UpstreamFailure {
@@ -846,9 +897,23 @@ function toUpstreamFailure(err: unknown): UpstreamFailure {
   return new UpstreamFailure(err instanceof Error ? err.message : String(err), 'upstream_error');
 }
 
-function dispatchUpstream(target: URL, req: DispatchRequest): Promise<UpstreamResponse> {
+/**
+ * Send one request upstream. Resolves once the response headers arrive.
+ * `signal` cancels the request until then; after that the caller owns the
+ * response and cancels it through `destroy`.
+ */
+function dispatchUpstream(
+  target: URL,
+  req: DispatchRequest,
+  timeoutMs: number,
+  signal: AbortSignal,
+): Promise<UpstreamResponse> {
   const client = target.protocol === 'https:' ? https : http;
   return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new UpstreamFailure('client closed the connection', 'upstream_error'));
+      return;
+    }
     const upstreamReq = client.request(
       {
         protocol: target.protocol,
@@ -857,21 +922,30 @@ function dispatchUpstream(target: URL, req: DispatchRequest): Promise<UpstreamRe
         method: req.method,
         path: req.path,
         headers: req.headers,
-        timeout: UPSTREAM_TIMEOUT_MS,
+        timeout: timeoutMs,
       },
       (res) => {
+        signal.removeEventListener('abort', onAbort);
         resolve({
           statusCode: res.statusCode ?? 502,
           headers: res.headers,
           body: res,
+          destroy: () => res.destroy(),
         });
       },
     );
-    upstreamReq.on('error', (err) => reject(toUpstreamFailure(err)));
+    const onAbort = () => {
+      upstreamReq.destroy(new UpstreamFailure('client closed the connection', 'upstream_error'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    upstreamReq.on('error', (err) => {
+      signal.removeEventListener('abort', onAbort);
+      reject(toUpstreamFailure(err));
+    });
     upstreamReq.on('timeout', () => {
       upstreamReq.destroy(
         new UpstreamFailure(
-          `upstream timeout after ${UPSTREAM_TIMEOUT_MS / 1000}s`,
+          `upstream timeout after ${formatSeconds(timeoutMs)}`,
           'upstream_timeout',
         ),
       );
@@ -890,11 +964,14 @@ function dispatchUpstream(target: URL, req: DispatchRequest): Promise<UpstreamRe
  */
 function joinTargetPath(target: URL, incomingUrl: string): string {
   const incomingPath = parsePath(incomingUrl);
+  // The query string is part of the request: Azure OpenAI needs `?api-version=`,
+  // Gemini takes `?key=`, and `/v1/models?limit=` pages its results with it.
+  const query = incomingUrl.slice(incomingPath.length);
   const base = target.pathname.replace(/\/$/, '');
   if (incomingPath === '/' || incomingPath === '') {
-    return `${base}/`;
+    return `${base}/${query}`;
   }
-  return `${base}${incomingPath}`;
+  return `${base}${incomingPath}${query}`;
 }
 
 function pipeStreamingResponse(

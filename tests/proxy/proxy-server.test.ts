@@ -1311,6 +1311,256 @@ test('the session header still reaches the client and pins the session', async (
   }
 });
 
+test('verbose logging and events never include the query string', async (t) => {
+  const upstream = await startFakeUpstream((_req, _body, res) =>
+    jsonResponse(res, 200, { data: [] }),
+  );
+  const logs: string[] = [];
+  const events: ProxyEvent[] = [];
+  const proxy = await withProxy(upstream, { verbose: true, log: (msg) => logs.push(msg) }, events);
+  try {
+    const res = await makeRequest(`${proxy.url}/v1/models?api_key=secret_12345&key=abc`, {
+      method: 'GET',
+    });
+    t.is(res.status, 200);
+    await makeRequest(`${proxy.url}/openai/deployments/d/chat/completions?api-key=secret_67890`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }),
+    });
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+
+  const output = JSON.stringify(events) + logs.join('\n');
+  t.false(output.includes('secret_12345'));
+  t.false(output.includes('secret_67890'));
+  t.false(output.includes('api_key'));
+  const requests = events.filter((e) => e.type === 'request');
+  t.is(requests.length, 2);
+  t.like(requests[0], { method: 'GET', path: '/v1/models' });
+});
+
+test('the startup line does not print credentials or a query string from --target', async (t) => {
+  const upstream = await startFakeUpstream((_req, _body, res) => jsonResponse(res, 200, {}));
+  const logs: string[] = [];
+  const target = new URL(upstream.url);
+  target.username = 'user';
+  target.password = 'hunter2';
+  target.pathname = '/gateway';
+  target.search = '?key=secret_abc';
+  const proxy = await createProxyServer({
+    target,
+    port: 0,
+    host: '127.0.0.1',
+    log: (m) => logs.push(m),
+  });
+  await proxy.close();
+  await upstream.close();
+
+  const line = logs.find((l) => l.includes('Listening on')) ?? '';
+  t.true(line.includes(`${new URL(upstream.url).origin}/gateway`));
+  t.false(line.includes('hunter2'));
+  t.false(line.includes('secret_abc'));
+});
+
+test('the query string is forwarded to the upstream, on known and unknown paths', async (t) => {
+  const seen: string[] = [];
+  const upstream = await startFakeUpstream((req, _body, res) => {
+    seen.push(`${req.method} ${req.url}`);
+    jsonResponse(res, 200, { choices: [{ message: { role: 'assistant', content: 'ok' } }] });
+  });
+  const proxy = await withProxy(upstream);
+  try {
+    await makeRequest(`${proxy.url}/v1/models?limit=5&api_key=secret_12345`, { method: 'GET' });
+    await makeRequest(`${proxy.url}/openai/deployments/d/chat/completions?api-version=2024-02-01`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    await makeRequest(`${proxy.url}/?x=1`, { method: 'GET' });
+    await makeRequest(`${proxy.url}/v1/models`, { method: 'GET' });
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+  t.deepEqual(seen, [
+    'GET /v1/models?limit=5&api_key=secret_12345',
+    'POST /openai/deployments/d/chat/completions?api-version=2024-02-01',
+    'GET /?x=1',
+    'GET /v1/models',
+  ]);
+});
+
+test('the query string is kept after a path prefix on the target', async (t) => {
+  let seen = '';
+  const upstream = await startFakeUpstream((req, _body, res) => {
+    seen = req.url ?? '';
+    jsonResponse(res, 200, {});
+  });
+  const target = new URL(`${upstream.url}/gateway/`);
+  const proxy = await createProxyServer({ target, port: 0, host: '127.0.0.1', log: () => {} });
+  try {
+    await makeRequest(`${proxy.url}/v1/models?key=abc`, { method: 'GET' });
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+  t.is(seen, '/gateway/v1/models?key=abc');
+});
+
+const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+async function until(condition: () => boolean, timeoutMs = 3000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (condition()) return true;
+    await delay(10);
+  }
+  return condition();
+}
+
+const CHAT = JSON.stringify({ model: 'gpt-4', messages: [{ role: 'user', content: 'hello' }] });
+
+test('waits for a slow upstream as long as the configured timeout allows', async (t) => {
+  const upstream = await startFakeUpstream((_req, _body, res) => {
+    setTimeout(() => jsonResponse(res, 200, { choices: [{ message: { content: 'late' } }] }), 300);
+  });
+  const proxy = await withProxy(upstream, { upstreamTimeoutMs: 5000 });
+  try {
+    const res = await makeRequest(`${proxy.url}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: CHAT,
+    });
+    t.is(res.status, 200);
+    t.true(res.body.includes('late'));
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+});
+
+test('abandons an upstream that stays silent past the configured timeout', async (t) => {
+  const upstream = await startFakeUpstream(() => {});
+  const events: ProxyEvent[] = [];
+  const proxy = await withProxy(upstream, { upstreamTimeoutMs: 150 }, events);
+  try {
+    const res = await makeRequest(`${proxy.url}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: CHAT,
+    });
+    t.is(res.status, 502);
+    t.true(res.body.includes('upstream timeout after 0.15s'), res.body);
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+  const response = events.find((e) => e.type === 'response');
+  t.like(response, { status: 502, outcome: 'error', errorKind: 'upstream_timeout' });
+});
+
+test('hanging up while the upstream is still thinking cancels the upstream request', async (t) => {
+  let upstreamClosed = false;
+  const upstream = await startFakeUpstream((_req, _body, res) => {
+    res.on('close', () => {
+      upstreamClosed = true;
+    });
+  });
+  const events: ProxyEvent[] = [];
+  const proxy = await withProxy(upstream, {}, events);
+  try {
+    const parsed = new URL(proxy.url);
+    const req = http.request({
+      hostname: parsed.hostname,
+      port: parsed.port,
+      path: '/v1/chat/completions',
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+    });
+    req.on('error', () => {});
+    req.end(CHAT);
+    await delay(150);
+    req.destroy();
+
+    t.true(await until(() => upstreamClosed), 'the upstream connection was never closed');
+    t.true(await until(() => events.some((e) => e.type === 'response')));
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+  t.like(
+    events.find((e) => e.type === 'response'),
+    {
+      status: 499,
+      outcome: 'error',
+      errorKind: 'client_aborted',
+    },
+  );
+  t.false(events.some((e) => e.type === 'error'));
+});
+
+test('hanging up while the upstream is still sending a JSON body cancels it', async (t) => {
+  let upstreamClosed = false;
+  const upstream = await startFakeUpstream((_req, _body, res) => {
+    res.on('close', () => {
+      upstreamClosed = true;
+    });
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.write('{"choices":[{"message":{"content":"par');
+  });
+  const events: ProxyEvent[] = [];
+  const proxy = await withProxy(upstream, {}, events);
+  try {
+    const parsed = new URL(proxy.url);
+    const req = http.request({
+      hostname: parsed.hostname,
+      port: parsed.port,
+      path: '/v1/chat/completions',
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+    });
+    req.on('error', () => {});
+    req.end(CHAT);
+    await delay(150);
+    req.destroy();
+
+    t.true(await until(() => upstreamClosed), 'the upstream connection was never closed');
+    t.true(await until(() => events.some((e) => e.type === 'response')));
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+  t.like(
+    events.find((e) => e.type === 'response'),
+    {
+      status: 499,
+      outcome: 'error',
+      errorKind: 'client_aborted',
+    },
+  );
+  t.false(events.some((e) => e.type === 'error'));
+});
+
+test('a request that completes normally is not reported as aborted', async (t) => {
+  const upstream = await startFakeUpstream(chatResponder('ok'));
+  const events: ProxyEvent[] = [];
+  const proxy = await withProxy(upstream, {}, events);
+  try {
+    const res = await chat(proxy.url, [{ role: 'user', content: 'hi' }]);
+    t.is(res.reply, 'ok');
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+  t.like(
+    events.find((e) => e.type === 'response'),
+    { status: 200, outcome: 'ok' },
+  );
+});
+
 test('requests that scrub nothing leave no session behind', async (t) => {
   const upstream = await startFakeUpstream(chatResponder('ok'));
   const sessionStore = new Map<string, Record<string, string>>();
@@ -1411,8 +1661,6 @@ test('binding a non-loopback host with a token logs the requirement instead of a
   t.true(logs.some((line) => line.includes('x-prompt-scrub-token')));
   t.false(logs.some((line) => line.includes('Warning')));
 });
-
-const CHAT = JSON.stringify({ model: 'gpt-4', messages: [{ role: 'user', content: 'hello' }] });
 
 test('with an auth token, requests without a valid token are rejected and never forwarded', async (t) => {
   const seen: http.IncomingHttpHeaders[] = [];

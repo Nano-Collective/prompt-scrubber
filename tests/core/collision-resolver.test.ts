@@ -1,6 +1,7 @@
 import test from 'ava';
 import { type ResolvableFinding, resolveCollisions } from '../../src/core/collision-resolver.js';
 import type { Finding } from '../../src/types/index.js';
+import { resolveCollisions as referenceResolveCollisions } from './fixtures/collision-resolver.reference.js';
 
 function makeFinding(category: string, start: number, end: number, value = 'test'): Finding {
   return {
@@ -373,4 +374,143 @@ test('two different categories at the same default priority do not enter the loc
     'Ticket',
     'the longer value wins; category, not localeScoped, decided it',
   );
+});
+
+test('resolves tens of thousands of disjoint findings quickly', (t) => {
+  const findings = Array.from({ length: 20_000 }, (_, i) =>
+    makeFinding('Email', i * 20, i * 20 + 15),
+  );
+  const start = Date.now();
+  const result = resolveCollisions(findings);
+  t.is(result.length, 20_000);
+  t.true(Date.now() - start < 1000, `took ${Date.now() - start}ms`);
+});
+
+test('resolves thousands of overlapping findings quickly and keeps the higher priority', (t) => {
+  const findings = Array.from({ length: 3_000 }, (_, i) => [
+    makeFinding('Url', i * 40, i * 40 + 30, 'u'.repeat(30)),
+    makeFinding('Email', i * 40 + 10, i * 40 + 25, 'e'.repeat(15)),
+  ]).flat();
+  const start = Date.now();
+  const result = resolveCollisions(findings);
+  t.true(Date.now() - start < 1000, `took ${Date.now() - start}ms`);
+  t.is(result.filter((f) => f.category === 'Email').length, 3_000);
+  t.is(result.filter((f) => f.category === 'Url').length, 6_000);
+});
+
+test('output is sorted and non-overlapping for arbitrary mixed input', (t) => {
+  const categories = ['Secret', 'Email', 'Url', 'Path', 'Phone', 'Address', 'Custom'];
+  let seed = 7;
+  const next = (n: number) => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return Math.floor((seed / 2 ** 32) * n);
+  };
+  for (let round = 0; round < 300; round++) {
+    const findings = Array.from({ length: 1 + next(25) }, () => {
+      const start = next(80);
+      const end = Math.min(100, start + 1 + next(20));
+      return makeFinding(categories[next(categories.length)]!, start, end, 'x'.repeat(end - start));
+    });
+    const result = resolveCollisions(findings);
+    for (let i = 1; i < result.length; i++) {
+      t.true(result[i - 1]!.span[0] <= result[i]!.span[0]);
+      t.true(
+        result[i - 1]!.span[1] <= result[i]!.span[0],
+        JSON.stringify(result.map((f) => f.span)),
+      );
+    }
+  }
+});
+
+function shape(findings: Finding[]): [string, number, number][] {
+  return findings.map((f) => [f.category, f.span[0], f.span[1]]);
+}
+
+function sized(
+  category: string,
+  start: number,
+  end: number,
+  extra: Partial<ResolvableFinding> = {},
+) {
+  return { ...makeFinding(category, start, end, 'x'.repeat(end - start)), ...extra };
+}
+
+test('settles findings that start at the same position by priority, then length', (t) => {
+  t.deepEqual(shape(resolveCollisions([sized('Email', 0, 10), sized('Secret', 0, 10)])), [
+    ['Secret', 0, 10],
+  ]);
+  t.deepEqual(shape(resolveCollisions([sized('Url', 0, 20), sized('Email', 0, 10)])), [
+    ['Email', 0, 10],
+    ['Url', 10, 20],
+  ]);
+  t.deepEqual(shape(resolveCollisions([sized('Phone', 0, 8), sized('Phone', 0, 12)])), [
+    ['Phone', 0, 12],
+  ]);
+  t.deepEqual(shape(resolveCollisions([sized('Ticket', 0, 6), sized('Ticket', 0, 9)])), [
+    ['Ticket', 0, 9],
+  ]);
+});
+
+test('narrows nested and chained overlaps around the winner', (t) => {
+  t.deepEqual(
+    shape(resolveCollisions([sized('Url', 0, 30), sized('Path', 5, 25), sized('Email', 10, 20)])),
+    [
+      ['Url', 0, 10],
+      ['Email', 10, 20],
+      ['Url', 20, 30],
+    ],
+  );
+  t.deepEqual(
+    shape(
+      resolveCollisions([sized('Phone', 0, 10), sized('Address', 5, 15), sized('Phone', 12, 22)]),
+    ),
+    [
+      ['Phone', 0, 10],
+      ['Address', 10, 12],
+      ['Phone', 12, 22],
+    ],
+  );
+});
+
+test('lets a locale-scoped finding win only when it covers the one it displaces', (t) => {
+  t.deepEqual(
+    shape(
+      resolveCollisions([sized('Phone', 0, 10), sized('Phone', 0, 12, { localeScoped: true })]),
+    ),
+    [['Phone', 0, 12]],
+  );
+});
+
+test('gives the same result as the original implementation on random input', (t) => {
+  const categories = [
+    'Secret',
+    'CreditCard',
+    'Email',
+    'Url',
+    'Path',
+    'Phone',
+    'Address',
+    'Custom',
+    'Cpf',
+  ];
+  let seed = 12345;
+  const next = (n: number) => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return Math.floor((seed / 2 ** 32) * n);
+  };
+  for (let round = 0; round < 3000; round++) {
+    const findings: ResolvableFinding[] = Array.from({ length: 1 + next(14) }, () => {
+      const start = next(55);
+      const end = Math.min(60, start + 1 + next(14));
+      const finding: ResolvableFinding = {
+        ...makeFinding(categories[next(categories.length)]!, start, end, 'x'.repeat(end - start)),
+      };
+      if (next(10) < 4) finding.confidence = next(100) / 100;
+      if (next(4) === 0) finding.localeScoped = true;
+      if (next(10) === 0) finding.value = `${finding.value}+`;
+      return finding;
+    });
+    const copy = () => findings.map((f) => ({ ...f, span: [...f.span] as [number, number] }));
+    t.deepEqual(resolveCollisions(copy()), referenceResolveCollisions(copy()), `round ${round}`);
+  }
 });

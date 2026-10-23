@@ -1,7 +1,8 @@
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'ava';
 import { computeHash } from '../../src/cli/commands/inspect.js';
 
@@ -11,7 +12,7 @@ const cliEntry = path.resolve(__dirname, '../../src/cli/index.ts');
 const tmpConfigDir = path.join(__dirname, '.tmp-config-e2e');
 const tmpFilesDir = path.join(__dirname, '.tmp-files-e2e');
 
-function runCli(args: string[], input?: string) {
+function runCli(args: string[], input?: string, env?: NodeJS.ProcessEnv) {
   return spawnSync(process.execPath, ['--import', 'tsx', cliEntry, ...args], {
     input,
     encoding: 'utf-8',
@@ -20,6 +21,7 @@ function runCli(args: string[], input?: string) {
       // Force the CLI to use the local temp folder. PROMPT_SCRUB_CONFIG_DIR
       // is honored on every platform; XDG_CONFIG_HOME only works on Linux.
       PROMPT_SCRUB_CONFIG_DIR: path.join(tmpConfigDir, 'prompt-scrub'),
+      ...env,
     },
   });
 }
@@ -925,6 +927,84 @@ test('CLI: inspect --json with --min-confidence reports suppressed findings', (t
   t.regex(output.hash, /^[a-f0-9]{64}$/);
 });
 
+test.serial('CLI: runs when started through a symlink, as a global npm install does', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'prompt-bin-'));
+  t.teardown(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const link = path.join(dir, 'prompt-scrub.ts');
+  try {
+    fs.symlinkSync(cliEntry, link);
+  } catch {
+    t.log('SKIPPED: this system does not allow creating symlinks');
+    t.pass();
+    return;
+  }
+
+  const result = spawnSync(process.execPath, ['--import', 'tsx', link, 'scrub'], {
+    input: 'Contact alice@example.com',
+    encoding: 'utf-8',
+    env: {
+      ...process.env,
+      PROMPT_SCRUB_CONFIG_DIR: path.join(tmpConfigDir, 'prompt-scrub'),
+    },
+  });
+
+  t.is(result.status, 0);
+  t.true(result.stdout.includes('Contact «Email_1»'), result.stdout + result.stderr);
+});
+
+test.serial('CLI: importing the entry file does not run the CLI', (t) => {
+  // `-e` leaves argv[1] undefined, which is what any importer looks like. If the
+  // entry check accepted that, commander would parse an empty command line and
+  // print its help text instead of staying quiet.
+  const result = spawnSync(
+    process.execPath,
+    [
+      '--import',
+      'tsx',
+      '-e',
+      `import(${JSON.stringify(pathToFileURL(cliEntry).href)}).then(() => console.log('imported'))`,
+    ],
+    {
+      encoding: 'utf-8',
+      env: {
+        ...process.env,
+        PROMPT_SCRUB_CONFIG_DIR: path.join(tmpConfigDir, 'prompt-scrub'),
+      },
+    },
+  );
+
+  t.is(result.status, 0, result.stderr);
+  t.is(result.stdout.trim(), 'imported');
+});
+
+test.serial('CLI: scrub --session-id rejects a path traversal ID and writes nothing', (t) => {
+  const outside = path.join(tmpConfigDir, 'outside-session');
+  const result = runCli(
+    ['scrub', '--session-id', '../../outside-session/pwned'],
+    'Contact alice@example.com',
+  );
+
+  t.not(result.status, 0);
+  t.true(result.stderr.includes('Invalid session ID'));
+  t.false(fs.existsSync(path.join(outside, 'pwned.json')));
+});
+
+test.serial('CLI: proxy rejects an invalid --upstream-timeout', (t) => {
+  for (const value of ['abc', '-1', '', '0x10', '1e3', '5s', ' ']) {
+    const result = runCli([
+      'proxy',
+      '--target',
+      'http://127.0.0.1:1',
+      '--port',
+      '0',
+      '--upstream-timeout',
+      value,
+    ]);
+    t.is(result.status, 1, value);
+    t.true(result.stderr.includes('Invalid --upstream-timeout'), result.stderr);
+  }
+});
+
 test.serial('CLI: proxy rejects an invalid --max-sessions and an empty --auth-token', (t) => {
   for (const [flag, value, message] of [
     ['--max-sessions', '0', 'Invalid --max-sessions'],
@@ -937,4 +1017,12 @@ test.serial('CLI: proxy rejects an invalid --max-sessions and an empty --auth-to
     t.is(result.status, 1, `${flag} ${value}`);
     t.true(result.stderr.includes(message), result.stderr);
   }
+});
+
+test.serial('CLI: proxy rejects a blank PROMPT_SCRUB_AUTH_TOKEN instead of running open', (t) => {
+  const result = runCli(['proxy', '--target', 'http://127.0.0.1:1', '--port', '0'], undefined, {
+    PROMPT_SCRUB_AUTH_TOKEN: '  ',
+  });
+  t.is(result.status, 1);
+  t.true(result.stderr.includes('Invalid PROMPT_SCRUB_AUTH_TOKEN'), result.stderr);
 });

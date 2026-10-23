@@ -50,6 +50,13 @@ export interface ProxyOptions {
    */
   authToken?: string;
   /**
+   * How long, in milliseconds, the upstream may go without sending a byte before
+   * the request is abandoned with a `502`. Defaults to 10 minutes, the default of
+   * the vendors' own SDKs, because reasoning models can take minutes to emit a
+   * first token. `0` turns the timeout off.
+   */
+  upstreamTimeoutMs?: number;
+  /**
    * Fail closed: refuse with `403` any request that carries a body the proxy
    * cannot scrub (an unrecognised endpoint, a compressed body, or a body that
    * is not JSON) instead of forwarding it untouched. Defaults to `false`.
@@ -93,6 +100,7 @@ export interface ProxyHandle {
  * transformed.
  */
 export type ProxyEvent =
+  /** `path` has no query string: it often carries credentials such as `?api-key=...`. */
   | { type: 'request'; method: string; path: string; provider: ProxyProvider; sessionId: string }
   | { type: 'scrubbed'; sessionId: string; entities: number }
   | { type: 'rehydrated'; sessionId: string; placeholders: number }
