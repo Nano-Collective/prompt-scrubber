@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Command } from 'commander';
@@ -48,7 +48,22 @@ setupConfigCommands(program);
 setupWatchCommand(program);
 setupProxyCommand(program);
 
-if (process.argv[1] === __filename) {
+/**
+ * True when `entry` (the script Node was started with) is `file`. A global npm
+ * install starts the CLI through a symlink in the bin directory, so the two
+ * paths only agree once the symlink is resolved.
+ */
+export function isMainModule(entry: string | undefined, file: string): boolean {
+  if (!entry) return false;
+  if (entry === file) return true;
+  try {
+    return realpathSync(entry) === realpathSync(file);
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule(process.argv[1], __filename)) {
   program.parseAsync(process.argv).catch((err) => {
     console.error(err);
     process.exit(1);

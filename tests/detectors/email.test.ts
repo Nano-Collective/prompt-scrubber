@@ -104,3 +104,34 @@ test('many addresses with an unfinished domain scan in linear time', (t) => {
   t.deepEqual(detector.detect('a@'.repeat(50_000)), []);
   t.true(Date.now() - start < 1000, `took ${Date.now() - start}ms`);
 });
+
+test('detects an address at the end of a sentence', (t) => {
+  t.is(detector.detect('Contact alice@example.com.')[0]?.value, 'alice@example.com');
+  t.is(detector.detect('Mail bob@example.com. Then call.')[0]?.value, 'bob@example.com');
+  t.is(detector.detect('Contact alice@example.co.uk.')[0]?.value, 'alice@example.co.uk');
+  t.is(detector.detect('Write to alice@example.com...')[0]?.value, 'alice@example.com');
+});
+
+test('the span of an address followed by a full stop excludes the full stop', (t) => {
+  const text = 'Contact alice@example.com.';
+  const [start, end] = detector.detect(text)[0]!.span;
+  t.is(text.slice(start, end), 'alice@example.com');
+});
+
+test('still skips a domain that continues past its top-level label', (t) => {
+  t.is(detector.detect('a@b.com.x').length, 0);
+});
+
+test('an address with no completing domain does not stall the scan', (t) => {
+  for (const input of [
+    `a@${'-'.repeat(100_000)}`,
+    `a@${'a-'.repeat(50_000)}`,
+    `a@a.${'b-'.repeat(50_000)}`,
+    `a@${'a.a-'.repeat(25_000)}`,
+  ]) {
+    const start = Date.now();
+    t.deepEqual(detector.detect(input), []);
+    t.true(Date.now() - start < 1000, `took ${Date.now() - start}ms`);
+  }
+  t.is(detector.detect(`${'-'.repeat(50_000)} real@example.com`)[0]?.value, 'real@example.com');
+});
