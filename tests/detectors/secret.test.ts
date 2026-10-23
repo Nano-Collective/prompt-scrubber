@@ -1,4 +1,5 @@
 import test from 'ava';
+import { rehydrateText } from '../../src/core/rehydrate.js';
 import { scrub } from '../../src/core/scrub.js';
 import { SecretDetector } from '../../src/detectors/secret.js';
 
@@ -369,4 +370,126 @@ test('a long key next to another detector is redacted separately', (t) => {
   const result = scrub({ content: `bob@example.com ${key}`, sessionMap: {} });
   t.is(result.scrubbedContent, '«Email_1» «Secret_1»');
   t.deepEqual(result.stats.byCategory, { Email: 1, Secret: 1 });
+});
+
+// --- Developer credentials: Stripe, JWT, PEM, GitLab, HuggingFace, npm, SendGrid, Slack webhook ---
+// Fixtures are assembled at run time, so this file holds no string a secret scanner would
+// take for a real credential.
+
+const fill = (n: number) => 'aB3dE5gH7jK9mN1pQ3sT5vW7yZ'.repeat(n).slice(0, n);
+const rule = '-'.repeat(5);
+const pem = (label: string) =>
+  `${rule}BEGIN ${label}${rule}\n${fill(64)}\n${fill(60)}==\n${rule}END ${label}${rule}`;
+const jwtHead = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9';
+const jwtBody = 'eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIn0';
+const webhook = (...parts: string[]) =>
+  ['https:/', 'hooks.slack.com', 'services', ...parts].join('/');
+
+const tokens: [string, string][] = [
+  ['Stripe secret key', ['sk', 'live', fill(99)].join('_')],
+  ['Stripe restricted key', ['rk', 'live', fill(24)].join('_')],
+  ['JWT', [jwtHead, jwtBody, fill(43)].join('.')],
+  ['GitLab PAT', `glpat-${fill(20)}`],
+  ['HuggingFace token', `hf_${fill(34)}`],
+  ['npm token', `npm_${fill(36)}`],
+  ['SendGrid key', `SG.${fill(22)}.${fill(43)}`],
+  ['Slack webhook', webhook(`T0${fill(8)}`.toUpperCase(), `B0${fill(8)}`.toUpperCase(), fill(24))],
+];
+
+test('detects each developer credential whole, in prose and in brackets', (t) => {
+  for (const [label, token] of tokens) {
+    for (const text of [`use ${token} now`, `(${token}), next`, `"${token}"`]) {
+      const findings = detector.detect(text);
+      t.is(findings.length, 1, `${label}: ${text}`);
+      t.is(findings[0]?.value, token, label);
+      t.is(findings[0]?.confidence, 0.99, label);
+      t.is(findings[0]?.method, 'exact-pattern', label);
+    }
+  }
+});
+
+test('a developer credential longer than its usual length is not cut short', (t) => {
+  for (const [label, token] of tokens.filter(([label]) => label !== 'JWT')) {
+    const longer = `${token}${fill(40)}`;
+    t.is(detector.detect(`use ${longer} now`)[0]?.value, longer, label);
+  }
+});
+
+test('detects a PEM private key block whole, whatever its type', (t) => {
+  for (const label of ['PRIVATE KEY', 'RSA PRIVATE KEY', 'EC PRIVATE KEY', 'OPENSSH PRIVATE KEY']) {
+    const key = pem(label);
+    const findings = detector.detect(`cat key.pem\n${key}\ndone`);
+    t.is(findings.length, 1, label);
+    t.is(findings[0]?.value, key, label);
+  }
+});
+
+test('scrubs a PEM key stored in JSON with escaped newlines, and restores it', (t) => {
+  const key = pem('PRIVATE KEY').replaceAll('\n', '\\n');
+  t.false(key.includes('\n'));
+  const result = scrub({ content: `{"note": "${key}"}`, sessionMap: {} });
+  t.is(result.scrubbedContent, '{"note": "«Secret_1»"}');
+  t.is(rehydrateText(result.scrubbedContent, result.sessionMap).content, `{"note": "${key}"}`);
+});
+
+test('scrubs a multi-line PEM key and restores it exactly', (t) => {
+  const key = pem('RSA PRIVATE KEY');
+  const result = scrub({ content: `key:\n${key}\nok`, sessionMap: {} });
+  t.is(result.scrubbedContent, 'key:\n«Secret_1»\nok');
+  t.is(rehydrateText(result.scrubbedContent, result.sessionMap).content, `key:\n${key}\nok`);
+});
+
+test('does not match lookalikes of the developer credentials', (t) => {
+  for (const text of [
+    ['pk', 'live', fill(24)].join('_'), // Stripe publishable key, meant to be public
+    ['sk', 'live', fill(23)].join('_'),
+    `task_live_${fill(30)}`,
+    `glpat-${fill(19)}`,
+    `hf_${fill(33)}`,
+    `chf_${fill(40)}`,
+    `npm_${fill(35)}`,
+    'npm_config_registry is set',
+    `SG.${fill(22)}.${fill(42)}`,
+    `${jwtHead}.${jwtBody}`,
+    `${jwtHead}.${fill(20)}.${fill(20)}`,
+    webhook(),
+    `see ${webhook()} for the docs`,
+    pem('PUBLIC KEY'),
+    pem('CERTIFICATE'),
+  ]) {
+    t.is(detector.detect(text).length, 0, text);
+  }
+});
+
+test('a developer credential next to another detector is redacted separately', (t) => {
+  const key = ['sk', 'live', fill(99)].join('_');
+  const hook = webhook('T0AAAAAAAA', 'B0AAAAAAAA', fill(24));
+  const jwt = [jwtHead, jwtBody, fill(43)].join('.');
+  t.is(
+    scrub({ content: `bob@example.com ${key}`, sessionMap: {} }).scrubbedContent,
+    '«Email_1» «Secret_1»',
+  );
+  t.is(
+    scrub({ content: `curl -X POST ${hook} -d hi`, sessionMap: {} }).scrubbedContent,
+    'curl -X POST «Secret_1» -d hi',
+  );
+  t.is(
+    scrub({ content: `Authorization: Bearer ${jwt}`, sessionMap: {} }).scrubbedContent,
+    'Authorization: Bearer «Secret_1»',
+  );
+});
+
+test('scans repeated credential prefixes in linear time', (t) => {
+  for (const input of [
+    'eyJ'.repeat(30_000),
+    `eyJ${'a'.repeat(12)}.`.repeat(20_000),
+    `${rule}BEGIN PRIVATE KEY${rule}\n${fill(64)}\n`.repeat(5_000),
+    'sk_live_'.repeat(20_000),
+    'glpat-'.repeat(20_000),
+    'https://hooks.slack.com/services/T0/B0/'.repeat(5_000),
+  ]) {
+    const start = Date.now();
+    detector.detect(input);
+    t.true(Date.now() - start < 1000, `took ${Date.now() - start}ms`);
+  }
 });
