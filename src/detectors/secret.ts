@@ -129,9 +129,11 @@ function isSecretKeyName(key: string): boolean {
 // closing quote, so a passphrase with spaces is taken whole; an unquoted one stops at
 // whitespace and at brackets, quotes, commas and semicolons, but keeps `!`, `#`, `$` and
 // the other punctuation a password is allowed to contain. `&` and `?` are left out so a
-// value in a query string stops where the next parameter starts.
+// value in a query string stops where the next parameter starts. The value must start on
+// the same line as its key, or `config:` followed by `DB_PASSWORD=...` on the next line
+// would take the second line's key as the first one's value and leave the secret in the clear.
 const KV_PATTERN =
-  /(?:^|[\s,;{])["']?([a-zA-Z0-9_.-]+)["']?\s*[:=]\s*(?:"([^"\r\n]{8,})"|'([^'\r\n]{8,})'|([A-Za-z0-9+/\-_.~@!#$%^*=:]{8,}))/gm;
+  /(?:^|[\s,;{])["']?([a-zA-Z0-9_.-]+)["']?\s*[:=][ \t]*(?:"([^"\r\n]{8,})"|'([^'\r\n]{8,})'|([A-Za-z0-9+/\-_.~@!#$%^*=:]{8,}))/gm;
 
 // --- Layer 3: High-entropy strings ---
 // Only fires when the value is surrounded by quotes or follows an = sign.
@@ -183,9 +185,16 @@ export class SecretDetector implements Detector {
     while ((match = KV_PATTERN.exec(text)) !== null) {
       const key = match[1] ?? '';
       const value = match[2] ?? match[3] ?? match[4] ?? '';
-      if (!isSecretKeyName(key)) continue;
-
       const valueStart = match.index + match[0].lastIndexOf(value);
+      if (!isSecretKeyName(key)) {
+        // The value of a non-secret key may itself begin with a `KEY=value` pair
+        // (`found: API_KEY=...`, `config:\nDB_PASSWORD=...`): scan it again.
+        KV_PATTERN.lastIndex = Math.max(match.index + 1, valueStart - 1);
+        continue;
+      }
+      // Already a placeholder (`api_key="«Secret_1»"`): scrubbing it again would mint a second one.
+      if (/^«[^»\s]+»$/.test(value)) continue;
+
       raw.push({
         category: 'Secret',
         span: [valueStart, valueStart + value.length],

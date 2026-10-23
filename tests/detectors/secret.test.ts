@@ -59,6 +59,37 @@ test('detects password via key-value pattern', (t) => {
   t.true(findings.length >= 1);
 });
 
+test('detects a KEY=value pair that follows a non-secret `word:` lead-in', (t) => {
+  for (const input of [
+    'found: API_KEY=hunter2hunter2',
+    'config:\nDB_PASSWORD=hunter2hunter2',
+    'config:\r\nDB_PASSWORD=hunter2hunter2',
+    'config:\n  nested:\n    secret: hunter2hunter2',
+    'note: see config: TOKEN=hunter2hunter2',
+    'env:\n  API_KEY: hunter2hunter2',
+  ]) {
+    const findings = detector.detect(input);
+    t.deepEqual(
+      findings.map((f) => f.value),
+      ['hunter2hunter2'],
+      input,
+    );
+  }
+});
+
+test('does not treat a following line as the value of a `key:` with no value', (t) => {
+  const findings = detector.detect('notes:\nplain-words-only-here');
+  t.is(findings.length, 0);
+});
+
+test('does not mint a second placeholder for an already-scrubbed quoted value', (t) => {
+  t.is(detector.detect('api_key="«Secret_1»"').length, 0);
+  const once = scrub({ content: 'found: API_KEY="hunter2hunter2"', sessionMap: {} });
+  const twice = scrub({ content: once.scrubbedContent, sessionMap: once.sessionMap });
+  t.is(once.scrubbedContent, 'found: API_KEY="«Secret_1»"');
+  t.is(twice.scrubbedContent, once.scrubbedContent);
+});
+
 // --- Positive Cases: High Entropy ---
 
 test('detects high-entropy base64 string in quotes', (t) => {
@@ -306,6 +337,9 @@ test('detects an upper-case Bearer scheme', (t) => {
 test('scans pathological key-value input in linear time', (t) => {
   for (const input of [
     ` ${'a='.repeat(50_000)}`,
+    `found: ${'a='.repeat(50_000)}`,
+    'found: x=aaaaaaaa\n'.repeat(20_000),
+    'a:'.repeat(50_000),
     `password: ${'!'.repeat(100_000)}`,
     `password="${'a'.repeat(100_000)}`,
     'sk-'.repeat(30_000),
