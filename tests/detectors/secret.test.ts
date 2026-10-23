@@ -416,7 +416,13 @@ test('a developer credential longer than its usual length is not cut short', (t)
 });
 
 test('detects a PEM private key block whole, whatever its type', (t) => {
-  for (const label of ['PRIVATE KEY', 'RSA PRIVATE KEY', 'EC PRIVATE KEY', 'OPENSSH PRIVATE KEY']) {
+  for (const label of [
+    'PRIVATE KEY',
+    'ENCRYPTED PRIVATE KEY',
+    'RSA PRIVATE KEY',
+    'EC PRIVATE KEY',
+    'OPENSSH PRIVATE KEY',
+  ]) {
     const key = pem(label);
     const findings = detector.detect(`cat key.pem\n${key}\ndone`);
     t.is(findings.length, 1, label);
@@ -445,6 +451,7 @@ test('does not match lookalikes of the developer credentials', (t) => {
     ['sk', 'live', fill(23)].join('_'),
     `task_live_${fill(30)}`,
     `glpat-${fill(19)}`,
+    `xglpat-${fill(20)}`,
     `hf_${fill(33)}`,
     `chf_${fill(40)}`,
     `npm_${fill(35)}`,
@@ -462,13 +469,15 @@ test('does not match lookalikes of the developer credentials', (t) => {
 });
 
 test('a developer credential next to another detector is redacted separately', (t) => {
-  const key = ['sk', 'live', fill(99)].join('_');
   const hook = webhook('T0AAAAAAAA', 'B0AAAAAAAA', fill(24));
   const jwt = [jwtHead, jwtBody, fill(43)].join('.');
-  t.is(
-    scrub({ content: `bob@example.com ${key}`, sessionMap: {} }).scrubbedContent,
-    '«Email_1» «Secret_1»',
-  );
+  const credentials: [string, string][] = [...tokens, ['PEM private key', pem('PRIVATE KEY')]];
+  for (const [label, token] of credentials) {
+    const before = scrub({ content: `bob@example.com ${token}`, sessionMap: {} });
+    t.is(before.scrubbedContent, '«Email_1» «Secret_1»', label);
+    const after = scrub({ content: `${token} bob@example.com`, sessionMap: {} });
+    t.is(after.scrubbedContent, '«Secret_1» «Email_1»', label);
+  }
   t.is(
     scrub({ content: `curl -X POST ${hook} -d hi`, sessionMap: {} }).scrubbedContent,
     'curl -X POST «Secret_1» -d hi',

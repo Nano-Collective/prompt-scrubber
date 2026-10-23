@@ -47,15 +47,17 @@ const PREFIX_PATTERNS: { regex: RegExp; name: string; confidence?: number }[] = 
     regex: /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
     name: 'JWT',
   },
-  // PEM private key block (PKCS#8, RSA, EC, OpenSSH, encrypted). The body is base64 and
-  // whitespace only, which cannot cross a `-----` marker, so an unterminated block costs
-  // one scan. A backslash is allowed because JSON files store the newlines as `\n`.
+  // PEM private key block (PKCS#8 including `ENCRYPTED PRIVATE KEY`, RSA, EC, OpenSSH).
+  // The body is base64 and whitespace only, which cannot cross a `-----` marker, so an
+  // unterminated block costs one scan. A backslash is allowed because JSON files store the
+  // newlines as `\n`. A legacy PEM encrypted with `Proc-Type`/`DEK-Info` headers is not
+  // matched: those headers hold `:` and `,`, which the body does not allow.
   {
     regex:
       /-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----[A-Za-z0-9+/=\s\\]+-----END (?:[A-Z]+ )?PRIVATE KEY-----/g,
     name: 'Private key',
   },
-  { regex: /glpat-[A-Za-z0-9_-]{20,}/g, name: 'GitLab PAT' },
+  { regex: /(?<![A-Za-z0-9_])glpat-[A-Za-z0-9_-]{20,}/g, name: 'GitLab PAT' },
   { regex: /(?<![A-Za-z0-9_])hf_[A-Za-z0-9]{34,}/g, name: 'HuggingFace token' },
   { regex: /(?<![A-Za-z0-9_])npm_[A-Za-z0-9]{36,}/g, name: 'npm token' },
   {
