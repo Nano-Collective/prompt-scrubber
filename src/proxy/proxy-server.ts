@@ -19,6 +19,7 @@ import { type ConfigReloader, createConfigReloader } from './config-reloader.js'
 import { ProxyMetrics } from './metrics.js';
 import { detectProvider, scrubChatBody } from './request-transform.js';
 import { createSseRehydrator, rehydrateJsonBody } from './response-transform.js';
+import { DEFAULT_MAX_SESSIONS, dropIfEmpty, openSession, type Sessions } from './session-store.js';
 import type {
   ProxyEvent,
   ProxyEventListener,
@@ -38,10 +39,15 @@ const HOP_BY_HOP = new Set([
   'transfer-encoding',
   'upgrade',
   'host',
+  // Credential for this proxy, not for the upstream: never forwarded.
+  'x-prompt-scrub-token',
 ]);
 
 /** Header used to thread the session ID through requests and responses. */
 export const SESSION_HEADER = 'x-prompt-scrub-session';
+
+/** Header that carries the proxy's own `--auth-token`. */
+const TOKEN_HEADER = 'x-prompt-scrub-token';
 
 const DEFAULT_MAX_BODY_BYTES = 10 * 1024 * 1024;
 /**
@@ -57,8 +63,6 @@ const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
 const CLIENT_CLOSED_STATUS = 499;
 
 type ErrorKind = NonNullable<Extract<ProxyEvent, { type: 'response' }>['errorKind']>;
-
-type Sessions = Map<string, Record<string, string>>;
 
 /** Failure talking to the upstream provider. `kind` feeds metrics and the audit log. */
 class UpstreamFailure extends Error {
@@ -186,12 +190,17 @@ export async function createProxyServer(
 
   const server = http.createServer((req, res) => {
     const route = serveObservability ? observabilityRoute(req) : undefined;
+    // /healthz stays open so a load balancer can probe it without the token.
+    if (options.authToken && route !== '/healthz' && !tokenMatches(req, options.authToken)) {
+      rejectUnauthorized(req, res, emit);
+      return;
+    }
     if (route) {
       respondObservability(req, res, route, metrics, version);
       return;
     }
 
-    const trace = createTrace(req, sessions);
+    const trace = createTrace(req);
     handleClientRequest(
       req,
       res,
@@ -265,11 +274,13 @@ export async function createProxyServer(
       }
       if (serveObservability) {
         log(`[proxy] Metrics: ${url}/metrics  Health: ${url}/healthz`);
-        if (!LOOPBACK_HOSTS.has(host)) {
-          log(
-            `[proxy] Warning: ${host} is not a loopback address. /metrics and /healthz are unauthenticated.`,
-          );
-        }
+      }
+      if (options.authToken) {
+        log(`[proxy] Authentication: requests must send the --auth-token in ${TOKEN_HEADER}.`);
+      } else if (!LOOPBACK_HOSTS.has(host)) {
+        log(
+          `[proxy] Warning: ${host} is not a loopback address and no --auth-token is set. Anyone who can reach this port can send requests through the proxy${serveObservability ? ' and read /metrics' : ''}.`,
+        );
       }
       if (reloader) {
         const how = [
@@ -337,7 +348,33 @@ export async function runProxy(options: ProxyOptions): Promise<void> {
   });
 }
 
-function createTrace(req: IncomingMessage, sessions: Sessions): RequestTrace {
+function tokenMatches(req: IncomingMessage, expected: string): boolean {
+  const header = req.headers[TOKEN_HEADER];
+  const provided = (Array.isArray(header) ? header[0] : header) ?? '';
+  const digest = (value: string) => crypto.createHash('sha256').update(value).digest();
+  return crypto.timingSafeEqual(digest(provided), digest(expected));
+}
+
+function rejectUnauthorized(
+  req: IncomingMessage,
+  res: ServerResponse,
+  emit: (event: ProxyEvent) => void,
+): void {
+  const trace = createTrace(req);
+  res.writeHead(401, { 'content-type': 'text/plain; charset=utf-8', connection: 'close' });
+  res.end(`prompt-scrub proxy: missing or invalid ${TOKEN_HEADER}\n`);
+  emit({
+    type: 'request',
+    method: trace.method,
+    path: trace.path,
+    provider: trace.provider,
+    sessionId: trace.sessionId,
+  });
+  finishTrace(trace, emit, 401, 'unauthorized');
+  req.resume();
+}
+
+function createTrace(req: IncomingMessage): RequestTrace {
   const inboundSession = readSessionHeader(req.headers[SESSION_HEADER]);
   // Only accept client-supplied session IDs that match a UUID — the proxy
   // generates a fresh one when the client omits the header. This caps the
@@ -345,7 +382,6 @@ function createTrace(req: IncomingMessage, sessions: Sessions): RequestTrace {
   // into the in-memory session map) without breaking the documented
   // "share a session ID across requests" workflow.
   const sessionId = inboundSession && isUuid(inboundSession) ? inboundSession : crypto.randomUUID();
-  if (!sessions.has(sessionId)) sessions.set(sessionId, {});
 
   const url = req.url ?? '/';
   const path = parsePath(url);
@@ -382,7 +418,9 @@ function finishTrace(
   trace.finished = true;
 
   const outcome = errorKind
-    ? errorKind === 'body_too_large' || errorKind === 'strict_blocked'
+    ? errorKind === 'body_too_large' ||
+      errorKind === 'strict_blocked' ||
+      errorKind === 'unauthorized'
       ? 'rejected'
       : 'error'
     : trace.passthroughReason !== undefined
@@ -464,6 +502,10 @@ async function handleClientRequest(
   let upstreamBody: Buffer | undefined = bodyBuf;
   let parsed: unknown;
   let unscrubbedReason: string | undefined;
+  // The map this request scrubbed against. The response is rehydrated with this
+  // reference, not a fresh lookup: other traffic can evict the session from the
+  // store while the upstream is still answering.
+  let requestMap: Record<string, string> | undefined;
   if (provider === 'unknown') {
     unscrubbedReason = 'unknown provider';
   } else if (bodyBuf !== undefined && bodyBuf.length > 0) {
@@ -491,7 +533,8 @@ async function handleClientRequest(
     trace.passthroughReason = unscrubbedReason;
     emit({ type: 'passthrough', reason: unscrubbedReason });
   } else if (parsed !== undefined) {
-    const map = sessions.get(sessionId) ?? {};
+    const map = openSession(sessions, sessionId, options.maxSessions ?? DEFAULT_MAX_SESSIONS);
+    requestMap = map;
     reserveLiteralPlaceholders(provider, parsed, map);
     // The scrubber's reverse-lookup (`valueToPlaceholder`) keeps stable
     // placeholders for values it has seen before, so round-trips from the
@@ -509,6 +552,7 @@ async function handleClientRequest(
     if (outcome.entities > 0) {
       emit({ type: 'scrubbed', sessionId, entities: outcome.entities });
     }
+    dropIfEmpty(sessions, sessionId, map);
   }
 
   const upstreamHeaders = buildUpstreamHeaders(req.headers, options.target);
@@ -559,7 +603,7 @@ async function handleClientRequest(
       upstreamResponse,
       res,
       provider,
-      sessions.get(sessionId) ?? {},
+      requestMap ?? sessions.get(sessionId) ?? {},
       trace,
       emit,
       log,
@@ -583,7 +627,7 @@ async function handleClientRequest(
     throw toUpstreamFailure(err);
   }
   let payload = Buffer.concat(chunks);
-  const map = sessions.get(sessionId) ?? {};
+  const map = requestMap ?? sessions.get(sessionId) ?? {};
   // Only attempt to rehydrate if this session actually has mappings. A
   // 4xx error body from the upstream carries no placeholders — running
   // it through the rehydrator is a no-op, but skipping the path entirely

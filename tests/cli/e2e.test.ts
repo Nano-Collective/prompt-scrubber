@@ -12,7 +12,7 @@ const cliEntry = path.resolve(__dirname, '../../src/cli/index.ts');
 const tmpConfigDir = path.join(__dirname, '.tmp-config-e2e');
 const tmpFilesDir = path.join(__dirname, '.tmp-files-e2e');
 
-function runCli(args: string[], input?: string) {
+function runCli(args: string[], input?: string, env?: NodeJS.ProcessEnv) {
   return spawnSync(process.execPath, ['--import', 'tsx', cliEntry, ...args], {
     input,
     encoding: 'utf-8',
@@ -21,6 +21,7 @@ function runCli(args: string[], input?: string) {
       // Force the CLI to use the local temp folder. PROMPT_SCRUB_CONFIG_DIR
       // is honored on every platform; XDG_CONFIG_HOME only works on Linux.
       PROMPT_SCRUB_CONFIG_DIR: path.join(tmpConfigDir, 'prompt-scrub'),
+      ...env,
     },
   });
 }
@@ -1002,4 +1003,26 @@ test.serial('CLI: proxy rejects an invalid --upstream-timeout', (t) => {
     t.is(result.status, 1, value);
     t.true(result.stderr.includes('Invalid --upstream-timeout'), result.stderr);
   }
+});
+
+test.serial('CLI: proxy rejects an invalid --max-sessions and an empty --auth-token', (t) => {
+  for (const [flag, value, message] of [
+    ['--max-sessions', '0', 'Invalid --max-sessions'],
+    ['--max-sessions', '-3', 'Invalid --max-sessions'],
+    ['--max-sessions', '1.5', 'Invalid --max-sessions'],
+    ['--max-sessions', 'abc', 'Invalid --max-sessions'],
+    ['--auth-token', ' ', 'Invalid --auth-token'],
+  ] as const) {
+    const result = runCli(['proxy', '--target', 'http://127.0.0.1:1', '--port', '0', flag, value]);
+    t.is(result.status, 1, `${flag} ${value}`);
+    t.true(result.stderr.includes(message), result.stderr);
+  }
+});
+
+test.serial('CLI: proxy rejects a blank PROMPT_SCRUB_AUTH_TOKEN instead of running open', (t) => {
+  const result = runCli(['proxy', '--target', 'http://127.0.0.1:1', '--port', '0'], undefined, {
+    PROMPT_SCRUB_AUTH_TOKEN: '  ',
+  });
+  t.is(result.status, 1);
+  t.true(result.stderr.includes('Invalid PROMPT_SCRUB_AUTH_TOKEN'), result.stderr);
 });
