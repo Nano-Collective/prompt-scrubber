@@ -1,6 +1,6 @@
 import test from 'ava';
 import {
-  resetLocaleWarning,
+  resetCliWarnings,
   resolveLocale,
   warnIfLocaleUnused,
   warnRulePackFailures,
@@ -52,21 +52,21 @@ test('resolveLocale does not re-validate an already-rejected config locale', (t)
 });
 
 test('warnIfLocaleUnused stays silent when a detector matches', (t) => {
-  t.teardown(resetLocaleWarning);
+  t.teardown(resetCliWarnings);
   const messages: string[] = [];
   warnIfLocaleUnused('de-DE', [noop, german], (m) => messages.push(m));
   t.deepEqual(messages, []);
 });
 
 test('warnIfLocaleUnused stays silent when no locale is active', (t) => {
-  t.teardown(resetLocaleWarning);
+  t.teardown(resetCliWarnings);
   const messages: string[] = [];
   warnIfLocaleUnused('', [noop], (m) => messages.push(m));
   t.deepEqual(messages, []);
 });
 
 test('warnIfLocaleUnused warns when a valid locale activates nothing', (t) => {
-  t.teardown(resetLocaleWarning);
+  t.teardown(resetCliWarnings);
   const messages: string[] = [];
   warnIfLocaleUnused('pt-BR', [noop, german], (m) => messages.push(m));
   t.is(messages.length, 1);
@@ -75,7 +75,7 @@ test('warnIfLocaleUnused warns when a valid locale activates nothing', (t) => {
 });
 
 test('warnIfLocaleUnused warns at most once per process', (t) => {
-  t.teardown(resetLocaleWarning);
+  t.teardown(resetCliWarnings);
   const messages: string[] = [];
   warnIfLocaleUnused('pt-BR', [], (m) => messages.push(m));
   warnIfLocaleUnused('pt-BR', [], (m) => messages.push(m));
@@ -84,14 +84,14 @@ test('warnIfLocaleUnused warns at most once per process', (t) => {
 });
 
 test('warnRulePackFailures stays silent when every pack loaded', (t) => {
-  t.teardown(resetLocaleWarning);
+  t.teardown(resetCliWarnings);
   const messages: string[] = [];
   warnRulePackFailures([], (m) => messages.push(m));
   t.deepEqual(messages, []);
 });
 
 test('warnRulePackFailures names each failed pack and the reason', (t) => {
-  t.teardown(resetLocaleWarning);
+  t.teardown(resetCliWarnings);
   const messages: string[] = [];
   warnRulePackFailures(
     [
@@ -107,7 +107,7 @@ test('warnRulePackFailures names each failed pack and the reason', (t) => {
 });
 
 test('warnRulePackFailures reports a failure once per process, but a new one again', (t) => {
-  t.teardown(resetLocaleWarning);
+  t.teardown(resetCliWarnings);
   const messages: string[] = [];
   const failure = { name: 'pack-a', message: 'boom' };
   warnRulePackFailures([failure], (m) => messages.push(m));

@@ -29,8 +29,11 @@ export function resolveLocale(flag: string | undefined, configured: string | und
 let localeWarningShown = false;
 const reportedRulePackFailures = new Set<string>();
 
-/** Reset the once-per-process warning latches (used by tests). */
-export function resetLocaleWarning(): void {
+/**
+ * Reset the once-per-process warning latches: the "locale matched nothing" one
+ * and the rule-pack load failures one (used by tests).
+ */
+export function resetCliWarnings(): void {
   localeWarningShown = false;
   reportedRulePackFailures.clear();
 }
