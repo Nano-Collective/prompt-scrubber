@@ -37,6 +37,38 @@ const PREFIX_PATTERNS: { regex: RegExp; name: string; confidence?: number }[] = 
   { regex: /ya29\.[0-9A-Za-z\-_]{60,200}/g, name: 'Google OAuth token' },
   // AWS Access Key ID
   { regex: /(?<![A-Z0-9])(AKIA[0-9A-Z]{16})(?![A-Z0-9])/g, name: 'AWS Access Key ID' },
+  // Developer credentials. A body has a lower bound but no upper one (a capped match
+  // would leave the tail of a longer key in the clear), and a short prefix must not
+  // start in the middle of a word. No capture groups: layer 1 reads `match[1]` as the value.
+  // Stripe live secret and restricted keys
+  { regex: /(?<![A-Za-z0-9_])[sr]k_live_[A-Za-z0-9]{24,}/g, name: 'Stripe key' },
+  // JSON Web Token: header and payload are base64url JSON, so both start with `eyJ`
+  {
+    regex: /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
+    name: 'JWT',
+  },
+  // PEM private key block (PKCS#8 including `ENCRYPTED PRIVATE KEY`, RSA, EC, OpenSSH).
+  // The body is base64 and whitespace only, which cannot cross a `-----` marker, so an
+  // unterminated block costs one scan. A backslash is allowed because JSON files store the
+  // newlines as `\n`. A legacy PEM encrypted with `Proc-Type`/`DEK-Info` headers is not
+  // matched: those headers hold `:` and `,`, which the body does not allow.
+  {
+    regex:
+      /-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----[A-Za-z0-9+/=\s\\]+-----END (?:[A-Z]+ )?PRIVATE KEY-----/g,
+    name: 'Private key',
+  },
+  { regex: /(?<![A-Za-z0-9_])glpat-[A-Za-z0-9_-]{20,}/g, name: 'GitLab PAT' },
+  { regex: /(?<![A-Za-z0-9_])hf_[A-Za-z0-9]{34,}/g, name: 'HuggingFace token' },
+  { regex: /(?<![A-Za-z0-9_])npm_[A-Za-z0-9]{36,}/g, name: 'npm token' },
+  {
+    regex: /(?<![A-Za-z0-9_])SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43,}/g,
+    name: 'SendGrid key',
+  },
+  // Slack incoming webhook: the path is the credential
+  {
+    regex: /https:\/\/hooks\.slack\.com\/services\/T[A-Z0-9]+\/B[A-Z0-9]+\/[A-Za-z0-9]+/g,
+    name: 'Slack webhook',
+  },
   // Credentials embedded in a URL or connection string, e.g. postgres://user:pass@host/db.
   // Matches the whole string so the user name, password and host go as one unit.
   {
