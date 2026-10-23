@@ -588,3 +588,131 @@ test('createSseRehydrator keeps non-data fields of a CRLF event', (t) => {
   ]);
   t.is(out.trimEnd(), `id: 7\nevent: delta\n${contentEvent('x alice@example.com')}\nretry: 100`);
 });
+
+/** Concatenate the streamed text of an OpenAI `delta.content` or Anthropic `text_delta` stream. */
+function collectText(sse: string): string {
+  let out = '';
+  for (const line of sse.split('\n')) {
+    if (!line.startsWith('data: ')) continue;
+    const payload = line.slice('data: '.length).trim();
+    if (payload === '[DONE]' || payload === '') continue;
+    const parsed = JSON.parse(payload) as {
+      choices?: Array<{ delta?: { content?: string } }>;
+      delta?: { text?: string };
+    };
+    out += parsed.choices?.[0]?.delta?.content ?? parsed.delta?.text ?? '';
+  }
+  return out;
+}
+
+test('createSseRehydrator restores a delta.content placeholder split across events', (t) => {
+  const rehydrator = createSseRehydrator('openai', ESCAPING_SESSION);
+  const out =
+    rehydrator.push(Buffer.from(`${contentEvent('Contact «Email_')}\n\n`)) +
+    rehydrator.push(Buffer.from(`${contentEvent('1» today.')}\n\n`)) +
+    rehydrator.flush();
+
+  t.is(collectText(out), 'Contact alice@example.com today.');
+});
+
+test('createSseRehydrator does not escape a restored value in delta.content', (t) => {
+  const rehydrator = createSseRehydrator('openai', ESCAPING_SESSION);
+  const out =
+    rehydrator.push(Buffer.from(`${contentEvent('Hi «Name_')}\n\n`)) +
+    rehydrator.push(Buffer.from(`${contentEvent('1»')}\n\n`)) +
+    rehydrator.flush();
+
+  t.is(collectText(out), 'Hi Alice "Al" Smith');
+});
+
+test('createSseRehydrator keeps parallel choices apart in delta.content', (t) => {
+  const rehydrator = createSseRehydrator('openai', ESCAPING_SESSION);
+  const event = (index: number, text: string) =>
+    `data: ${JSON.stringify({ choices: [{ index, delta: { content: text } }] })}\n\n`;
+  const choiceOf = (block: string) =>
+    (parseSseData(block).choices as Array<{ index: number; delta: { content: string } }>)[0];
+
+  const first = rehydrator.push(Buffer.from(event(0, '«Em')));
+  const second = rehydrator.push(Buffer.from(event(1, 'plain ')));
+  const third = rehydrator.push(Buffer.from(event(0, 'ail_1»')));
+  const rest = rehydrator.flush();
+
+  // Choice 0 holds its partial placeholder back and releases the value once it completes.
+  t.is(choiceOf(first)?.index, 0);
+  t.is(choiceOf(first)?.delta.content, '');
+  t.is(choiceOf(third)?.index, 0);
+  t.is(choiceOf(third)?.delta.content, 'alice@example.com');
+  // Choice 1 is untouched by choice 0's tail, and goes through byte for byte.
+  t.is(second, event(1, 'plain '));
+  t.false(rest.includes('data:'));
+  t.is(collectText(first + second + third + rest), 'plain alice@example.com');
+});
+
+/** A text-delta event for either vendor, at block/choice 0. */
+function textDeltaEvent(provider: 'openai' | 'anthropic', text: string): string {
+  const payload =
+    provider === 'openai'
+      ? { choices: [{ index: 0, delta: { content: text } }] }
+      : { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } };
+  return `data: ${JSON.stringify(payload)}\n\n`;
+}
+
+test('createSseRehydrator restores neighbouring placeholders in streamed text wherever the fragments split', (t) => {
+  const session = { ...ESCAPING_SESSION, '«Email_10»': 'bob@example.com' };
+  const cases: [string[], string][] = [
+    // Two placeholders in one fragment, the second split across the boundary.
+    [['«Path_1»«Email_', '1» ok'], 'C:\\Users\\alicealice@example.com ok'],
+    // A complete placeholder and a partial one share an event.
+    [['Open «Path_1» then «Em', 'ail_1» now'], 'Open C:\\Users\\alice then alice@example.com now'],
+    // The boundary falls inside the first of two placeholders.
+    [['«Path_', '1» and «Email_1» then'], 'C:\\Users\\alice and alice@example.com then'],
+    // The boundary falls between two placeholders.
+    [['«Path_1»', '«Email_1»'], 'C:\\Users\\alicealice@example.com'],
+    // One placeholder's name is a prefix of another's, and the shorter one is split.
+    [['«Email_10» and «Email_1', '»'], 'bob@example.com and alice@example.com'],
+  ];
+
+  for (const provider of ['openai', 'anthropic'] as const) {
+    for (const [fragments, expected] of cases) {
+      const rehydrator = createSseRehydrator(provider, session);
+      let out = '';
+      for (const fragment of fragments) {
+        out += rehydrator.push(Buffer.from(textDeltaEvent(provider, fragment)));
+      }
+      out += rehydrator.flush();
+
+      const text = collectText(out);
+      t.is(text, expected, `${provider}: ${JSON.stringify(fragments)}`);
+      t.false(text.includes('«'), `${provider}: placeholder left in ${JSON.stringify(fragments)}`);
+    }
+  }
+});
+
+test('createSseRehydrator does not hold back delta.content that merely contains a guillemet', (t) => {
+  const rehydrator = createSseRehydrator('openai', ESCAPING_SESSION);
+  const chunk = `${contentEvent('il a dit « bonjour')}\n\n`;
+  t.is(rehydrator.push(Buffer.from(chunk)), chunk);
+});
+
+test('createSseRehydrator does not lose delta.content when the stream ends mid-placeholder', (t) => {
+  const rehydrator = createSseRehydrator('openai', ESCAPING_SESSION);
+  const out = rehydrator.push(Buffer.from(`${contentEvent('see «Em')}\n\n`)) + rehydrator.flush();
+  t.is(collectText(out), 'see «Em');
+});
+
+test('createSseRehydrator restores an Anthropic text_delta split across events', (t) => {
+  const rehydrator = createSseRehydrator('anthropic', ESCAPING_SESSION);
+  const event = (text: string) =>
+    `data: ${JSON.stringify({
+      type: 'content_block_delta',
+      index: 0,
+      delta: { type: 'text_delta', text },
+    })}\n\n`;
+
+  const out =
+    rehydrator.push(Buffer.from(event('Contact «Email_'))) +
+    rehydrator.push(Buffer.from(event('1» today.'))) +
+    rehydrator.flush();
+
+  t.is(collectText(out), 'Contact alice@example.com today.');
+});
