@@ -89,6 +89,25 @@ test('an IPv4-mapped IPv6 address leaves no fragment behind when scrubbed', (t) 
   t.is(text.slice(0, start) + text.slice(end), 'mapped  here');
 });
 
+test('detects an IPv6 address followed by a colon', (t) => {
+  for (const [text, address] of [
+    ['connect to 2001:db8::1: connection refused', '2001:db8::1'],
+    ['fe80::1ff:fe23:4567:890a: unreachable', 'fe80::1ff:fe23:4567:890a'],
+    ['2001:db8:0:0:0:0:0:1: timeout', '2001:db8:0:0:0:0:0:1'],
+    ['host ::1: refused', '::1'],
+    ['ping ::ffff:192.0.2.1: failed', '::ffff:192.0.2.1'],
+  ] as const) {
+    const findings = detector.detect(text);
+    t.is(findings.length, 1, text);
+    t.is(findings[0]?.value, address, text);
+  }
+});
+
+test('does not cut an IPv6-looking run of colon-separated groups short', (t) => {
+  t.is(detector.detect('1:2:3:4:5:6:7:8:9').length, 0);
+  t.is(detector.detect('2001:db8::1:2:3:4:5:6:7:8:9').length, 0);
+});
+
 test('span accurately indexes text slice for IPv4 and IPv6', (t) => {
   const text = 'Primary: 192.168.1.1, Secondary: 2001:db8::1, End.';
   const findings = detector.detect(text);

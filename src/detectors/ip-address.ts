@@ -43,7 +43,7 @@ const IPV6_HEX_BRANCHES = [
 // Negative lookaround ensures no trailing/leading alphanumeric or colon fragments,
 // and that an embedded IPv4 tail is not cut short mid-octet.
 const IPV6_REGEX = new RegExp(
-  String.raw`(?<![a-zA-Z0-9:.])(?:${[...IPV6_V4_BRANCHES, ...IPV6_HEX_BRANCHES].join('|')})(?![a-zA-Z0-9:])(?!\.[0-9])`,
+  String.raw`(?<![a-zA-Z0-9:.])(?:${[...IPV6_V4_BRANCHES, ...IPV6_HEX_BRANCHES].join('|')})(?![a-zA-Z0-9]|:[a-zA-Z0-9:])(?!\.[0-9])`,
   'g',
 );
 
