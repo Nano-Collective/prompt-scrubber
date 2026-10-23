@@ -21,6 +21,12 @@ interface ProxyCommandOptions extends ScrubCliOptions {
   gc?: boolean;
   /** False when `--no-reload-config` was passed. */
   reloadConfig?: boolean;
+  /** Token every request must send in `x-prompt-scrub-token`. */
+  authToken?: string;
+  /** How many sessions to keep before the least recently used is dropped. */
+  maxSessions?: string;
+  /** Seconds the upstream may stay silent before the request is abandoned. */
+  upstreamTimeout?: string;
   /** True when `--strict` was passed: block requests that cannot be scrubbed. */
   strict?: boolean;
 }
@@ -53,6 +59,37 @@ export async function runProxyCommand(options: ProxyCommandOptions): Promise<voi
   const host = options.host ?? '127.0.0.1';
   if (!/^[a-z0-9.\-:[\]]+$/i.test(host)) {
     throw new Error(`Invalid --host "${host}".`);
+  }
+
+  const authToken = options.authToken ?? process.env.PROMPT_SCRUB_AUTH_TOKEN;
+  if (authToken !== undefined && authToken.trim() === '') {
+    // A blank token must not quietly leave the proxy open.
+    const source = options.authToken !== undefined ? '--auth-token' : 'PROMPT_SCRUB_AUTH_TOKEN';
+    throw new Error(`Invalid ${source}: the token must not be empty.`);
+  }
+
+  let maxSessions: number | undefined;
+  if (options.maxSessions !== undefined) {
+    maxSessions = Number(options.maxSessions);
+    if (!Number.isInteger(maxSessions) || maxSessions < 1) {
+      throw new Error(
+        `Invalid --max-sessions "${options.maxSessions}". Use a whole number of at least 1.`,
+      );
+    }
+  }
+
+  let upstreamTimeoutMs: number | undefined;
+  if (options.upstreamTimeout !== undefined) {
+    const text = options.upstreamTimeout.trim();
+    const seconds = Number(text);
+    // Plain decimal numbers only: `Number()` would also read `0x10` as 16 and `1e3` as 1000.
+    if (!/^\d+(\.\d+)?$/.test(text) || !Number.isFinite(seconds)) {
+      throw new Error(
+        `Invalid --upstream-timeout "${options.upstreamTimeout}". Use a number of seconds, or 0 for no timeout.`,
+      );
+    }
+    // Only a literal `0` turns the timeout off: a tiny value must not round down to it.
+    upstreamTimeoutMs = seconds > 0 ? Math.max(1, Math.round(seconds * 1000)) : 0;
   }
 
   let auditLog: string | undefined;
@@ -102,6 +139,9 @@ export async function runProxyCommand(options: ProxyCommandOptions): Promise<voi
     reloadConfig: options.reloadConfig !== false,
     strict: options.strict === true,
     metrics: options.metrics !== false,
+    ...(authToken !== undefined ? { authToken } : {}),
+    ...(maxSessions !== undefined ? { maxSessions } : {}),
+    ...(upstreamTimeoutMs !== undefined ? { upstreamTimeoutMs } : {}),
     ...(auditLog !== undefined ? { auditLog } : {}),
     ...(options.version !== undefined ? { version: options.version } : {}),
     ...(Object.keys(scrubOptions).length > 0 ? { scrubOptions } : {}),
@@ -138,6 +178,18 @@ export function setupProxyCommand(program: Command) {
     .option(
       '--strict',
       'Fail closed: block requests whose body cannot be scrubbed (unknown endpoint, compressed or non-JSON body) instead of forwarding them',
+    )
+    .option(
+      '--auth-token <token>',
+      'Require this token in the x-prompt-scrub-token header (or set PROMPT_SCRUB_AUTH_TOKEN). Use it when binding a non-loopback --host',
+    )
+    .option(
+      '--max-sessions <n>',
+      'How many sessions to keep before the least recently used is dropped (default 1000)',
+    )
+    .option(
+      '--upstream-timeout <seconds>',
+      'Seconds the upstream may stay silent before the request is abandoned (default 600, 0 for no timeout)',
     )
     .option('--no-reload-config', 'Do not reload config.json on SIGHUP or when it changes on disk')
     .option(

@@ -1194,3 +1194,69 @@ test('counts findings for a category named like an Object.prototype member', (t)
   t.is(Object.keys(result.stats.byCategory).join(), 'constructor');
   t.is(result.stats.byCategory.constructor, 1);
 });
+
+test('a connection string is one secret, not a secret beside an email fragment', (t) => {
+  for (const url of [
+    'postgres://admin:s3cretPass@db.internal:5432/app',
+    'mongodb+srv://u:p%40ss@cluster0.x.mongodb.net/test',
+    'https://user:pass@example.com/x',
+  ]) {
+    const result = scrub({ content: `connect with ${url} now`, sessionMap: {} });
+    t.is(result.scrubbedContent, 'connect with «Secret_1» now', url);
+    t.deepEqual(result.stats.byCategory, { Secret: 1 }, url);
+    t.deepEqual(result.sessionMap, { '«Secret_1»': url }, url);
+  }
+});
+
+test('a connection string stays one secret next to an email address', (t) => {
+  const result = scrub({
+    content: 'mail ops@example.com, db postgres://admin:pw@db.internal/app.',
+    sessionMap: {},
+  });
+  t.is(result.scrubbedContent, 'mail «Email_1», db «Secret_1».');
+});
+
+test('secrets and emails on one line keep their own spans', (t) => {
+  const json = scrub({
+    content: '{ "api_key": "mysecretvalue123", "user": "alice@example.com" }',
+    sessionMap: {},
+  });
+  t.is(json.scrubbedContent, '{ "api_key": "«Secret_1»", "user": "«Email_1»" }');
+  t.deepEqual(json.sessionMap, {
+    '«Secret_1»': 'mysecretvalue123',
+    '«Email_1»': 'alice@example.com',
+  });
+
+  const mixed = scrub({
+    content: 'path /home/alice/.env then password=hunter2hunter2 and bob@example.org.',
+    sessionMap: {},
+  });
+  t.is(mixed.scrubbedContent, 'path «Path_1» then password=«Secret_1» and «Email_1».');
+});
+
+test('an email before a full stop and a phone number both survive on one line', (t) => {
+  const result = scrub({ content: 'Contact alice@example.com. Call 555-123-4567', sessionMap: {} });
+  t.is(result.scrubbedContent, 'Contact «Email_1». Call «Phone_1»');
+});
+
+test('a token in a URL query is redacted with its URL, not split from it', (t) => {
+  const result = scrub({
+    content: 'https://api.example.com/v1?token=abcdefghijklmnop',
+    sessionMap: {},
+  });
+  t.is(result.scrubbedContent, '«Url_1»');
+});
+
+test('scrubs a document with thousands of findings in well under a second', (t) => {
+  const emails = Array.from({ length: 10_000 }, (_, i) => `user${i}@example.com`);
+  const start = Date.now();
+  const result = scrub({ content: emails.join(' '), sessionMap: {} });
+  t.true(Date.now() - start < 1000, `took ${Date.now() - start}ms`);
+  t.is(result.stats.totalEntities, 10_000);
+  t.false((result.scrubbedContent as string).includes('@example.com'));
+});
+
+test('numbers placeholders right-to-left and rebuilds the text in order', (t) => {
+  const result = scrub({ content: 'a alice@x.com b bob@y.org c', sessionMap: {} });
+  t.is(result.scrubbedContent, 'a «Email_2» b «Email_1» c');
+});

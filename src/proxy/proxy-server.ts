@@ -2,6 +2,7 @@ import * as crypto from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import * as http from 'node:http';
 import * as https from 'node:https';
+import { warnIfLocaleUnused } from '../cli/locale.js';
 import {
   getConfigDir,
   loadConfig,
@@ -18,6 +19,7 @@ import { type ConfigReloader, createConfigReloader } from './config-reloader.js'
 import { ProxyMetrics } from './metrics.js';
 import { detectProvider, scrubChatBody } from './request-transform.js';
 import { createSseRehydrator, rehydrateJsonBody } from './response-transform.js';
+import { DEFAULT_MAX_SESSIONS, dropIfEmpty, openSession, type Sessions } from './session-store.js';
 import type {
   ProxyEvent,
   ProxyEventListener,
@@ -37,18 +39,30 @@ const HOP_BY_HOP = new Set([
   'transfer-encoding',
   'upgrade',
   'host',
+  // Credential for this proxy, not for the upstream: never forwarded.
+  'x-prompt-scrub-token',
 ]);
 
 /** Header used to thread the session ID through requests and responses. */
 export const SESSION_HEADER = 'x-prompt-scrub-session';
 
+/** Header that carries the proxy's own `--auth-token`. */
+const TOKEN_HEADER = 'x-prompt-scrub-token';
+
 const DEFAULT_MAX_BODY_BYTES = 10 * 1024 * 1024;
-const UPSTREAM_TIMEOUT_MS = 30_000;
+/**
+ * How long the upstream may go without sending a byte. Reasoning models can
+ * think for minutes before the first token, so this matches the 10 minute
+ * default of the vendors' own SDKs rather than cutting a request they would
+ * still be waiting on.
+ */
+const DEFAULT_UPSTREAM_TIMEOUT_MS = 600_000;
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
 
-type ErrorKind = NonNullable<Extract<ProxyEvent, { type: 'response' }>['errorKind']>;
+/** Recorded for a request whose client hung up before any response was sent (nginx's 499). */
+const CLIENT_CLOSED_STATUS = 499;
 
-type Sessions = Map<string, Record<string, string>>;
+type ErrorKind = NonNullable<Extract<ProxyEvent, { type: 'response' }>['errorKind']>;
 
 /** Failure talking to the upstream provider. `kind` feeds metrics and the audit log. */
 class UpstreamFailure extends Error {
@@ -107,9 +121,11 @@ export async function createProxyServer(
   // holder is read once per request, so a reload never changes options midway
   // through a request.
   const { detectors: rulePackDetectors } = await loadConfiguredRulePacks();
+  const startConfig = loadConfig();
   const scrubState = {
-    current: buildBaseScrubOptions(options.scrubOptions, rulePackDetectors, loadConfig()),
+    current: buildBaseScrubOptions(options.scrubOptions, rulePackDetectors, startConfig),
   };
+  warnIfLocaleUnused(startConfig.locale ?? '', rulePackDetectors, log);
   const logThreshold = () => {
     const threshold = scrubState.current.minConfidence;
     if (threshold) {
@@ -163,6 +179,7 @@ export async function createProxyServer(
       );
     }
     scrubState.current = buildBaseScrubOptions(options.scrubOptions, detectors, file.config);
+    warnIfLocaleUnused(file.config.locale ?? '', detectors, log);
     logThreshold();
     return {
       rulePacks: file.config.rulePacks?.length ?? 0,
@@ -173,12 +190,17 @@ export async function createProxyServer(
 
   const server = http.createServer((req, res) => {
     const route = serveObservability ? observabilityRoute(req) : undefined;
+    // /healthz stays open so a load balancer can probe it without the token.
+    if (options.authToken && route !== '/healthz' && !tokenMatches(req, options.authToken)) {
+      rejectUnauthorized(req, res, emit);
+      return;
+    }
     if (route) {
       respondObservability(req, res, route, metrics, version);
       return;
     }
 
-    const trace = createTrace(req, sessions);
+    const trace = createTrace(req);
     handleClientRequest(
       req,
       res,
@@ -242,7 +264,7 @@ export async function createProxyServer(
         },
       };
 
-      log(`[proxy] Listening on ${url} → ${options.target.href}`);
+      log(`[proxy] Listening on ${url} → ${options.target.origin}${options.target.pathname}`);
       if (options.auditLog !== undefined) {
         log(`[proxy] Audit log: ${options.auditLog}`);
       }
@@ -252,11 +274,13 @@ export async function createProxyServer(
       }
       if (serveObservability) {
         log(`[proxy] Metrics: ${url}/metrics  Health: ${url}/healthz`);
-        if (!LOOPBACK_HOSTS.has(host)) {
-          log(
-            `[proxy] Warning: ${host} is not a loopback address. /metrics and /healthz are unauthenticated.`,
-          );
-        }
+      }
+      if (options.authToken) {
+        log(`[proxy] Authentication: requests must send the --auth-token in ${TOKEN_HEADER}.`);
+      } else if (!LOOPBACK_HOSTS.has(host)) {
+        log(
+          `[proxy] Warning: ${host} is not a loopback address and no --auth-token is set. Anyone who can reach this port can send requests through the proxy${serveObservability ? ' and read /metrics' : ''}.`,
+        );
       }
       if (reloader) {
         const how = [
@@ -324,7 +348,33 @@ export async function runProxy(options: ProxyOptions): Promise<void> {
   });
 }
 
-function createTrace(req: IncomingMessage, sessions: Sessions): RequestTrace {
+function tokenMatches(req: IncomingMessage, expected: string): boolean {
+  const header = req.headers[TOKEN_HEADER];
+  const provided = (Array.isArray(header) ? header[0] : header) ?? '';
+  const digest = (value: string) => crypto.createHash('sha256').update(value).digest();
+  return crypto.timingSafeEqual(digest(provided), digest(expected));
+}
+
+function rejectUnauthorized(
+  req: IncomingMessage,
+  res: ServerResponse,
+  emit: (event: ProxyEvent) => void,
+): void {
+  const trace = createTrace(req);
+  res.writeHead(401, { 'content-type': 'text/plain; charset=utf-8', connection: 'close' });
+  res.end(`prompt-scrub proxy: missing or invalid ${TOKEN_HEADER}\n`);
+  emit({
+    type: 'request',
+    method: trace.method,
+    path: trace.path,
+    provider: trace.provider,
+    sessionId: trace.sessionId,
+  });
+  finishTrace(trace, emit, 401, 'unauthorized');
+  req.resume();
+}
+
+function createTrace(req: IncomingMessage): RequestTrace {
   const inboundSession = readSessionHeader(req.headers[SESSION_HEADER]);
   // Only accept client-supplied session IDs that match a UUID — the proxy
   // generates a fresh one when the client omits the header. This caps the
@@ -332,7 +382,6 @@ function createTrace(req: IncomingMessage, sessions: Sessions): RequestTrace {
   // into the in-memory session map) without breaking the documented
   // "share a session ID across requests" workflow.
   const sessionId = inboundSession && isUuid(inboundSession) ? inboundSession : crypto.randomUUID();
-  if (!sessions.has(sessionId)) sessions.set(sessionId, {});
 
   const url = req.url ?? '/';
   const path = parsePath(url);
@@ -369,7 +418,9 @@ function finishTrace(
   trace.finished = true;
 
   const outcome = errorKind
-    ? errorKind === 'body_too_large' || errorKind === 'strict_blocked'
+    ? errorKind === 'body_too_large' ||
+      errorKind === 'strict_blocked' ||
+      errorKind === 'unauthorized'
       ? 'rejected'
       : 'error'
     : trace.passthroughReason !== undefined
@@ -413,7 +464,7 @@ async function handleClientRequest(
   emit({
     type: 'request',
     method: trace.method,
-    path: incomingUrl,
+    path: trace.path,
     provider,
     sessionId,
   });
@@ -451,6 +502,10 @@ async function handleClientRequest(
   let upstreamBody: Buffer | undefined = bodyBuf;
   let parsed: unknown;
   let unscrubbedReason: string | undefined;
+  // The map this request scrubbed against. The response is rehydrated with this
+  // reference, not a fresh lookup: other traffic can evict the session from the
+  // store while the upstream is still answering.
+  let requestMap: Record<string, string> | undefined;
   if (provider === 'unknown') {
     unscrubbedReason = 'unknown provider';
   } else if (bodyBuf !== undefined && bodyBuf.length > 0) {
@@ -478,7 +533,8 @@ async function handleClientRequest(
     trace.passthroughReason = unscrubbedReason;
     emit({ type: 'passthrough', reason: unscrubbedReason });
   } else if (parsed !== undefined) {
-    const map = sessions.get(sessionId) ?? {};
+    const map = openSession(sessions, sessionId, options.maxSessions ?? DEFAULT_MAX_SESSIONS);
+    requestMap = map;
     reserveLiteralPlaceholders(provider, parsed, map);
     // The scrubber's reverse-lookup (`valueToPlaceholder`) keeps stable
     // placeholders for values it has seen before, so round-trips from the
@@ -496,16 +552,40 @@ async function handleClientRequest(
     if (outcome.entities > 0) {
       emit({ type: 'scrubbed', sessionId, entities: outcome.entities });
     }
+    dropIfEmpty(sessions, sessionId, map);
   }
 
   const upstreamHeaders = buildUpstreamHeaders(req.headers, options.target);
 
-  const upstreamResponse = await dispatchUpstream(options.target, {
-    method: trace.method,
-    path: joinTargetPath(options.target, incomingUrl),
-    headers: upstreamHeaders,
-    ...(upstreamBody !== undefined ? { body: upstreamBody } : {}),
-  });
+  // A client that hangs up has no use for the answer, so stop waiting on the
+  // upstream and stop it generating one. Streamed responses are cancelled by
+  // `pipeStreamingResponse`, which owns the response once its headers are out.
+  const clientGone = new AbortController();
+  const onClientClose = () => {
+    if (!res.writableFinished) clientGone.abort();
+  };
+  res.once('close', onClientClose);
+  const abandon = () => {
+    finishTrace(trace, emit, CLIENT_CLOSED_STATUS, 'client_aborted');
+  };
+
+  let upstreamResponse: UpstreamResponse;
+  try {
+    upstreamResponse = await dispatchUpstream(
+      options.target,
+      {
+        method: trace.method,
+        path: joinTargetPath(options.target, incomingUrl),
+        headers: upstreamHeaders,
+        ...(upstreamBody !== undefined ? { body: upstreamBody } : {}),
+      },
+      options.upstreamTimeoutMs ?? DEFAULT_UPSTREAM_TIMEOUT_MS,
+      clientGone.signal,
+    );
+  } catch (err) {
+    if (clientGone.signal.aborted) return abandon();
+    throw err;
+  }
 
   const responseHeaders = filterResponseHeaders(upstreamResponse.headers);
   responseHeaders[SESSION_HEADER] = sessionId;
@@ -516,12 +596,14 @@ async function handleClientRequest(
   trace.streaming = isStreaming;
 
   if (isStreaming) {
+    // From here `pipeStreamingResponse` owns the response and its cleanup.
+    res.off('close', onClientClose);
     res.writeHead(status, responseHeaders);
     pipeStreamingResponse(
       upstreamResponse,
       res,
       provider,
-      sessions.get(sessionId) ?? {},
+      requestMap ?? sessions.get(sessionId) ?? {},
       trace,
       emit,
       log,
@@ -529,16 +611,23 @@ async function handleClientRequest(
     return;
   }
 
+  const dropUpstreamIfClientGone = () => {
+    if (clientGone.signal.aborted) upstreamResponse.destroy();
+  };
+  res.once('close', dropUpstreamIfClientGone);
+  dropUpstreamIfClientGone();
+
   const chunks: Buffer[] = [];
   try {
     for await (const chunk of upstreamResponse.body) {
       chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     }
   } catch (err) {
+    if (clientGone.signal.aborted) return abandon();
     throw toUpstreamFailure(err);
   }
   let payload = Buffer.concat(chunks);
-  const map = sessions.get(sessionId) ?? {};
+  const map = requestMap ?? sessions.get(sessionId) ?? {};
   // Only attempt to rehydrate if this session actually has mappings. A
   // 4xx error body from the upstream carries no placeholders — running
   // it through the rehydrator is a no-op, but skipping the path entirely
@@ -795,6 +884,12 @@ interface UpstreamResponse {
   statusCode: number;
   headers: http.IncomingHttpHeaders;
   body: AsyncIterable<Buffer>;
+  /** Drop the upstream connection without waiting for the rest of the body. */
+  destroy: () => void;
+}
+
+function formatSeconds(ms: number): string {
+  return `${Number((ms / 1000).toFixed(3))}s`;
 }
 
 function toUpstreamFailure(err: unknown): UpstreamFailure {
@@ -802,9 +897,23 @@ function toUpstreamFailure(err: unknown): UpstreamFailure {
   return new UpstreamFailure(err instanceof Error ? err.message : String(err), 'upstream_error');
 }
 
-function dispatchUpstream(target: URL, req: DispatchRequest): Promise<UpstreamResponse> {
+/**
+ * Send one request upstream. Resolves once the response headers arrive.
+ * `signal` cancels the request until then; after that the caller owns the
+ * response and cancels it through `destroy`.
+ */
+function dispatchUpstream(
+  target: URL,
+  req: DispatchRequest,
+  timeoutMs: number,
+  signal: AbortSignal,
+): Promise<UpstreamResponse> {
   const client = target.protocol === 'https:' ? https : http;
   return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new UpstreamFailure('client closed the connection', 'upstream_error'));
+      return;
+    }
     const upstreamReq = client.request(
       {
         protocol: target.protocol,
@@ -813,21 +922,30 @@ function dispatchUpstream(target: URL, req: DispatchRequest): Promise<UpstreamRe
         method: req.method,
         path: req.path,
         headers: req.headers,
-        timeout: UPSTREAM_TIMEOUT_MS,
+        timeout: timeoutMs,
       },
       (res) => {
+        signal.removeEventListener('abort', onAbort);
         resolve({
           statusCode: res.statusCode ?? 502,
           headers: res.headers,
           body: res,
+          destroy: () => res.destroy(),
         });
       },
     );
-    upstreamReq.on('error', (err) => reject(toUpstreamFailure(err)));
+    const onAbort = () => {
+      upstreamReq.destroy(new UpstreamFailure('client closed the connection', 'upstream_error'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    upstreamReq.on('error', (err) => {
+      signal.removeEventListener('abort', onAbort);
+      reject(toUpstreamFailure(err));
+    });
     upstreamReq.on('timeout', () => {
       upstreamReq.destroy(
         new UpstreamFailure(
-          `upstream timeout after ${UPSTREAM_TIMEOUT_MS / 1000}s`,
+          `upstream timeout after ${formatSeconds(timeoutMs)}`,
           'upstream_timeout',
         ),
       );
@@ -846,11 +964,14 @@ function dispatchUpstream(target: URL, req: DispatchRequest): Promise<UpstreamRe
  */
 function joinTargetPath(target: URL, incomingUrl: string): string {
   const incomingPath = parsePath(incomingUrl);
+  // The query string is part of the request: Azure OpenAI needs `?api-version=`,
+  // Gemini takes `?key=`, and `/v1/models?limit=` pages its results with it.
+  const query = incomingUrl.slice(incomingPath.length);
   const base = target.pathname.replace(/\/$/, '');
   if (incomingPath === '/' || incomingPath === '') {
-    return `${base}/`;
+    return `${base}/${query}`;
   }
-  return `${base}${incomingPath}`;
+  return `${base}${incomingPath}${query}`;
 }
 
 function pipeStreamingResponse(

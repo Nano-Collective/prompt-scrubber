@@ -26,7 +26,7 @@ Scrubbed: 2 entities (1 Email, 1 Secret)
 The summary counts replacements, not unique values: a value that appears three times counts three times, even though all three collapse onto the same placeholder. Reusing a session with `--session-id` does not carry counts over — the summary always describes the current run only. When nothing is detected the summary reads `Scrubbed: 0 entities`.
 
 **Options:**
-- `--session-id <id>`: Reuse an existing session map. If omitted, a new UUID is generated.
+- `--session-id <id>`: Reuse an existing session map. If omitted, a new UUID is generated. The ID becomes a file name, so it must be 1 to 255 characters and must not contain a path separator (`/` or `\`), `:`, `*`, `?`, a quote, `<`, `>`, `|` or a control character. That keeps a crafted ID from reaching outside the sessions directory; sessions saved by earlier versions under other names keep working.
 - `--disable <detectors>`: Comma-separated list of detectors to disable (e.g. `EmailDetector,PhoneDetector`).
 - `--locale <locale>`: BCP-47 tag (e.g. `de-DE`) that activates detectors scoped to that locale. Overrides `locale` in the configuration file. A malformed tag exits `1`; a well-formed tag that activates no detector warns on `stderr`, so a missing rule pack is never mistaken for a completed locale scrub.
 - `--min-confidence <value>`: Discard findings scored below this confidence (`0`-`1`). Defaults to the configured `minConfidence`, or `0` (keep everything). Whatever the threshold discards is named in the summary, so a filtered run never quietly under-redacts. See [Confidence & Tiered Detection](../features/detectors.md#confidence--tiered-detection).
@@ -178,14 +178,19 @@ By default, anything that does not match a known shape (e.g. `GET /v1/models`, `
 | Tool results | the `role: "tool"` message | `tool_result` blocks, including `text` blocks nested inside them |
 | Tool definitions | `tools[].function.description` / `tools[].custom.description`, plus `description` fields inside `parameters` | `tools[].description`, plus `description` fields inside `input_schema` |
 | Deprecated function calling | `messages[].function_call.arguments` and `functions[].description` | — |
+| Documents and search results | — | `document` blocks (`title`, `context`, and the text of a `text` or `content` source) and `search_result` blocks |
+| End-user identifiers | `user`, `safety_identifier`, `metadata` values | `metadata` values (such as `user_id`) |
+| Other request fields | `prediction.content` and the descriptions in `response_format.json_schema` | — |
 
 Tool arguments are JSON encoded as a string, so they are parsed, scrubbed value by value and re-serialised: argument *keys* and the JSON structure are preserved exactly.
 
 Messages are never dropped. An entry the proxy does not recognise — an assistant turn that carries only `tool_calls`, a block type a vendor adds tomorrow — is forwarded unchanged at its original position in `messages[]`.
 
-**Never scrubbed, by design:** tool names, tool-call ids, JSON-schema property keys and `enum` values. The model has to reproduce those verbatim for the client's own dispatch to work, so a placeholder there would break the call rather than protect anything — keep PII out of tool names and enums.
+**Never scrubbed, by design:** tool names, tool-call ids, JSON-schema property keys and `enum` values. The model has to reproduce those verbatim for the client's own dispatch to work, so a placeholder there would break the call rather than protect anything — keep PII out of tool names and enums. Also left alone: `messages[].name` (the API only accepts `[a-zA-Z0-9_-]`, so a placeholder would be rejected), `thinking` blocks (the model's own output, so they hold placeholders rather than real values, and editing one breaks its signature), and opaque payloads such as images and `base64` or `url` document sources.
 
 Responses are rehydrated in the same places as requests: message content, `tool_calls[].function.arguments` and `tool_use.input`. The client executes those tool calls on its own machine, so they are handed back with the real values in them.
+
+**Session limits:** sessions live in memory only. The proxy keeps the most recent `--max-sessions` of them and forgets the rest, and a request that scrubs nothing leaves no session behind. A client that sends the ID of a forgotten session gets a fresh, empty one, so a placeholder from before the eviction is left as written in the response.
 
 **Session continuity:** the proxy threads a session ID through every request via the `x-prompt-scrub-session` header. When the client sends the header back on a follow-up call, the same placeholder map is reused, so `«Email_1»` stays `«Email_1»` across turns. If the client does not send the header, the proxy generates a UUID and echoes it in the response so the client can pin it. The header only travels between the client and the proxy: it is removed from the request before it is forwarded, so the upstream provider never sees the session ID. A placeholder-shaped token that a request already contains literally, such as `«Email_1»` in a message that discusses placeholders, is reserved for the rest of the session. It is forwarded and rehydrated as written, and no real value is ever given that name.
 
@@ -200,9 +205,12 @@ Responses are rehydrated in the same places as requests: message content, `tool_
 - `--port <port>`: Local port (default `8080`). Use `0` to bind a random free port.
 - `--host <host>`: Local interface to bind (default `127.0.0.1`).
 - `--disable <detectors>`, `--enable <detectors>`, `--strict-name`, `--code-tell-terms`, `--url-allowlist`: Same scrubber options as the `scrub` command.
-- `-v, --verbose`: Log a one-line summary of every proxied request to `stderr` (including the scrubbed/rehydrated counts and session ID).
+- `-v, --verbose`: Log a one-line summary of every proxied request to `stderr` (including the scrubbed/rehydrated counts and session ID). Request paths are logged without their query string, because some providers take an API key there (`?api-key=...`).
 - `--strict`: Fail closed. Refuse with `403` any request whose body cannot be scrubbed (unknown endpoint, compressed body, or non-JSON body) instead of forwarding it. Off by default.
 - `--audit-log <path>`: Append one JSON line per completed request to this file. Records hold counts, detector categories, timings and the request path. They never hold values, bodies, headers or query strings. The file is created with mode `0600`.
+- `--auth-token <token>`: Require this token in the `x-prompt-scrub-token` header of every request except `/healthz`; anything else gets `401`. The header is not forwarded upstream. Without the flag the proxy is open to anyone who can reach its port, so use it whenever `--host` is not a loopback address. Prefer the `PROMPT_SCRUB_AUTH_TOKEN` environment variable over the flag, which shows in the process list. A blank token, from either, is an error rather than an open proxy. A Prometheus scrape of `/metrics` then needs the header too.
+- `--max-sessions <n>`: How many sessions to keep in memory before the least recently used is dropped (default `1000`). A session that holds no placeholders is not kept at all.
+- `--upstream-timeout <seconds>`: How long the upstream may stay silent before the request is abandoned with a `502` (default `600`, `0` for no timeout). It is an idle timeout: a streamed response that keeps sending data is never cut off. The default matches the vendors' own SDKs because reasoning models can take minutes to emit a first token.
 - `--no-metrics`: Do not serve `/healthz` and `/metrics`. Those paths are then forwarded upstream like any other path.
 - `--no-gc`: Skip the startup session-garbage-collection pass.
 - `--no-reload-config`: Do not reload `config.json` while the proxy runs (see below).
@@ -238,7 +246,7 @@ An audit record looks like this:
 {"ts":"2026-10-14T09:12:03.418Z","type":"response","requestId":"…","sessionId":"…","method":"POST","path":"/v1/chat/completions","provider":"openai","status":200,"durationMs":412.7,"streaming":false,"outcome":"ok","entities":1,"byCategory":{"Email":1},"suppressed":0,"suppressedByCategory":{},"rehydrated":1}
 ```
 
-`outcome` is one of `ok`, `passthrough` (forwarded without scrubbing), `rejected` (413, or 403 in strict mode) or `error`. When it is `rejected` or `error`, `errorKind` is one of `body_too_large`, `strict_blocked`, `upstream_timeout`, `upstream_error`, `client_aborted` or `internal`.
+`outcome` is one of `ok`, `passthrough` (forwarded without scrubbing), `rejected` (413, or 403 in strict mode) or `error`. When it is `rejected` or `error`, `errorKind` is one of `body_too_large`, `strict_blocked`, `unauthorized`, `upstream_timeout`, `upstream_error`, `client_aborted` or `internal`. A request whose client hangs up is cancelled upstream too, so the provider stops generating an answer nobody will read; it is recorded as `client_aborted`, with status `499` when no response had been sent yet.
 
 **Limitations:**
 

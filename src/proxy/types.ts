@@ -38,6 +38,25 @@ export interface ProxyOptions {
   /** Maximum request body size in bytes. Defaults to 10 MB. */
   maxBodyBytes?: number;
   /**
+   * How many sessions to keep before the least recently used is forgotten.
+   * Defaults to 1000. A session that holds no placeholders is not kept at all.
+   */
+  maxSessions?: number;
+  /**
+   * Require this token in the `x-prompt-scrub-token` header of every request
+   * except `/healthz`; others get `401`. The header is never forwarded upstream.
+   * Without it the proxy is open to anyone who can reach its port, which only
+   * matters when `host` is not a loopback address.
+   */
+  authToken?: string;
+  /**
+   * How long, in milliseconds, the upstream may go without sending a byte before
+   * the request is abandoned with a `502`. Defaults to 10 minutes, the default of
+   * the vendors' own SDKs, because reasoning models can take minutes to emit a
+   * first token. `0` turns the timeout off.
+   */
+  upstreamTimeoutMs?: number;
+  /**
    * Fail closed: refuse with `403` any request that carries a body the proxy
    * cannot scrub (an unrecognised endpoint, a compressed body, or a body that
    * is not JSON) instead of forwarding it untouched. Defaults to `false`.
@@ -81,6 +100,7 @@ export interface ProxyHandle {
  * transformed.
  */
 export type ProxyEvent =
+  /** `path` has no query string: it often carries credentials such as `?api-key=...`. */
   | { type: 'request'; method: string; path: string; provider: ProxyProvider; sessionId: string }
   | { type: 'scrubbed'; sessionId: string; entities: number }
   | { type: 'rehydrated'; sessionId: string; placeholders: number }
@@ -122,6 +142,7 @@ export type ProxyEvent =
         | 'upstream_error'
         | 'client_aborted'
         | 'strict_blocked'
+        | 'unauthorized'
         | 'internal';
     };
 
