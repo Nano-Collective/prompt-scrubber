@@ -67,7 +67,8 @@ export async function runProxyCommand(options: ProxyCommandOptions): Promise<voi
         `Invalid --upstream-timeout "${options.upstreamTimeout}". Use a number of seconds, or 0 for no timeout.`,
       );
     }
-    upstreamTimeoutMs = Math.round(seconds * 1000);
+    // Only a literal `0` turns the timeout off: a tiny value must not round down to it.
+    upstreamTimeoutMs = seconds > 0 ? Math.max(1, Math.round(seconds * 1000)) : 0;
   }
 
   let auditLog: string | undefined;
