@@ -120,7 +120,13 @@ interface StreamState {
 
 interface PendingTail {
   text: string;
-  /** Builds a standalone SSE event carrying `text`, for recovery at flush. */
+  /**
+   * Builds a standalone SSE event carrying `text`, for recovery at flush. The client
+   * reads it like any other fragment, so it must have the delta shape its tail key
+   * implies: `openai:<choice>:content` is `delta.content`, `openai:<choice>:<tool>` is
+   * a tool call's `arguments`, `anthropic:<block>:text` is a `text_delta` and
+   * `anthropic:<block>` is an `input_json_delta`.
+   */
   synthesize: (text: string) => string;
 }
 
