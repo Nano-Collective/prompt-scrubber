@@ -1,3 +1,4 @@
+import { placeholderTokensIn } from '../session/session-manager.js';
 import type { Detector, Finding, ScoredFinding } from '../types/index.js';
 
 // Confidence per layer. A vendor prefix plus a characteristic length is as close
@@ -129,11 +130,9 @@ function isSecretKeyName(key: string): boolean {
 // closing quote, so a passphrase with spaces is taken whole; an unquoted one stops at
 // whitespace and at brackets, quotes, commas and semicolons, but keeps `!`, `#`, `$` and
 // the other punctuation a password is allowed to contain. `&` and `?` are left out so a
-// value in a query string stops where the next parameter starts. The value must start on
-// the same line as its key, or `config:` followed by `DB_PASSWORD=...` on the next line
-// would take the second line's key as the first one's value and leave the secret in the clear.
+// value in a query string stops where the next parameter starts.
 const KV_PATTERN =
-  /(?:^|[\s,;{])["']?([a-zA-Z0-9_.-]+)["']?\s*[:=][ \t]*(?:"([^"\r\n]{8,})"|'([^'\r\n]{8,})'|([A-Za-z0-9+/\-_.~@!#$%^*=:]{8,}))/gm;
+  /(?:^|[\s,;{])["']?([a-zA-Z0-9_.-]+)["']?\s*[:=]\s*(?:"([^"\r\n]{8,})"|'([^'\r\n]{8,})'|([A-Za-z0-9+/\-_.~@!#$%^*=:]{8,}))/gm;
 
 // --- Layer 3: High-entropy strings ---
 // Only fires when the value is surrounded by quotes or follows an = sign.
@@ -193,7 +192,7 @@ export class SecretDetector implements Detector {
         continue;
       }
       // Already a placeholder (`api_key="«Secret_1»"`): scrubbing it again would mint a second one.
-      if (/^«[^»\s]+»$/.test(value)) continue;
+      if (placeholderTokensIn(value)[0] === value) continue;
 
       raw.push({
         category: 'Secret',

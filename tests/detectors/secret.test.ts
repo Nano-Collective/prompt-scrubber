@@ -69,17 +69,25 @@ test('detects a KEY=value pair that follows a non-secret `word:` lead-in', (t) =
     'env:\n  API_KEY: hunter2hunter2',
   ]) {
     const findings = detector.detect(input);
-    t.deepEqual(
-      findings.map((f) => f.value),
-      ['hunter2hunter2'],
-      input,
-    );
+    t.is(findings.length, 1, input);
+    t.is(findings[0]?.value, 'hunter2hunter2', input);
   }
 });
 
-test('does not treat a following line as the value of a `key:` with no value', (t) => {
-  const findings = detector.detect('notes:\nplain-words-only-here');
-  t.is(findings.length, 0);
+test('detects a secret on the line after its own key', (t) => {
+  for (const input of [
+    'password:\n  correcthorsebatterystaple',
+    'password:\r\n  correcthorsebatterystaple',
+    'password =\n  correcthorsebatterystaple',
+  ]) {
+    const findings = detector.detect(input);
+    t.is(findings.length, 1, input);
+    t.is(findings[0]?.value, 'correcthorsebatterystaple', input);
+  }
+});
+
+test('does not flag the line after a non-secret key', (t) => {
+  t.is(detector.detect('notes:\nplain-words-only-here').length, 0);
 });
 
 test('does not mint a second placeholder for an already-scrubbed quoted value', (t) => {
@@ -88,6 +96,19 @@ test('does not mint a second placeholder for an already-scrubbed quoted value', 
   const twice = scrub({ content: once.scrubbedContent, sessionMap: once.sessionMap });
   t.is(once.scrubbedContent, 'found: API_KEY="«Secret_1»"');
   t.is(twice.scrubbedContent, once.scrubbedContent);
+});
+
+test('still redacts a quoted secret that only looks like a placeholder', (t) => {
+  for (const [input, value] of [
+    ['password = "«hunter2hunter2»"', '«hunter2hunter2»'],
+    ['api_key="«s3cr3tvalu3x9»"', '«s3cr3tvalu3x9»'],
+    ['api_key="«Secret_x»"', '«Secret_x»'],
+    ['api_key="«Secret_1» and more text"', '«Secret_1» and more text'],
+  ] as const) {
+    const findings = detector.detect(input);
+    t.is(findings.length, 1, input);
+    t.is(findings[0]?.value, value, input);
+  }
 });
 
 // --- Positive Cases: High Entropy ---
