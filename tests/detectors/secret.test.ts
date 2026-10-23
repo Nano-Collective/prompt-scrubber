@@ -1,4 +1,5 @@
 import test from 'ava';
+import { scrub } from '../../src/core/scrub.js';
 import { SecretDetector } from '../../src/detectors/secret.js';
 
 const detector = new SecretDetector();
@@ -313,4 +314,59 @@ test('scans pathological key-value input in linear time', (t) => {
     detector.detect(input);
     t.true(Date.now() - start < 1000, `took ${Date.now() - start}ms`);
   }
+});
+
+test('detects an OpenAI project key in full, past 80 characters', (t) => {
+  const key = `sk-proj-${'A1b2C3d4_-'.repeat(15)}T3BlbkFJ${'x9Y8z7W6'.repeat(2)}`;
+  t.true(key.length > 160);
+  const findings = detector.detect(`rotate ${key} today`);
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, key);
+});
+
+test('detects an Anthropic key in full', (t) => {
+  const key = `sk-ant-api03-${'Zz9Yy8Xx-_'.repeat(9)}AA`;
+  t.true(key.length > 100);
+  const findings = detector.detect(`the key is "${key}" in the logs`);
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, key);
+});
+
+test('a long key ends at the first character that cannot be part of it', (t) => {
+  const key = `sk-svcacct-${'Qq1Ww2Ee3Rr4'.repeat(10)}`;
+  const findings = detector.detect(`use (${key}), then rotate`);
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, key);
+});
+
+test('a long key leaves no tail behind after scrubbing', (t) => {
+  const key = `sk-proj-${'0123456789'.repeat(16)}`;
+  const result = scrub({ content: `rotate ${key} today`, sessionMap: {} });
+  t.is(result.scrubbedContent, 'rotate «Secret_1» today');
+});
+
+test('does not treat a short sk- string as a key', (t) => {
+  for (const text of [
+    'sk-',
+    'sk-short',
+    'sk-abc123 is not a key',
+    'use sk-0123456789abcdefghi now',
+  ]) {
+    t.is(detector.detect(text).length, 0, text);
+  }
+});
+
+test('a hyphenated word joined onto a key is redacted with it, never left behind', (t) => {
+  const key = 'sk-0123456789abcdefghijklmnop';
+  const findings = detector.detect(`token ${key}-rotate-now please`);
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, `${key}-rotate-now`);
+  t.is(detector.detect(`token ${key} -rotate-now`)[0]?.value, key);
+});
+
+test('a long key next to another detector is redacted separately', (t) => {
+  const key = `sk-proj-${'0123456789'.repeat(16)}`;
+  const result = scrub({ content: `bob@example.com ${key}`, sessionMap: {} });
+  t.is(result.scrubbedContent, '«Email_1» «Secret_1»');
+  t.deepEqual(result.stats.byCategory, { Email: 1, Secret: 1 });
 });
