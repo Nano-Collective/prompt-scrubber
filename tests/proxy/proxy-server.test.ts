@@ -1807,3 +1807,55 @@ test('a streamed response keeps its placeholders when its session is evicted mid
     await upstream.close();
   }
 });
+
+test('a CRLF event stream is rehydrated and delivered as it arrives', async (t) => {
+  let secondWritten = false;
+  const upstream = await startFakeUpstream((_req, _body, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    const event = (text: string) =>
+      `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: text } }] })}\r\n\r\n`;
+    res.write(event('hi «Email_1»'));
+    setTimeout(() => {
+      secondWritten = true;
+      res.write(event('bye'));
+      res.write('data: [DONE]\r\n\r\n');
+      res.end();
+    }, 400);
+  });
+  const proxy = await withProxy(upstream);
+  try {
+    const parsed = new URL(proxy.url);
+    const result = await new Promise<{ firstBeforeSecond: boolean; body: string }>(
+      (resolve, reject) => {
+        const req = http.request(
+          {
+            hostname: parsed.hostname,
+            port: parsed.port,
+            path: '/v1/chat/completions',
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+          },
+          (res) => {
+            let body = '';
+            let firstBeforeSecond: boolean | undefined;
+            res.on('data', (c: Buffer) => {
+              body += c.toString('utf8');
+              firstBeforeSecond ??= !secondWritten;
+            });
+            res.on('end', () => resolve({ firstBeforeSecond: firstBeforeSecond ?? false, body }));
+          },
+        );
+        req.on('error', reject);
+        req.end(
+          JSON.stringify({ model: 'gpt-4', messages: [{ role: 'user', content: 'mail a@b.com' }] }),
+        );
+      },
+    );
+    t.true(result.firstBeforeSecond, 'the first event was held back until the stream ended');
+    t.true(result.body.includes('"content":"bye"'));
+    t.true(result.body.includes('data: [DONE]'));
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+});
