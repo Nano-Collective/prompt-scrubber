@@ -40,10 +40,15 @@ const IPV6_HEX_BRANCHES = [
   String.raw`::1`,
 ];
 
-// Negative lookaround ensures no trailing/leading alphanumeric or colon fragments,
-// and that an embedded IPv4 tail is not cut short mid-octet.
+// Negative lookaround ensures no leading alphanumeric or colon fragments, no trailing
+// alphanumeric, and that an embedded IPv4 tail is not cut short mid-octet. A trailing
+// colon is accepted as punctuation (`2001:db8::1: connection refused`) unless it
+// continues the address: another `:` or a hex group (`:2`, `:dead`) after it means the
+// match would stop short, so it is rejected and the longer form gets its turn. A word
+// that merely starts with hex letters (`:failed`) is not a group, so the colon is
+// punctuation there too.
 const IPV6_REGEX = new RegExp(
-  String.raw`(?<![a-zA-Z0-9:.])(?:${[...IPV6_V4_BRANCHES, ...IPV6_HEX_BRANCHES].join('|')})(?![a-zA-Z0-9]|:[a-zA-Z0-9:])(?!\.[0-9])`,
+  String.raw`(?<![a-zA-Z0-9:.])(?:${[...IPV6_V4_BRANCHES, ...IPV6_HEX_BRANCHES].join('|')})(?![a-zA-Z0-9]|:(?:${HEX_GROUP}(?![a-zA-Z0-9])|:))(?!\.[0-9])`,
   'g',
 );
 
