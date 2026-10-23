@@ -206,6 +206,7 @@ Responses are rehydrated in the same places as requests: message content, `tool_
 - `-v, --verbose`: Log a one-line summary of every proxied request to `stderr` (including the scrubbed/rehydrated counts and session ID). Request paths are logged without their query string, because some providers take an API key there (`?api-key=...`).
 - `--strict`: Fail closed. Refuse with `403` any request whose body cannot be scrubbed (unknown endpoint, compressed body, or non-JSON body) instead of forwarding it. Off by default.
 - `--audit-log <path>`: Append one JSON line per completed request to this file. Records hold counts, detector categories, timings and the request path. They never hold values, bodies, headers or query strings. The file is created with mode `0600`.
+- `--upstream-timeout <seconds>`: How long the upstream may stay silent before the request is abandoned with a `502` (default `600`, `0` for no timeout). It is an idle timeout: a streamed response that keeps sending data is never cut off. The default matches the vendors' own SDKs because reasoning models can take minutes to emit a first token.
 - `--no-metrics`: Do not serve `/healthz` and `/metrics`. Those paths are then forwarded upstream like any other path.
 - `--no-gc`: Skip the startup session-garbage-collection pass.
 - `--no-reload-config`: Do not reload `config.json` while the proxy runs (see below).
@@ -241,7 +242,7 @@ An audit record looks like this:
 {"ts":"2026-10-14T09:12:03.418Z","type":"response","requestId":"…","sessionId":"…","method":"POST","path":"/v1/chat/completions","provider":"openai","status":200,"durationMs":412.7,"streaming":false,"outcome":"ok","entities":1,"byCategory":{"Email":1},"suppressed":0,"suppressedByCategory":{},"rehydrated":1}
 ```
 
-`outcome` is one of `ok`, `passthrough` (forwarded without scrubbing), `rejected` (413, or 403 in strict mode) or `error`. When it is `rejected` or `error`, `errorKind` is one of `body_too_large`, `strict_blocked`, `upstream_timeout`, `upstream_error`, `client_aborted` or `internal`.
+`outcome` is one of `ok`, `passthrough` (forwarded without scrubbing), `rejected` (413, or 403 in strict mode) or `error`. When it is `rejected` or `error`, `errorKind` is one of `body_too_large`, `strict_blocked`, `upstream_timeout`, `upstream_error`, `client_aborted` or `internal`. A request whose client hangs up is cancelled upstream too, so the provider stops generating an answer nobody will read; it is recorded as `client_aborted`, with status `499` when no response had been sent yet.
 
 **Limitations:**
 

@@ -987,3 +987,19 @@ test.serial('CLI: scrub --session-id rejects a path traversal ID and writes noth
   t.true(result.stderr.includes('Invalid session ID'));
   t.false(fs.existsSync(path.join(outside, 'pwned.json')));
 });
+
+test.serial('CLI: proxy rejects an invalid --upstream-timeout', (t) => {
+  for (const value of ['abc', '-1', '', '0x10', '1e3', '5s', ' ']) {
+    const result = runCli([
+      'proxy',
+      '--target',
+      'http://127.0.0.1:1',
+      '--port',
+      '0',
+      '--upstream-timeout',
+      value,
+    ]);
+    t.is(result.status, 1, value);
+    t.true(result.stderr.includes('Invalid --upstream-timeout'), result.stderr);
+  }
+});
