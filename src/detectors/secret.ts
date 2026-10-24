@@ -1,5 +1,6 @@
 import { placeholderTokensIn } from '../session/session-manager.js';
 import type { Detector, Finding, ScoredFinding } from '../types/index.js';
+import { URL_CHARS } from './url.js';
 
 // Confidence per layer. A vendor prefix plus a characteristic length is as close
 // to certain as pattern matching gets; a suggestive key name is a good guess;
@@ -140,8 +141,11 @@ const KEY_PATTERN = /(?<![A-Za-z0-9_.-])["']?([a-zA-Z0-9_.-]+)["']?\s*[:=]\s*/g;
 const VALUE_PATTERN = /"([^"\r\n]{8,})"|'([^'\r\n]{8,})'|([A-Za-z0-9+/\-_.~@!#$%^*=:]{8,})/y;
 
 // A key inside an http(s) URL (`?token=...`) is left to the URL detector, which redacts the
-// whole URL; reporting the value as well would split the URL into two placeholders.
-const IN_HTTP_URL = /https?:\/\/\S*$/i;
+// whole URL; reporting the value as well would split the URL into two placeholders. The key
+// counts as inside only when URL characters run unbroken from `http(s)://` up to it, which is
+// the span the URL detector takes: a space, a quote or a brace ends the URL, so a secret after
+// one is still found.
+const IN_HTTP_URL = new RegExp(String.raw`https?://${URL_CHARS}*$`);
 const URL_LOOKBACK = 256;
 
 // --- Layer 3: High-entropy strings ---
