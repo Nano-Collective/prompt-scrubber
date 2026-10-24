@@ -111,6 +111,51 @@ test('still redacts a quoted secret that only looks like a placeholder', (t) => 
   }
 });
 
+test('detects a KEY=value pair that follows a character other than whitespace', (t) => {
+  const pw = 'Zq8C3HczEdpYwvwux!x9';
+  for (const input of [
+    `\`DB_PASSWORD=${pw}\``,
+    `(password: ${pw})`,
+    `$password = "${pw}"`,
+    `@password = "${pw}"`,
+    `user=bob&password=${pw}`,
+    `curl -d "user=bob&password=${pw}" https://example.com/login`,
+    `?password=${pw}`,
+    `<password=${pw}>`,
+    `|password=${pw}|`,
+    `env/API_KEY=${pw}`,
+    `密码：password=${pw}`,
+    `🔑password=${pw}`,
+    `postgres://db.example.com/app?password=${pw}`,
+  ]) {
+    const findings = detector.detect(input);
+    t.is(findings.length, 1, input);
+    t.is(findings[0]?.value, pw, input);
+  }
+});
+
+test('does not read a key out of the middle of a longer name', (t) => {
+  t.is(detector.detect('max-connections=1234567890').length, 0);
+  t.is(detector.detect('server.port=1234567890').length, 0);
+});
+
+test('leaves a key inside an http(s) URL to the URL detector', (t) => {
+  t.is(detector.detect('https://api.example.com/v1?token=abcdefghijklmnop').length, 0);
+  t.is(detector.detect('http://api.example.com/v1?a=1&password=abcdefghijklmnop').length, 0);
+  t.is(
+    detector.detect('see https://example.com/x, then token=abcdefghijklmnop')[0]?.value,
+    'abcdefghijklmnop',
+  );
+});
+
+test('a secret after `&` is redacted next to an email on one line', (t) => {
+  const result = scrub({
+    content: 'user=bob@example.com&password=Zq8C3HczEdpYwvwux!x9',
+    sessionMap: {},
+  });
+  t.is(result.scrubbedContent, 'user=«Email_1»&password=«Secret_1»');
+});
+
 // --- Positive Cases: High Entropy ---
 
 test('detects high-entropy base64 string in quotes', (t) => {
@@ -361,6 +406,9 @@ test('scans pathological key-value input in linear time', (t) => {
     `found: ${'a='.repeat(50_000)}`,
     'found: x=aaaaaaaa\n'.repeat(20_000),
     'a:'.repeat(50_000),
+    'k:'.repeat(100_000),
+    '::ffff:'.repeat(140_000),
+    '`a:b`'.repeat(50_000),
     `password: ${'!'.repeat(100_000)}`,
     `password="${'a'.repeat(100_000)}`,
     'sk-'.repeat(30_000),
