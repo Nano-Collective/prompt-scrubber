@@ -511,7 +511,9 @@ async function handleClientRequest(
       unscrubbedReason = 'compressed body';
     } else {
       try {
-        parsed = JSON.parse(bodyBuf.toString('utf8'));
+        // A UTF-8 byte order mark (Windows PowerShell and some editors add one) is not
+        // valid JSON to JSON.parse, which would send the whole body upstream unscrubbed.
+        parsed = JSON.parse(bodyBuf.toString('utf8').replace(/^\uFEFF/, ''));
       } catch {
         unscrubbedReason = 'non-json body';
       }
