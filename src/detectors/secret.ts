@@ -1,4 +1,6 @@
+import { placeholderTokensIn } from '../session/session-manager.js';
 import type { Detector, Finding, ScoredFinding } from '../types/index.js';
+import { URL_CHARS } from './url.js';
 
 // Confidence per layer. A vendor prefix plus a characteristic length is as close
 // to certain as pattern matching gets; a suggestive key name is a good guess;
@@ -125,13 +127,27 @@ function isSecretKeyName(key: string): boolean {
   return name.split(/[^a-z]+/).some((word) => WEAK_KEY_WORDS.has(word) || KEY_COMPOUND.test(word));
 }
 
-// The key may be quoted (`"api_key": ...` in JSON or YAML). A quoted value runs to its
-// closing quote, so a passphrase with spaces is taken whole; an unquoted one stops at
-// whitespace and at brackets, quotes, commas and semicolons, but keeps `!`, `#`, `$` and
-// the other punctuation a password is allowed to contain. `&` and `?` are left out so a
-// value in a query string stops where the next parameter starts.
-const KV_PATTERN =
-  /(?:^|[\s,;{])["']?([a-zA-Z0-9_.-]+)["']?\s*[:=]\s*(?:"([^"\r\n]{8,})"|'([^'\r\n]{8,})'|([A-Za-z0-9+/\-_.~@!#$%^*=:]{8,}))/gm;
+// A key is a run of name characters that does not continue a longer one, so it is found after
+// whitespace, a backtick, a bracket, `$`, `@`, `&` or `?` just the same (`(password: ...)`,
+// `$password = ...`, `user=bob&password=...`). It may be quoted (`"api_key": ...` in JSON or
+// YAML). Reading the key on its own, then the value only for a secret-looking key, keeps the
+// scan moving on after each separator, so a pair inside another key's value is found too.
+const KEY_PATTERN = /(?<![A-Za-z0-9_.-])["']?([a-zA-Z0-9_.-]+)["']?\s*[:=]\s*/g;
+
+// A quoted value runs to its closing quote, so a passphrase with spaces is taken whole; an
+// unquoted one stops at whitespace and at brackets, quotes, commas and semicolons, but keeps
+// `!`, `#`, `$` and the other punctuation a password is allowed to contain. `&` and `?` are
+// left out so a value in a query string stops where the next parameter starts.
+const VALUE_PATTERN = /"([^"\r\n]{8,})"|'([^'\r\n]{8,})'|([A-Za-z0-9+/\-_.~@!#$%^*=:]{8,})/y;
+
+// A key inside an http(s) URL (`?token=...`) is left to the URL detector, which redacts the
+// whole URL; reporting the value as well would split the URL into two placeholders. The pair
+// counts as inside only when URL characters run unbroken from `http(s)://` through the end of
+// its value, which is the span the URL detector takes: a space, a quote or a brace ends the
+// URL, so a value after one (`https://x.io/a,token: ...`) is still found.
+const IN_HTTP_URL = new RegExp(`https?://${URL_CHARS}*$`);
+const URL_ONLY = new RegExp(`^${URL_CHARS}*$`);
+const URL_LOOKBACK = 256;
 
 // --- Layer 3: High-entropy strings ---
 // Only fires when the value is surrounded by quotes or follows an = sign.
@@ -178,14 +194,26 @@ export class SecretDetector implements Detector {
     }
 
     // Layer 2: key-value heuristic
-    KV_PATTERN.lastIndex = 0;
+    KEY_PATTERN.lastIndex = 0;
     let match: RegExpExecArray | null;
-    while ((match = KV_PATTERN.exec(text)) !== null) {
-      const key = match[1] ?? '';
-      const value = match[2] ?? match[3] ?? match[4] ?? '';
-      if (!isSecretKeyName(key)) continue;
+    while ((match = KEY_PATTERN.exec(text)) !== null) {
+      if (!isSecretKeyName(match[1] ?? '')) continue;
+      VALUE_PATTERN.lastIndex = KEY_PATTERN.lastIndex;
+      const found = VALUE_PATTERN.exec(text);
+      if (!found) continue;
+      KEY_PATTERN.lastIndex = VALUE_PATTERN.lastIndex;
+      const before = text.slice(Math.max(0, match.index - URL_LOOKBACK), match.index);
+      if (
+        IN_HTTP_URL.test(before) &&
+        URL_ONLY.test(text.slice(match.index, KEY_PATTERN.lastIndex))
+      ) {
+        continue;
+      }
+      const value = found[1] ?? found[2] ?? found[3] ?? '';
+      const valueStart = found.index + (found[3] === undefined ? 1 : 0);
+      // Already a placeholder (`api_key="«Secret_1»"`): scrubbing it again would mint a second one.
+      if (placeholderTokensIn(value)[0] === value) continue;
 
-      const valueStart = match.index + match[0].lastIndexOf(value);
       raw.push({
         category: 'Secret',
         span: [valueStart, valueStart + value.length],

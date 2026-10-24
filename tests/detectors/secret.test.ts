@@ -59,6 +59,128 @@ test('detects password via key-value pattern', (t) => {
   t.true(findings.length >= 1);
 });
 
+test('detects a KEY=value pair that follows a non-secret `word:` lead-in', (t) => {
+  for (const input of [
+    'found: API_KEY=hunter2hunter2',
+    'config:\nDB_PASSWORD=hunter2hunter2',
+    'config:\r\nDB_PASSWORD=hunter2hunter2',
+    'config:\n  nested:\n    secret: hunter2hunter2',
+    'note: see config: TOKEN=hunter2hunter2',
+    'env:\n  API_KEY: hunter2hunter2',
+  ]) {
+    const findings = detector.detect(input);
+    t.is(findings.length, 1, input);
+    t.is(findings[0]?.value, 'hunter2hunter2', input);
+  }
+});
+
+test('detects a secret on the line after its own key', (t) => {
+  for (const input of [
+    'password:\n  correcthorsebatterystaple',
+    'password:\r\n  correcthorsebatterystaple',
+    'password =\n  correcthorsebatterystaple',
+  ]) {
+    const findings = detector.detect(input);
+    t.is(findings.length, 1, input);
+    t.is(findings[0]?.value, 'correcthorsebatterystaple', input);
+  }
+});
+
+test('does not flag the line after a non-secret key', (t) => {
+  t.is(detector.detect('notes:\nplain-words-only-here').length, 0);
+});
+
+test('does not mint a second placeholder for an already-scrubbed quoted value', (t) => {
+  t.is(detector.detect('api_key="«Secret_1»"').length, 0);
+  const once = scrub({ content: 'found: API_KEY="hunter2hunter2"', sessionMap: {} });
+  const twice = scrub({ content: once.scrubbedContent, sessionMap: once.sessionMap });
+  t.is(once.scrubbedContent, 'found: API_KEY="«Secret_1»"');
+  t.is(twice.scrubbedContent, once.scrubbedContent);
+});
+
+test('still redacts a quoted secret that only looks like a placeholder', (t) => {
+  for (const [input, value] of [
+    ['password = "«hunter2hunter2»"', '«hunter2hunter2»'],
+    ['api_key="«s3cr3tvalu3x9»"', '«s3cr3tvalu3x9»'],
+    ['api_key="«Secret_x»"', '«Secret_x»'],
+    ['api_key="«Secret_1» and more text"', '«Secret_1» and more text'],
+  ] as const) {
+    const findings = detector.detect(input);
+    t.is(findings.length, 1, input);
+    t.is(findings[0]?.value, value, input);
+  }
+});
+
+test('detects a KEY=value pair that follows a character other than whitespace', (t) => {
+  const pw = 'Zq8C3HczEdpYwvwux!x9';
+  for (const input of [
+    `\`DB_PASSWORD=${pw}\``,
+    `(password: ${pw})`,
+    `$password = "${pw}"`,
+    `@password = "${pw}"`,
+    `user=bob&password=${pw}`,
+    `curl -d "user=bob&password=${pw}" https://example.com/login`,
+    `?password=${pw}`,
+    `<password=${pw}>`,
+    `|password=${pw}|`,
+    `env/API_KEY=${pw}`,
+    `密码：password=${pw}`,
+    `🔑password=${pw}`,
+    `postgres://db.example.com/app?password=${pw}`,
+  ]) {
+    const findings = detector.detect(input);
+    t.is(findings.length, 1, input);
+    t.is(findings[0]?.value, pw, input);
+  }
+});
+
+test('does not read a key out of the middle of a longer name', (t) => {
+  t.is(detector.detect('max-connections=1234567890').length, 0);
+  t.is(detector.detect('server.port=1234567890').length, 0);
+});
+
+test('leaves a key inside an http(s) URL to the URL detector', (t) => {
+  for (const input of [
+    'https://api.example.com/v1?token=abcdefghijklmnop',
+    'http://api.example.com/v1?a=1&password=abcdefghijklmnop',
+    'https://example.com/?a=1,token=abcdefghijklmnop',
+  ]) {
+    t.is(detector.detect(input).length, 0, input);
+  }
+});
+
+test('still finds a secret that comes after a URL rather than inside it', (t) => {
+  for (const input of [
+    'https://example.com/?a=1 token=abcdefghijklmnop',
+    'https://example.com/?a=1\ttoken=abcdefghijklmnop',
+    'https://example.com/?a=1\ntoken=abcdefghijklmnop',
+    'see https://example.com/x, then token=abcdefghijklmnop',
+    '(https://example.com/?a=1) token=abcdefghijklmnop',
+    // The key runs on from the URL, but its value comes after the URL has ended.
+    'https://example.com/v1,token: abcdefghijklmnop',
+    'https://example.com/v1;password: abcdefghijklmnop',
+    'https://example.com/v1,token="abcdefghijklmnop"',
+    'https://example.com/v1?token="abcdefghijklmnop"',
+    'https://example.com/v1?a=1&password: "abcdefghijklmnop"',
+    // Characters the URL detector does not treat as part of a URL end it, so a key glued on is not in it.
+    'https://example.com/a"token=abcdefghijklmnop"',
+    'https://example.com/a|token=abcdefghijklmnop',
+    'https://example.com/a?x=1#frag{token=abcdefghijklmnop}',
+  ]) {
+    const findings = detector.detect(input);
+    t.is(findings.length, 1, input);
+    t.is(findings[0]?.value, 'abcdefghijklmnop', input);
+  }
+});
+
+test('a secret after `&` is redacted next to an email on one line', (t) => {
+  const result = scrub({
+    content: 'user=bob@example.com&password=Zq8C3HczEdpYwvwux!x9',
+    sessionMap: {},
+  });
+  t.is(result.scrubbedContent, 'user=«Email_1»&password=«Secret_1»');
+});
+
 // --- Positive Cases: High Entropy ---
 
 test('detects high-entropy base64 string in quotes', (t) => {
@@ -306,6 +428,12 @@ test('detects an upper-case Bearer scheme', (t) => {
 test('scans pathological key-value input in linear time', (t) => {
   for (const input of [
     ` ${'a='.repeat(50_000)}`,
+    `found: ${'a='.repeat(50_000)}`,
+    'found: x=aaaaaaaa\n'.repeat(20_000),
+    'a:'.repeat(50_000),
+    'k:'.repeat(100_000),
+    '::ffff:'.repeat(140_000),
+    '`a:b`'.repeat(50_000),
     `password: ${'!'.repeat(100_000)}`,
     `password="${'a'.repeat(100_000)}`,
     'sk-'.repeat(30_000),
