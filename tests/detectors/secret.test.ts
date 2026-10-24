@@ -140,12 +140,31 @@ test('does not read a key out of the middle of a longer name', (t) => {
 });
 
 test('leaves a key inside an http(s) URL to the URL detector', (t) => {
-  t.is(detector.detect('https://api.example.com/v1?token=abcdefghijklmnop').length, 0);
-  t.is(detector.detect('http://api.example.com/v1?a=1&password=abcdefghijklmnop').length, 0);
-  t.is(
-    detector.detect('see https://example.com/x, then token=abcdefghijklmnop')[0]?.value,
-    'abcdefghijklmnop',
-  );
+  for (const input of [
+    'https://api.example.com/v1?token=abcdefghijklmnop',
+    'http://api.example.com/v1?a=1&password=abcdefghijklmnop',
+    'https://example.com/?a=1,token=abcdefghijklmnop',
+  ]) {
+    t.is(detector.detect(input).length, 0, input);
+  }
+});
+
+test('still finds a secret that comes after a URL rather than inside it', (t) => {
+  for (const input of [
+    'https://example.com/?a=1 token=abcdefghijklmnop',
+    'https://example.com/?a=1\ttoken=abcdefghijklmnop',
+    'https://example.com/?a=1\ntoken=abcdefghijklmnop',
+    'see https://example.com/x, then token=abcdefghijklmnop',
+    '(https://example.com/?a=1) token=abcdefghijklmnop',
+    // Characters the URL detector does not treat as part of a URL end it, so a key glued on is not in it.
+    'https://example.com/a"token=abcdefghijklmnop"',
+    'https://example.com/a|token=abcdefghijklmnop',
+    'https://example.com/a?x=1#frag{token=abcdefghijklmnop}',
+  ]) {
+    const findings = detector.detect(input);
+    t.is(findings.length, 1, input);
+    t.is(findings[0]?.value, 'abcdefghijklmnop', input);
+  }
 });
 
 test('a secret after `&` is redacted next to an email on one line', (t) => {
