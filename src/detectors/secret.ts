@@ -119,7 +119,7 @@ const WEAK_KEY_WORDS = new Set([
 const KEY_COMPOUND =
   /^(?:api|secret|private|access|master|signing|encryption|auth|session|ssh|license|app|client|service|hmac|aws)keys?$/;
 
-function isSecretKeyName(key: string): boolean {
+export function isSecretKeyName(key: string): boolean {
   const name = key.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase();
   if (STRONG_KEY_WORD.test(name)) return true;
   return name.split(/[^a-z]+/).some((word) => WEAK_KEY_WORDS.has(word) || KEY_COMPOUND.test(word));

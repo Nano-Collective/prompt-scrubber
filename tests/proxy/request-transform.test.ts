@@ -1,4 +1,5 @@
 import test from 'ava';
+import { scrub } from '../../src/core/scrub.js';
 import {
   detectProvider,
   scrubAnthropicMessagesBody,
@@ -625,4 +626,155 @@ test('scrubAnthropicMessagesBody leaves thinking blocks alone, they hold placeho
     ],
   };
   t.is(scrubAnthropicMessagesBody(body, mark).body, body);
+});
+
+/** The real scrubber, shaped like the callback the proxy hands the transforms. */
+function realScrub(sessionMap = {}) {
+  return (text: string) => {
+    const result = scrub({ content: text, sessionMap });
+    return { content: result.scrubbedContent as string, entities: result.stats.totalEntities };
+  };
+}
+
+const PASSWORD = 'Zq8Cs3cr3tPwx9Y2!kLmN';
+
+test('scrubs a secret under a secret-looking key in OpenAI tool-call arguments', (t) => {
+  const call = (args: unknown) => ({
+    role: 'assistant',
+    tool_calls: [{ id: '1', type: 'function', function: { name: 'login', arguments: args } }],
+  });
+  const result = scrubOpenAIChatBody(
+    {
+      model: 'gpt-4',
+      messages: [
+        call(JSON.stringify({ username: 'bob', password: PASSWORD })),
+        call(JSON.stringify({ config: { api_key: PASSWORD }, tokens: [PASSWORD, `${PASSWORD}2`] })),
+        {
+          role: 'assistant',
+          function_call: { name: 'x', arguments: `{"client_secret":"${PASSWORD}"}` },
+        },
+      ],
+      metadata: { auth_token: PASSWORD, ticket: 'ticket-12345678' },
+    },
+    realScrub(),
+  );
+  const out = result.body as {
+    messages: Array<{
+      tool_calls?: Array<{ function: { arguments: string } }>;
+      function_call?: { arguments: string };
+    }>;
+    metadata: unknown;
+  };
+  t.is(
+    out.messages[0]?.tool_calls?.[0]?.function.arguments,
+    '{"username":"bob","password":"«Secret_1»"}',
+  );
+  t.is(
+    out.messages[1]?.tool_calls?.[0]?.function.arguments,
+    '{"config":{"api_key":"«Secret_1»"},"tokens":["«Secret_1»","«Secret_2»"]}',
+  );
+  t.is(out.messages[2]?.function_call?.arguments, '{"client_secret":"«Secret_1»"}');
+  t.deepEqual(out.metadata, { auth_token: '«Secret_1»', ticket: 'ticket-12345678' });
+  t.is(result.entities, 6);
+  t.false(JSON.stringify(result.body).includes(PASSWORD.slice(0, 12)));
+});
+
+test('scrubs a secret under a secret-looking key in Anthropic tool input and metadata', (t) => {
+  const result = scrubAnthropicMessagesBody(
+    {
+      model: 'claude',
+      max_tokens: 5,
+      metadata: { user_id: 'u-1', api_key: PASSWORD },
+      messages: [
+        {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 't1',
+              name: 'login',
+              input: { user: 'bob', password: PASSWORD },
+            },
+          ],
+        },
+      ],
+    },
+    realScrub(),
+  );
+  const out = result.body as {
+    metadata: unknown;
+    messages: Array<{ content: Array<{ input: unknown }> }>;
+  };
+  t.deepEqual(out.messages[0]?.content[0]?.input, { user: 'bob', password: '«Secret_1»' });
+  t.deepEqual(out.metadata, { user_id: 'u-1', api_key: '«Secret_1»' });
+  t.is(result.entities, 2);
+});
+
+test('a secret under a key and the same secret in free text get one placeholder', (t) => {
+  const result = scrubOpenAIChatBody(
+    {
+      model: 'gpt-4',
+      messages: [
+        { role: 'user', content: `my password: ${PASSWORD}` },
+        {
+          role: 'assistant',
+          tool_calls: [
+            {
+              id: '1',
+              type: 'function',
+              function: { name: 'login', arguments: JSON.stringify({ password: PASSWORD }) },
+            },
+          ],
+        },
+      ],
+    },
+    realScrub(),
+  );
+  const out = result.body as {
+    messages: Array<{ content?: string; tool_calls?: Array<{ function: { arguments: string } }> }>;
+  };
+  t.is(out.messages[0]?.content, 'my password: «Secret_1»');
+  t.is(out.messages[1]?.tool_calls?.[0]?.function.arguments, '{"password":"«Secret_1»"}');
+});
+
+test('leaves tool-call arguments under keys that do not name a secret untouched', (t) => {
+  const body = {
+    model: 'gpt-4',
+    messages: [
+      {
+        role: 'assistant',
+        tool_calls: [
+          {
+            id: '1',
+            type: 'function',
+            function: {
+              name: 'search',
+              arguments: JSON.stringify({ city: 'Berlin', title: 'a longer plain sentence here' }),
+            },
+          },
+        ],
+      },
+    ],
+  };
+  const result = scrubOpenAIChatBody(body, realScrub());
+  t.is(result.body, body);
+  t.is(result.entities, 0);
+});
+
+test('a short value, or one with both quote kinds, under a secret-looking key does not break', (t) => {
+  const args = { password: 'abc', token: `it's a "quoted" value` };
+  const body = {
+    model: 'gpt-4',
+    messages: [
+      {
+        role: 'assistant',
+        tool_calls: [
+          { id: '1', type: 'function', function: { name: 'f', arguments: JSON.stringify(args) } },
+        ],
+      },
+    ],
+  };
+  const result = scrubOpenAIChatBody(body, realScrub());
+  t.is(result.body, body);
+  t.is(result.entities, 0);
 });

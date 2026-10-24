@@ -1,3 +1,4 @@
+import { isSecretKeyName } from '../detectors/secret.js';
 import { type JsonTextTransform, mapJsonStringField, mapJsonStrings } from './json-scrub.js';
 import type { ProxyProvider } from './types.js';
 
@@ -535,12 +536,34 @@ function scrubText(value: unknown, scrub: ScrubFn, add: Accumulate): unknown {
   return content;
 }
 
-/** Adapt the proxy's scrub callback to the shape `json-scrub` expects. */
+/**
+ * Adapt the proxy's scrub callback to the shape `json-scrub` expects. A string under a
+ * key that names a secret (`"password": "..."`) is scrubbed with its key in front, as
+ * `password="..."`, which is what the key-value heuristic recognises: on its own the value
+ * is just text and nothing marks it as a secret.
+ */
 function asJsonTransform(scrub: ScrubFn): JsonTextTransform {
-  return (text) => {
-    const { content, entities } = scrub(text);
+  return (text, key) => {
+    const { content, entities } = key ? scrubUnderKey(scrub, key, text) : scrub(text);
     return { content, count: entities };
   };
+}
+
+function scrubUnderKey(scrub: ScrubFn, key: string, text: string) {
+  // The heuristic reads a plain name and a value on one line with no quote of its own inside.
+  const quote = text.includes('"') ? "'" : '"';
+  if (
+    !isSecretKeyName(key) ||
+    !/^[\w.-]+$/.test(key) ||
+    /[\r\n]/.test(text) ||
+    text.includes(quote)
+  ) {
+    return scrub(text);
+  }
+  const prefix = `${key}=${quote}`;
+  const result = scrub(`${prefix}${text}${quote}`);
+  if (!result.content.startsWith(prefix) || !result.content.endsWith(quote)) return scrub(text);
+  return { content: result.content.slice(prefix.length, -1), entities: result.entities };
 }
 
 /**

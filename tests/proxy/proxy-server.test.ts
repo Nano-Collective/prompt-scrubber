@@ -1254,6 +1254,69 @@ test('scrubs a tool-calling OpenAI conversation end to end', async (t) => {
   }
 });
 
+test('scrubs a password in tool-call arguments and restores it in the reply', async (t) => {
+  const password = 'Zq8Cs3cr3tPwx9Y2!kLmN';
+  const upstream = await startFakeUpstream((_, body, res) => {
+    t.false(body.includes(password), 'no raw password reaches the upstream');
+    t.true(body.includes('«Secret_1»'));
+    jsonResponse(res, 200, {
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: 'assistant',
+            content: null,
+            tool_calls: [
+              {
+                id: '2',
+                type: 'function',
+                function: { name: 'login', arguments: '{"password":"«Secret_1»"}' },
+              },
+            ],
+          },
+        },
+      ],
+    });
+  });
+
+  const proxy = await withProxy(upstream);
+
+  try {
+    const res = await makeRequest(`${proxy.url}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-4o',
+        messages: [
+          { role: 'user', content: 'Log me in.' },
+          {
+            role: 'assistant',
+            tool_calls: [
+              {
+                id: '1',
+                type: 'function',
+                function: { name: 'login', arguments: JSON.stringify({ user: 'bob', password }) },
+              },
+            ],
+          },
+          { role: 'tool', tool_call_id: '1', content: 'ok' },
+        ],
+      }),
+    });
+
+    t.is(res.status, 200);
+    const parsed = JSON.parse(res.body) as {
+      choices: Array<{ message: { tool_calls: Array<{ function: { arguments: string } }> } }>;
+    };
+    t.deepEqual(JSON.parse(parsed.choices[0]?.message.tool_calls[0]?.function.arguments ?? '{}'), {
+      password,
+    });
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+});
+
 test('scrubs an Anthropic system prompt and tool blocks end to end', async (t) => {
   const upstream = await startFakeUpstream((_, body, res) => {
     t.false(body.includes('john@example.com'), 'no raw address reaches the upstream');
