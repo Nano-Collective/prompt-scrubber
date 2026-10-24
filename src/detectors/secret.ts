@@ -126,13 +126,23 @@ function isSecretKeyName(key: string): boolean {
   return name.split(/[^a-z]+/).some((word) => WEAK_KEY_WORDS.has(word) || KEY_COMPOUND.test(word));
 }
 
-// The key may be quoted (`"api_key": ...` in JSON or YAML). A quoted value runs to its
-// closing quote, so a passphrase with spaces is taken whole; an unquoted one stops at
-// whitespace and at brackets, quotes, commas and semicolons, but keeps `!`, `#`, `$` and
-// the other punctuation a password is allowed to contain. `&` and `?` are left out so a
-// value in a query string stops where the next parameter starts.
-const KV_PATTERN =
-  /(?:^|[\s,;{])["']?([a-zA-Z0-9_.-]+)["']?\s*[:=]\s*(?:"([^"\r\n]{8,})"|'([^'\r\n]{8,})'|([A-Za-z0-9+/\-_.~@!#$%^*=:]{8,}))/gm;
+// A key is a run of name characters that does not continue a longer one, so it is found after
+// whitespace, a backtick, a bracket, `$`, `@`, `&` or `?` just the same (`(password: ...)`,
+// `$password = ...`, `user=bob&password=...`). It may be quoted (`"api_key": ...` in JSON or
+// YAML). Reading the key on its own, then the value only for a secret-looking key, keeps the
+// scan moving on after each separator, so a pair inside another key's value is found too.
+const KEY_PATTERN = /(?<![A-Za-z0-9_.-])["']?([a-zA-Z0-9_.-]+)["']?\s*[:=]\s*/g;
+
+// A quoted value runs to its closing quote, so a passphrase with spaces is taken whole; an
+// unquoted one stops at whitespace and at brackets, quotes, commas and semicolons, but keeps
+// `!`, `#`, `$` and the other punctuation a password is allowed to contain. `&` and `?` are
+// left out so a value in a query string stops where the next parameter starts.
+const VALUE_PATTERN = /"([^"\r\n]{8,})"|'([^'\r\n]{8,})'|([A-Za-z0-9+/\-_.~@!#$%^*=:]{8,})/y;
+
+// A key inside an http(s) URL (`?token=...`) is left to the URL detector, which redacts the
+// whole URL; reporting the value as well would split the URL into two placeholders.
+const IN_HTTP_URL = /https?:\/\/\S*$/i;
+const URL_LOOKBACK = 256;
 
 // --- Layer 3: High-entropy strings ---
 // Only fires when the value is surrounded by quotes or follows an = sign.
@@ -179,18 +189,18 @@ export class SecretDetector implements Detector {
     }
 
     // Layer 2: key-value heuristic
-    KV_PATTERN.lastIndex = 0;
+    KEY_PATTERN.lastIndex = 0;
     let match: RegExpExecArray | null;
-    while ((match = KV_PATTERN.exec(text)) !== null) {
-      const key = match[1] ?? '';
-      const value = match[2] ?? match[3] ?? match[4] ?? '';
-      const valueStart = match.index + match[0].lastIndexOf(value);
-      if (!isSecretKeyName(key)) {
-        // The value of a non-secret key may itself begin with a `KEY=value` pair
-        // (`found: API_KEY=...`, `config:\nDB_PASSWORD=...`): scan it again.
-        KV_PATTERN.lastIndex = Math.max(match.index + 1, valueStart - 1);
-        continue;
-      }
+    while ((match = KEY_PATTERN.exec(text)) !== null) {
+      if (!isSecretKeyName(match[1] ?? '')) continue;
+      const before = text.slice(Math.max(0, match.index - URL_LOOKBACK), match.index);
+      if (IN_HTTP_URL.test(before)) continue;
+      VALUE_PATTERN.lastIndex = KEY_PATTERN.lastIndex;
+      const found = VALUE_PATTERN.exec(text);
+      if (!found) continue;
+      KEY_PATTERN.lastIndex = VALUE_PATTERN.lastIndex;
+      const value = found[1] ?? found[2] ?? found[3] ?? '';
+      const valueStart = found.index + (found[3] === undefined ? 1 : 0);
       // Already a placeholder (`api_key="«Secret_1»"`): scrubbing it again would mint a second one.
       if (placeholderTokensIn(value)[0] === value) continue;
 
