@@ -141,11 +141,12 @@ const KEY_PATTERN = /(?<![A-Za-z0-9_.-])["']?([a-zA-Z0-9_.-]+)["']?\s*[:=]\s*/g;
 const VALUE_PATTERN = /"([^"\r\n]{8,})"|'([^'\r\n]{8,})'|([A-Za-z0-9+/\-_.~@!#$%^*=:]{8,})/y;
 
 // A key inside an http(s) URL (`?token=...`) is left to the URL detector, which redacts the
-// whole URL; reporting the value as well would split the URL into two placeholders. The key
-// counts as inside only when URL characters run unbroken from `http(s)://` up to it, which is
-// the span the URL detector takes: a space, a quote or a brace ends the URL, so a secret after
-// one is still found.
-const IN_HTTP_URL = new RegExp(String.raw`https?://${URL_CHARS}*$`);
+// whole URL; reporting the value as well would split the URL into two placeholders. The pair
+// counts as inside only when URL characters run unbroken from `http(s)://` through the end of
+// its value, which is the span the URL detector takes: a space, a quote or a brace ends the
+// URL, so a value after one (`https://x.io/a,token: ...`) is still found.
+const IN_HTTP_URL = new RegExp(`https?://${URL_CHARS}*$`);
+const URL_ONLY = new RegExp(`^${URL_CHARS}*$`);
 const URL_LOOKBACK = 256;
 
 // --- Layer 3: High-entropy strings ---
@@ -197,12 +198,17 @@ export class SecretDetector implements Detector {
     let match: RegExpExecArray | null;
     while ((match = KEY_PATTERN.exec(text)) !== null) {
       if (!isSecretKeyName(match[1] ?? '')) continue;
-      const before = text.slice(Math.max(0, match.index - URL_LOOKBACK), match.index);
-      if (IN_HTTP_URL.test(before)) continue;
       VALUE_PATTERN.lastIndex = KEY_PATTERN.lastIndex;
       const found = VALUE_PATTERN.exec(text);
       if (!found) continue;
       KEY_PATTERN.lastIndex = VALUE_PATTERN.lastIndex;
+      const before = text.slice(Math.max(0, match.index - URL_LOOKBACK), match.index);
+      if (
+        IN_HTTP_URL.test(before) &&
+        URL_ONLY.test(text.slice(match.index, KEY_PATTERN.lastIndex))
+      ) {
+        continue;
+      }
       const value = found[1] ?? found[2] ?? found[3] ?? '';
       const valueStart = found.index + (found[3] === undefined ? 1 : 0);
       // Already a placeholder (`api_key="«Secret_1»"`): scrubbing it again would mint a second one.

@@ -156,6 +156,12 @@ test('still finds a secret that comes after a URL rather than inside it', (t) =>
     'https://example.com/?a=1\ntoken=abcdefghijklmnop',
     'see https://example.com/x, then token=abcdefghijklmnop',
     '(https://example.com/?a=1) token=abcdefghijklmnop',
+    // The key runs on from the URL, but its value comes after the URL has ended.
+    'https://example.com/v1,token: abcdefghijklmnop',
+    'https://example.com/v1;password: abcdefghijklmnop',
+    'https://example.com/v1,token="abcdefghijklmnop"',
+    'https://example.com/v1?token="abcdefghijklmnop"',
+    'https://example.com/v1?a=1&password: "abcdefghijklmnop"',
     // Characters the URL detector does not treat as part of a URL end it, so a key glued on is not in it.
     'https://example.com/a"token=abcdefghijklmnop"',
     'https://example.com/a|token=abcdefghijklmnop',
