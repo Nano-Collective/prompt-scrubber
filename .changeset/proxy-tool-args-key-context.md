@@ -1,0 +1,5 @@
+---
+"@nanocollective/prompt-scrub": patch
+---
+
+Fixed the proxy forwarding a secret unscrubbed when it sat under a credential key in tool-call arguments. A string under a key whose name ends in `password`, `passwd`, `passphrase`, `secret`, `token` or `credential`(s), or in `key` after `api`, `access`, `private`, `secret`, `signing`, `encryption`, `master`, `ssh`, `auth` or `session` (`password`, `db_password`, `access_token`, `client_secret`, `x-api-key`, `privateKey`), is now replaced whole with a placeholder, whatever it looks like, and restored in the reply. This covers OpenAI `tool_calls[].function.arguments` and `function_call.arguments`, Anthropic `tool_use.input`, and a request's `metadata`, including nested objects and arrays. Generic names such as `key`, `access`, `auth`, `api`, `private`, `pass`, `pwd`, `cred`, `tokenizer`, `token_type` and `secret_name` are left alone, since a tool call uses them for ordinary values. Turning the secret detector off with `--disable SecretDetector` turns this off too.

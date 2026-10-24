@@ -1254,6 +1254,97 @@ test('scrubs a tool-calling OpenAI conversation end to end', async (t) => {
   }
 });
 
+const TOOL_CALL_PASSWORD = 'Zq8Cs3cr3tPwx9Y2!kLmN';
+
+/**
+ * Sends a tool call carrying a secret under `key` through a proxy. The upstream answers with the
+ * arguments it received, so the result holds what the upstream saw and what the client got back.
+ */
+async function toolCallRoundTrip(key: string, scrubOptions?: ProxyOptions['scrubOptions']) {
+  let seen = '';
+  const upstream = await startFakeUpstream((_, body, res) => {
+    seen = body;
+    const received = JSON.parse(body) as {
+      messages: Array<{ tool_calls?: Array<{ function: { arguments: string } }> }>;
+    };
+    const args = received.messages.find((m) => m.tool_calls)?.tool_calls?.[0]?.function.arguments;
+    jsonResponse(res, 200, {
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: 'assistant',
+            content: null,
+            tool_calls: [
+              { id: '2', type: 'function', function: { name: 'login', arguments: args } },
+            ],
+          },
+        },
+      ],
+    });
+  });
+  const proxy = await withProxy(upstream, { scrubOptions });
+  try {
+    const res = await makeRequest(`${proxy.url}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-4o',
+        messages: [
+          { role: 'user', content: 'Log me in.' },
+          {
+            role: 'assistant',
+            tool_calls: [
+              {
+                id: '1',
+                type: 'function',
+                function: {
+                  name: 'login',
+                  arguments: JSON.stringify({ user: 'bob', [key]: TOOL_CALL_PASSWORD }),
+                },
+              },
+            ],
+          },
+          { role: 'tool', tool_call_id: '1', content: 'ok' },
+        ],
+      }),
+    });
+    const parsed = JSON.parse(res.body) as {
+      choices: Array<{ message: { tool_calls: Array<{ function: { arguments: string } }> } }>;
+    };
+    const reply = JSON.parse(parsed.choices[0]?.message.tool_calls[0]?.function.arguments ?? '{}');
+    return { status: res.status, seen, reply: reply as Record<string, unknown> };
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+}
+
+test('scrubs a password in tool-call arguments and restores it in the reply', async (t) => {
+  const { status, seen, reply } = await toolCallRoundTrip('password');
+  t.is(status, 200);
+  t.false(seen.includes(TOOL_CALL_PASSWORD), 'no raw password reaches the upstream');
+  t.true(seen.includes('«Secret_1»'));
+  t.deepEqual(reply, { user: 'bob', password: TOOL_CALL_PASSWORD });
+});
+
+test('scrubs the password even when another detector matches its key name', async (t) => {
+  const { seen, reply } = await toolCallRoundTrip('Password', { enable: 'NameDetector' });
+  t.false(seen.includes(TOOL_CALL_PASSWORD), 'no raw password reaches the upstream');
+  t.deepEqual(reply, { user: 'bob', Password: TOOL_CALL_PASSWORD });
+});
+
+test('leaves a field that is not a credential alone in tool-call arguments', async (t) => {
+  const { seen, reply } = await toolCallRoundTrip('key');
+  t.true(seen.includes(TOOL_CALL_PASSWORD), 'a plain key field is forwarded as it was');
+  t.deepEqual(reply, { user: 'bob', key: TOOL_CALL_PASSWORD });
+});
+
+test('leaves a password in tool-call arguments alone when the secret detector is disabled', async (t) => {
+  const { seen } = await toolCallRoundTrip('password', { disable: 'SecretDetector' });
+  t.true(seen.includes(TOOL_CALL_PASSWORD));
+});
+
 test('scrubs an Anthropic system prompt and tool blocks end to end', async (t) => {
   const upstream = await startFakeUpstream((_, body, res) => {
     t.false(body.includes('john@example.com'), 'no raw address reaches the upstream');
