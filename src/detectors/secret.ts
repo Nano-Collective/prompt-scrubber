@@ -119,7 +119,7 @@ const WEAK_KEY_WORDS = new Set([
 const KEY_COMPOUND =
   /^(?:api|secret|private|access|master|signing|encryption|auth|session|ssh|license|app|client|service|hmac|aws)keys?$/;
 
-export function isSecretKeyName(key: string): boolean {
+function isSecretKeyName(key: string): boolean {
   const name = key.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase();
   if (STRONG_KEY_WORD.test(name)) return true;
   return name.split(/[^a-z]+/).some((word) => WEAK_KEY_WORDS.has(word) || KEY_COMPOUND.test(word));
@@ -243,3 +243,38 @@ export class SecretDetector implements Detector {
     return findings;
   }
 }
+
+// In structured data (tool-call arguments, `metadata`) the key names the field outright, so
+// only a name that ends in a credential word counts. `key`, `access`, `auth`, `api` or
+// `private` on their own are ordinary field names there (`{"key": "logging.level"}`), where
+// in prose `key: ...` is a good hint. `secret_name`, `token_type` and `tokenizer` do not end in
+// one, and `pwd` is a working directory as often as a password.
+const CREDENTIAL_KEY =
+  /(?:token|secret|passw(?:or)?d|passphrase|credentials?|(?:api|access|private|secret|signing|encryption|master|ssh|auth|session)[_-]?key)$/;
+
+export function isCredentialKeyName(key: string): boolean {
+  return CREDENTIAL_KEY.test(key.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase());
+}
+
+/**
+ * Reports its whole input as one secret. The proxy adds it for a string that sits under a
+ * credential key, where the key already says the value is a secret, so the value is redacted
+ * whatever it looks like (a short password, one holding both quote kinds, a passphrase with
+ * spaces) and no other detector can change what is redacted.
+ */
+export const WHOLE_VALUE_SECRET_DETECTOR: Detector = {
+  name: 'WholeValueSecret',
+  detect(text: string): Finding[] {
+    if (text.length === 0) return [];
+    return [
+      {
+        category: 'Secret',
+        span: [0, text.length],
+        value: text,
+        placeholderPrefix: 'Secret',
+        confidence: KEY_NAME_CONFIDENCE,
+        method: 'key-name',
+      },
+    ];
+  },
+};

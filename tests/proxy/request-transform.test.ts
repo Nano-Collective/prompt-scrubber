@@ -1,11 +1,13 @@
 import test from 'ava';
 import { scrub } from '../../src/core/scrub.js';
+import { isCredentialKeyName, WHOLE_VALUE_SECRET_DETECTOR } from '../../src/detectors/secret.js';
 import {
   detectProvider,
   scrubAnthropicMessagesBody,
   scrubChatBody,
   scrubOpenAIChatBody,
 } from '../../src/proxy/request-transform.js';
+import type { ScrubOptions } from '../../src/types/index.js';
 
 test('detectProvider recognises OpenAI chat completions paths', (t) => {
   t.is(detectProvider('/v1/chat/completions'), 'openai');
@@ -629,9 +631,13 @@ test('scrubAnthropicMessagesBody leaves thinking blocks alone, they hold placeho
 });
 
 /** The real scrubber, shaped like the callback the proxy hands the transforms. */
-function realScrub(sessionMap = {}) {
-  return (text: string) => {
-    const result = scrub({ content: text, sessionMap });
+function realScrub(options: ScrubOptions = {}, sessionMap = {}) {
+  return (text: string, asSecret?: boolean) => {
+    const result = scrub({
+      content: text,
+      sessionMap,
+      options: asSecret ? { ...options, customDetectors: [WHOLE_VALUE_SECRET_DETECTOR] } : options,
+    });
     return { content: result.scrubbedContent as string, entities: result.stats.totalEntities };
   };
 }
@@ -648,7 +654,9 @@ test('scrubs a secret under a secret-looking key in OpenAI tool-call arguments',
       model: 'gpt-4',
       messages: [
         call(JSON.stringify({ username: 'bob', password: PASSWORD })),
-        call(JSON.stringify({ config: { api_key: PASSWORD }, tokens: [PASSWORD, `${PASSWORD}2`] })),
+        call(
+          JSON.stringify({ config: { api_key: PASSWORD }, auth_token: [PASSWORD, `${PASSWORD}2`] }),
+        ),
         {
           role: 'assistant',
           function_call: { name: 'x', arguments: `{"client_secret":"${PASSWORD}"}` },
@@ -671,7 +679,7 @@ test('scrubs a secret under a secret-looking key in OpenAI tool-call arguments',
   );
   t.is(
     out.messages[1]?.tool_calls?.[0]?.function.arguments,
-    '{"config":{"api_key":"«Secret_1»"},"tokens":["«Secret_1»","«Secret_2»"]}',
+    '{"config":{"api_key":"«Secret_1»"},"auth_token":["«Secret_1»","«Secret_2»"]}',
   );
   t.is(out.messages[2]?.function_call?.arguments, '{"client_secret":"«Secret_1»"}');
   t.deepEqual(out.metadata, { auth_token: '«Secret_1»', ticket: 'ticket-12345678' });
@@ -737,33 +745,9 @@ test('a secret under a key and the same secret in free text get one placeholder'
   t.is(out.messages[1]?.tool_calls?.[0]?.function.arguments, '{"password":"«Secret_1»"}');
 });
 
-test('leaves tool-call arguments under keys that do not name a secret untouched', (t) => {
-  const body = {
-    model: 'gpt-4',
-    messages: [
-      {
-        role: 'assistant',
-        tool_calls: [
-          {
-            id: '1',
-            type: 'function',
-            function: {
-              name: 'search',
-              arguments: JSON.stringify({ city: 'Berlin', title: 'a longer plain sentence here' }),
-            },
-          },
-        ],
-      },
-    ],
-  };
-  const result = scrubOpenAIChatBody(body, realScrub());
-  t.is(result.body, body);
-  t.is(result.entities, 0);
-});
-
-test('a short value, or one with both quote kinds, under a secret-looking key does not break', (t) => {
-  const args = { password: 'abc', token: `it's a "quoted" value` };
-  const body = {
+/** An OpenAI request whose only tool call carries these arguments. */
+function toolCallBody(args: Record<string, unknown>) {
+  return {
     model: 'gpt-4',
     messages: [
       {
@@ -774,6 +758,112 @@ test('a short value, or one with both quote kinds, under a secret-looking key do
       },
     ],
   };
+}
+
+/** The tool call's arguments after scrubbing, parsed. */
+function scrubbedArguments(args: Record<string, unknown>, options?: ScrubOptions) {
+  const result = scrubOpenAIChatBody(toolCallBody(args), realScrub(options));
+  const out = result.body as {
+    messages: Array<{ tool_calls: Array<{ function: { arguments: string } }> }>;
+  };
+  const parsed = JSON.parse(out.messages[0]?.tool_calls[0]?.function.arguments ?? '{}');
+  return { args: parsed as Record<string, unknown>, entities: result.entities };
+}
+
+test('leaves tool-call arguments under keys that do not name a credential untouched', (t) => {
+  for (const args of [
+    { city: 'Berlin', title: 'a longer plain sentence here' },
+    { key: 'logging.level', value: 'DEBUG' },
+    { access: 'read-only' },
+    { metadata: { key: 'user-12345' } },
+    { auth: 'bearer-style', api: 'v1-endpoint', private: 'yes-private', pass: 'second-pass' },
+    { cred: 'abcdefgh1234', pwd: 'working-dir' },
+    // Names that only contain a credential word, or describe a secret rather than hold one.
+    { tokenizer: 'cl100k_base', secretary: 'Ms Jones here', token_type: 'Bearer' },
+    { secret_name: 'prod-db', password_hint: 'first pet', max_tokens: '4096' },
+  ]) {
+    const body = toolCallBody(args);
+    const result = scrubOpenAIChatBody(body, realScrub());
+    t.is(result.body, body, JSON.stringify(args));
+    t.is(result.entities, 0, JSON.stringify(args));
+  }
+});
+
+test('redacts a value under a credential key whatever it looks like', (t) => {
+  for (const value of [
+    PASSWORD,
+    'abc',
+    `it's a "quoted" value`,
+    `p"a's${'x'.repeat(8)}`,
+    'two\nlines of passphrase',
+    'a long passphrase with spaces in it',
+  ]) {
+    const { args, entities } = scrubbedArguments({ password: value });
+    t.deepEqual(args, { password: '«Secret_1»' }, JSON.stringify(value));
+    t.is(entities, 1, JSON.stringify(value));
+  }
+});
+
+test('redacts a value under a credential key even when another detector matches the key', (t) => {
+  const { args, entities } = scrubbedArguments(
+    { Password: PASSWORD },
+    { enabledDetectors: ['NameDetector'] },
+  );
+  t.deepEqual(args, { Password: '«Secret_1»' });
+  t.is(entities, 1);
+});
+
+test('treats exactly the names that end in a credential word as credential keys', (t) => {
+  for (const key of [
+    'password',
+    'Password',
+    'db_password',
+    'passwd',
+    'passphrase',
+    'secret',
+    'client_secret',
+    'clientSecret',
+    'token',
+    'access_token',
+    'refreshToken',
+    'auth_token',
+    'credential',
+    'credentials',
+    'api_key',
+    'apiKey',
+    'x-api-key',
+    'access_key',
+    'privateKey',
+    'secret_key',
+    'session_key',
+  ]) {
+    t.true(isCredentialKeyName(key), key);
+  }
+  for (const key of [
+    'key',
+    'keys',
+    'access',
+    'auth',
+    'api',
+    'private',
+    'pass',
+    'pwd',
+    'cred',
+    'authorization',
+    'tokenizer',
+    'secretary',
+    'token_type',
+    'secret_name',
+    'password_hint',
+    'max_tokens',
+    'tokens',
+  ]) {
+    t.false(isCredentialKeyName(key), key);
+  }
+});
+
+test('leaves a placeholder under a credential key as it is', (t) => {
+  const body = toolCallBody({ password: '«Secret_1»' });
   const result = scrubOpenAIChatBody(body, realScrub());
   t.is(result.body, body);
   t.is(result.entities, 0);

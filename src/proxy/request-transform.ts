@@ -1,4 +1,5 @@
-import { isSecretKeyName } from '../detectors/secret.js';
+import { isCredentialKeyName } from '../detectors/secret.js';
+import { placeholderTokensIn } from '../session/session-manager.js';
 import { type JsonTextTransform, mapJsonStringField, mapJsonStrings } from './json-scrub.js';
 import type { ProxyProvider } from './types.js';
 
@@ -25,8 +26,11 @@ export interface ScrubOutcome {
   entities: number;
 }
 
-/** Scrub one string. Mirrors the signature `scrub()` is wrapped into. */
-type ScrubFn = (content: string) => { content: string; entities: number };
+/**
+ * Scrub one string. Mirrors the signature `scrub()` is wrapped into. `asSecret` says the
+ * whole string is a secret, whatever it looks like, and is redacted as one.
+ */
+type ScrubFn = (content: string, asSecret?: boolean) => { content: string; entities: number };
 
 /** Sink for the running replacement count. */
 type Accumulate = (n: number) => void;
@@ -537,33 +541,18 @@ function scrubText(value: unknown, scrub: ScrubFn, add: Accumulate): unknown {
 }
 
 /**
- * Adapt the proxy's scrub callback to the shape `json-scrub` expects. A string under a
- * key that names a secret (`"password": "..."`) is scrubbed with its key in front, as
- * `password="..."`, which is what the key-value heuristic recognises: on its own the value
- * is just text and nothing marks it as a secret.
+ * Adapt the proxy's scrub callback to the shape `json-scrub` expects. A string under a key
+ * that names a credential (`"password": "..."`) is a secret whatever it looks like, so it is
+ * redacted whole. A value that already carries a placeholder is left to the plain scrub, which
+ * keeps the token it holds.
  */
 function asJsonTransform(scrub: ScrubFn): JsonTextTransform {
   return (text, key) => {
-    const { content, entities } = key ? scrubUnderKey(scrub, key, text) : scrub(text);
+    const asSecret =
+      key !== undefined && isCredentialKeyName(key) && placeholderTokensIn(text).length === 0;
+    const { content, entities } = asSecret ? scrub(text, true) : scrub(text);
     return { content, count: entities };
   };
-}
-
-function scrubUnderKey(scrub: ScrubFn, key: string, text: string) {
-  // The heuristic reads a plain name and a value on one line with no quote of its own inside.
-  const quote = text.includes('"') ? "'" : '"';
-  if (
-    !isSecretKeyName(key) ||
-    !/^[\w.-]+$/.test(key) ||
-    /[\r\n]/.test(text) ||
-    text.includes(quote)
-  ) {
-    return scrub(text);
-  }
-  const prefix = `${key}=${quote}`;
-  const result = scrub(`${prefix}${text}${quote}`);
-  if (!result.content.startsWith(prefix) || !result.content.endsWith(quote)) return scrub(text);
-  return { content: result.content.slice(prefix.length, -1), entities: result.entities };
 }
 
 /**
