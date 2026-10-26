@@ -260,7 +260,8 @@ export function isCredentialKeyName(key: string): boolean {
  * Reports its whole input as one secret. The proxy adds it for a string that sits under a
  * credential key, where the key already says the value is a secret, so the value is redacted
  * whatever it looks like (a short password, one holding both quote kinds, a passphrase with
- * spaces) and no other detector can change what is redacted.
+ * spaces) and no other detector can change what is redacted. The finding is certain, not a
+ * guess from a key-name hint, so a `minConfidence` threshold, which drops guesses, never drops it.
  */
 export const WHOLE_VALUE_SECRET_DETECTOR: Detector = {
   name: 'WholeValueSecret',
@@ -272,7 +273,7 @@ export const WHOLE_VALUE_SECRET_DETECTOR: Detector = {
         span: [0, text.length],
         value: text,
         placeholderPrefix: 'Secret',
-        confidence: KEY_NAME_CONFIDENCE,
+        confidence: 1,
         method: 'key-name',
       },
     ];

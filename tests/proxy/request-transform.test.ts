@@ -813,6 +813,14 @@ test('redacts a value under a credential key even when another detector matches 
   t.is(entities, 1);
 });
 
+test('redacts a value under a credential key whatever minConfidence is set to', (t) => {
+  for (const minConfidence of [0.7, 0.8, 0.99, 1]) {
+    const { args, entities } = scrubbedArguments({ password: 'secret-value' }, { minConfidence });
+    t.deepEqual(args, { password: '«Secret_1»' }, `minConfidence ${minConfidence}`);
+    t.is(entities, 1, `minConfidence ${minConfidence}`);
+  }
+});
+
 test('treats exactly the names that end in a credential word as credential keys', (t) => {
   for (const key of [
     'password',
