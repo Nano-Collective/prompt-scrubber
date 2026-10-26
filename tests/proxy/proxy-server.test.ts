@@ -390,6 +390,29 @@ test('strict mode still scrubs and forwards a recognised JSON request', async (t
   t.true(events.some((e) => e.type === 'scrubbed'));
 });
 
+test('scrubs a JSON body that starts with a UTF-8 byte order mark, strict or not', async (t) => {
+  for (const strict of [false, true]) {
+    const upstream = await startFakeUpstream((_req, body, res) => {
+      t.false(body.includes('alice@example.com'), `strict=${strict}`);
+      t.true(body.includes('«Email_1»'), `strict=${strict}`);
+      jsonResponse(res, 200, { choices: [{ message: { role: 'assistant', content: 'ok' } }] });
+    });
+    const proxy = await withProxy(upstream, { strict });
+    try {
+      const res = await makeRequest(`${proxy.url}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: `\uFEFF${CHAT_BODY}`,
+      });
+      t.is(res.status, 200, `strict=${strict}`);
+      t.is(upstream.requestCount(), 1, `strict=${strict}`);
+    } finally {
+      await proxy.close();
+      await upstream.close();
+    }
+  }
+});
+
 test('strict mode accepts content-encoding: identity on a recognised endpoint', async (t) => {
   const upstream = await startFakeUpstream((_req, body, res) => {
     t.false(body.includes('alice@example.com'));
