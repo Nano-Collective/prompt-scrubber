@@ -1,4 +1,5 @@
 import test from 'ava';
+import { scrub } from '../../src/core/scrub.js';
 import { IpAddressDetector } from '../../src/detectors/ip-address.js';
 
 const detector = new IpAddressDetector();
@@ -87,6 +88,51 @@ test('an IPv4-mapped IPv6 address leaves no fragment behind when scrubbed', (t) 
   const findings = detector.detect(text);
   const [start, end] = findings[0]!.span;
   t.is(text.slice(0, start) + text.slice(end), 'mapped  here');
+});
+
+test('detects an IPv6 address followed by a colon', (t) => {
+  for (const [text, address] of [
+    ['connect to 2001:db8::1: connection refused', '2001:db8::1'],
+    ['fe80::1ff:fe23:4567:890a: unreachable', 'fe80::1ff:fe23:4567:890a'],
+    ['2001:db8:0:0:0:0:0:1: timeout', '2001:db8:0:0:0:0:0:1'],
+    ['host ::1: refused', '::1'],
+    ['ping ::ffff:192.0.2.1: failed', '::ffff:192.0.2.1'],
+    // A colon followed by a word is punctuation, including a word that starts with hex letters.
+    ['2001:db8::1:timeout', '2001:db8::1'],
+    ['2001:db8::1:failed', '2001:db8::1'],
+    ['::1:deadline', '::1'],
+  ] as const) {
+    const findings = detector.detect(text);
+    t.is(findings.length, 1, text);
+    t.is(findings[0]?.value, address, text);
+    const [start, end] = findings[0]!.span;
+    t.is(text.slice(start, end), address, text);
+    t.is(text.slice(0, start) + text.slice(end), text.replace(address, ''), text);
+  }
+});
+
+test('does not cut an IPv6-looking run of colon-separated groups short', (t) => {
+  t.is(detector.detect('1:2:3:4:5:6:7:8:9').length, 0);
+  t.is(detector.detect('2001:db8::1:2:3:4:5:6:7:8:9').length, 0);
+  t.is(detector.detect('2001:db8::1::').length, 0);
+  // A colon followed by a hex group continues the address, which is then taken whole.
+  t.is(detector.detect('2001:db8::1:2')[0]?.value, '2001:db8::1:2');
+  t.is(detector.detect('fe80::1:dead')[0]?.value, 'fe80::1:dead');
+});
+
+test('an IPv6 address before a colon is redacted next to another detector on one line', (t) => {
+  for (const [text, scrubbed] of [
+    ['peer 2001:db8::1: mail bob@example.com', 'peer «IpAddress_1»: mail «Email_1»'],
+    ['peer 2001:db8::1: https://example.com/status', 'peer «IpAddress_1»: «Url_1»'],
+    ['bob@example.com 2001:db8::1: refused', '«Email_1» «IpAddress_1»: refused'],
+    [
+      'see https://example.com/x then 2001:db8::1: refused',
+      'see «Url_1» then «IpAddress_1»: refused',
+    ],
+    ['http://[2001:db8::1]:8080/x', '«Url_1»'],
+  ] as const) {
+    t.is(scrub({ content: text, sessionMap: {} }).scrubbedContent, scrubbed, text);
+  }
 });
 
 test('span accurately indexes text slice for IPv4 and IPv6', (t) => {
