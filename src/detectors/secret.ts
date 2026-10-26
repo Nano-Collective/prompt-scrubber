@@ -1,3 +1,4 @@
+import { placeholderTokensIn } from '../session/session-manager.js';
 import type { Detector, Finding, ScoredFinding } from '../types/index.js';
 
 // Confidence per layer. A vendor prefix plus a characteristic length is as close
@@ -183,9 +184,16 @@ export class SecretDetector implements Detector {
     while ((match = KV_PATTERN.exec(text)) !== null) {
       const key = match[1] ?? '';
       const value = match[2] ?? match[3] ?? match[4] ?? '';
-      if (!isSecretKeyName(key)) continue;
-
       const valueStart = match.index + match[0].lastIndexOf(value);
+      if (!isSecretKeyName(key)) {
+        // The value of a non-secret key may itself begin with a `KEY=value` pair
+        // (`found: API_KEY=...`, `config:\nDB_PASSWORD=...`): scan it again.
+        KV_PATTERN.lastIndex = Math.max(match.index + 1, valueStart - 1);
+        continue;
+      }
+      // Already a placeholder (`api_key="«Secret_1»"`): scrubbing it again would mint a second one.
+      if (placeholderTokensIn(value)[0] === value) continue;
+
       raw.push({
         category: 'Secret',
         span: [valueStart, valueStart + value.length],
