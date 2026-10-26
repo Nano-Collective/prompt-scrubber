@@ -402,7 +402,7 @@ test('scrubs a JSON body that starts with a UTF-8 byte order mark, strict or not
       const res = await makeRequest(`${proxy.url}/v1/chat/completions`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: `﻿${CHAT_BODY}`,
+        body: `\uFEFF${CHAT_BODY}`,
       });
       t.is(res.status, 200, `strict=${strict}`);
       t.is(upstream.requestCount(), 1, `strict=${strict}`);
