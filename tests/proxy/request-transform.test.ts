@@ -876,3 +876,12 @@ test('leaves a placeholder under a credential key as it is', (t) => {
   t.is(result.body, body);
   t.is(result.entities, 0);
 });
+
+test('redacts a value that mixes a placeholder with other content under a credential key', (t) => {
+  for (const value of ['«Secret_1»-extra', 'extra-«Secret_1»', `«Secret_1»${PASSWORD}`]) {
+    // The `«Secret_1»` the value already holds is reserved, so the whole value becomes `«Secret_2»`.
+    const { args, entities } = scrubbedArguments({ password: value });
+    t.deepEqual(args, { password: '«Secret_2»' }, value);
+    t.is(entities, 1, value);
+  }
+});

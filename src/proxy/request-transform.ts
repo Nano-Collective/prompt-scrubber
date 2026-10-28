@@ -543,13 +543,13 @@ function scrubText(value: unknown, scrub: ScrubFn, add: Accumulate): unknown {
 /**
  * Adapt the proxy's scrub callback to the shape `json-scrub` expects. A string under a key
  * that names a credential (`"password": "..."`) is a secret whatever it looks like, so it is
- * redacted whole. A value that already carries a placeholder is left to the plain scrub, which
- * keeps the token it holds.
+ * redacted whole. A value that is already one placeholder is left to the plain scrub, which
+ * keeps the token it holds; a value that only contains one is still a secret.
  */
 function asJsonTransform(scrub: ScrubFn): JsonTextTransform {
   return (text, key) => {
     const asSecret =
-      key !== undefined && isCredentialKeyName(key) && placeholderTokensIn(text).length === 0;
+      key !== undefined && isCredentialKeyName(key) && placeholderTokensIn(text)[0] !== text;
     const { content, entities } = asSecret ? scrub(text, true) : scrub(text);
     return { content, count: entities };
   };
