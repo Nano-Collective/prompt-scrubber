@@ -249,12 +249,12 @@ export class SecretDetector implements Detector {
 // `key`, `access`, `auth`, `api` or `private` on their own are ordinary field names there
 // (`{"key": "logging.level"}`), where in prose `key: ...` is a good hint. `secret_name`,
 // `token_type` and `tokenizer` do not end in a credential word, and `pwd` is a working
-// directory as often as a password. `tokens` is the one plural left out: `max_tokens`,
-// `prompt_tokens` and `total_tokens` end in it and hold counts, not credentials.
+// directory as often as a password. `tokens` counts too (`tokens`, `access_tokens`), except
+// after a word that makes it a count (`max_tokens`, `prompt_tokens`, `total_tokens`).
 // This is not `isSecretKeyName`, the looser guess that decides whether `key: value` in free
 // text is a secret; the two rules differ on purpose.
 const CREDENTIAL_KEY =
-  /(?:token|secrets?|passw(?:or)?ds?|passphrases?|credentials?|(?:api|access|private|secret|signing|encryption|master|ssh|auth|session)[_-]?keys?)$/;
+  /(?:token|(?<!(?:max|min|prompt|completion|total|input|output|cached|reasoning|num|new)[_-]?)tokens|secrets?|passw(?:or)?ds?|passphrases?|credentials?|(?:api|access|private|secret|signing|encryption|master|ssh|auth|session)[_-]?keys?)$/;
 
 export function isCredentialKeyName(key: string): boolean {
   return CREDENTIAL_KEY.test(key.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase());

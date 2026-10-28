@@ -844,13 +844,16 @@ test('treats exactly the names that end in a credential word as credential keys'
     'privateKey',
     'secret_key',
     'session_key',
-    // The plural counts too, except `tokens`.
+    // The plural counts too, `tokens` included unless a count word comes before it.
     'secrets',
     'passwords',
     'passphrases',
     'api_keys',
     'apiKeys',
     'ssh_keys',
+    'tokens',
+    'access_tokens',
+    'refreshTokens',
   ]) {
     t.true(isCredentialKeyName(key), key);
   }
@@ -871,9 +874,12 @@ test('treats exactly the names that end in a credential word as credential keys'
     'secret_name',
     'password_hint',
     'max_tokens',
+    'maxTokens',
+    'max_new_tokens',
     'prompt_tokens',
+    'completion_tokens',
     'total_tokens',
-    'tokens',
+    'num_tokens',
   ]) {
     t.false(isCredentialKeyName(key), key);
   }
@@ -911,6 +917,22 @@ test('redacts every string beneath a credential key, nested objects and arrays i
     city: 'Berlin',
   });
   t.is(entities, 5);
+});
+
+test('redacts a list of tokens but leaves a token count alone', (t) => {
+  const { args, entities } = scrubbedArguments({
+    tokens: ['opaque-value-1', 'opaque-value-2'],
+    refresh_tokens: ['opaque-value-3'],
+    max_tokens: '4096',
+    prompt_tokens: '12',
+  });
+  t.deepEqual(args, {
+    tokens: ['«Secret_1»', '«Secret_2»'],
+    refresh_tokens: ['«Secret_3»'],
+    max_tokens: '4096',
+    prompt_tokens: '12',
+  });
+  t.is(entities, 3);
 });
 
 test('redacts a credential nested under a credential key in Anthropic tool input and metadata', (t) => {
