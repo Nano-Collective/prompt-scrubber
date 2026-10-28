@@ -245,12 +245,16 @@ export class SecretDetector implements Detector {
 }
 
 // In structured data (tool-call arguments, `metadata`) the key names the field outright, so
-// only a name that ends in a credential word counts. `key`, `access`, `auth`, `api` or
-// `private` on their own are ordinary field names there (`{"key": "logging.level"}`), where
-// in prose `key: ...` is a good hint. `secret_name`, `token_type` and `tokenizer` do not end in
-// one, and `pwd` is a working directory as often as a password.
+// only a name that ends in a credential word counts, singular or plural (`secrets`, `api_keys`).
+// `key`, `access`, `auth`, `api` or `private` on their own are ordinary field names there
+// (`{"key": "logging.level"}`), where in prose `key: ...` is a good hint. `secret_name`,
+// `token_type` and `tokenizer` do not end in a credential word, and `pwd` is a working
+// directory as often as a password. `tokens` is the one plural left out: `max_tokens`,
+// `prompt_tokens` and `total_tokens` end in it and hold counts, not credentials.
+// This is not `isSecretKeyName`, the looser guess that decides whether `key: value` in free
+// text is a secret; the two rules differ on purpose.
 const CREDENTIAL_KEY =
-  /(?:token|secret|passw(?:or)?d|passphrase|credentials?|(?:api|access|private|secret|signing|encryption|master|ssh|auth|session)[_-]?key)$/;
+  /(?:token|secrets?|passw(?:or)?ds?|passphrases?|credentials?|(?:api|access|private|secret|signing|encryption|master|ssh|auth|session)[_-]?keys?)$/;
 
 export function isCredentialKeyName(key: string): boolean {
   return CREDENTIAL_KEY.test(key.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase());

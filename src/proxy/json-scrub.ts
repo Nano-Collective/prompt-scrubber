@@ -16,12 +16,15 @@
 
 /**
  * Rewrite one string. `count` is the number of replacements made, which the
- * callers aggregate into their `entities` / `placeholders` totals. `key` is the
- * name of the object property the string sits under (for an array, the
- * property the array sits under), so a transform can tell `"password": "..."`
- * from free text.
+ * callers aggregate into their `entities` / `placeholders` totals. `keys` are the
+ * names of the object properties the string sits under, outermost first (an array
+ * adds none, so its items carry the name of the property the array sits under), so a
+ * transform can tell `"password": "..."`, or `"password": {"value": "..."}`, from free text.
  */
-export type JsonTextTransform = (text: string, key?: string) => { content: string; count: number };
+export type JsonTextTransform = (
+  text: string,
+  keys?: readonly string[],
+) => { content: string; count: number };
 
 /**
  * Depth cap for the recursive walk. Request bodies come from the network, so
@@ -38,9 +41,9 @@ const MAX_DEPTH = 64;
  * Rewrite every string leaf of a parsed JSON value.
  *
  * Object *keys* are never touched — a renamed key changes the contract the
- * model is answering, and keys are structure, not content. They are passed to
- * `fn` as context, though. Numbers, booleans and `null` are returned as they
- * are.
+ * model is answering, and keys are structure, not content. The keys a string
+ * sits under are passed to `fn` as context, though. Numbers, booleans and `null`
+ * are returned as they are.
  *
  * The original reference is returned when nothing changed, so callers can
  * skip re-serialising an untouched body.
@@ -49,12 +52,12 @@ export function mapJsonStrings(
   value: unknown,
   fn: JsonTextTransform,
   depth = 0,
-  key?: string,
+  keys: readonly string[] = [],
 ): { value: unknown; count: number } {
   if (depth > MAX_DEPTH) return { value, count: 0 };
 
   if (typeof value === 'string') {
-    const { content, count } = fn(value, key);
+    const { content, count } = fn(value, keys);
     return { value: content, count };
   }
 
@@ -62,7 +65,7 @@ export function mapJsonStrings(
     let count = 0;
     let changed = false;
     const next = value.map((item) => {
-      const result = mapJsonStrings(item, fn, depth + 1, key);
+      const result = mapJsonStrings(item, fn, depth + 1, keys);
       count += result.count;
       if (result.value !== item) changed = true;
       return result.value;
@@ -75,7 +78,7 @@ export function mapJsonStrings(
     let changed = false;
     const next: Record<string, unknown> = {};
     for (const [name, item] of Object.entries(value as Record<string, unknown>)) {
-      const result = mapJsonStrings(item, fn, depth + 1, name);
+      const result = mapJsonStrings(item, fn, depth + 1, [...keys, name]);
       count += result.count;
       if (result.value !== item) changed = true;
       next[name] = result.value;

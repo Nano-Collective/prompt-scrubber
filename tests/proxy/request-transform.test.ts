@@ -844,6 +844,13 @@ test('treats exactly the names that end in a credential word as credential keys'
     'privateKey',
     'secret_key',
     'session_key',
+    // The plural counts too, except `tokens`.
+    'secrets',
+    'passwords',
+    'passphrases',
+    'api_keys',
+    'apiKeys',
+    'ssh_keys',
   ]) {
     t.true(isCredentialKeyName(key), key);
   }
@@ -864,6 +871,8 @@ test('treats exactly the names that end in a credential word as credential keys'
     'secret_name',
     'password_hint',
     'max_tokens',
+    'prompt_tokens',
+    'total_tokens',
     'tokens',
   ]) {
     t.false(isCredentialKeyName(key), key);
@@ -884,4 +893,56 @@ test('redacts a value that mixes a placeholder with other content under a creden
     t.deepEqual(args, { password: '«Secret_2»' }, value);
     t.is(entities, 1, value);
   }
+});
+
+test('redacts every string beneath a credential key, nested objects and arrays included', (t) => {
+  const { args, entities } = scrubbedArguments({
+    password: { value: PASSWORD },
+    credentials: [{ value: `${PASSWORD}2`, hint: 'first pet' }],
+    config: { auth: { api_key: `${PASSWORD}3` }, secrets: { deep: { deeper: [`${PASSWORD}4`] } } },
+    password_hint: 'first pet',
+    city: 'Berlin',
+  });
+  t.deepEqual(args, {
+    password: { value: '«Secret_1»' },
+    credentials: [{ value: '«Secret_2»', hint: '«Secret_3»' }],
+    config: { auth: { api_key: '«Secret_4»' }, secrets: { deep: { deeper: ['«Secret_5»'] } } },
+    password_hint: 'first pet',
+    city: 'Berlin',
+  });
+  t.is(entities, 5);
+});
+
+test('redacts a credential nested under a credential key in Anthropic tool input and metadata', (t) => {
+  const result = scrubAnthropicMessagesBody(
+    {
+      model: 'claude',
+      max_tokens: 5,
+      metadata: { user_id: 'u-1', api_keys: { primary: PASSWORD } },
+      messages: [
+        {
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 't1',
+              name: 'login',
+              input: { user: 'bob', credentials: { value: `${PASSWORD}2` } },
+            },
+          ],
+        },
+      ],
+    },
+    realScrub(),
+  );
+  const out = result.body as {
+    metadata: unknown;
+    messages: Array<{ content: Array<{ input: unknown }> }>;
+  };
+  t.deepEqual(out.messages[0]?.content[0]?.input, {
+    user: 'bob',
+    credentials: { value: '«Secret_1»' },
+  });
+  t.deepEqual(out.metadata, { user_id: 'u-1', api_keys: { primary: '«Secret_2»' } });
+  t.is(result.entities, 2);
 });
