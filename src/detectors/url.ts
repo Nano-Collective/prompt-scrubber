@@ -53,7 +53,7 @@ function trimTrailingUrlPunctuation(url: string): string {
   return trimmed;
 }
 
-function isValidFullUrl(url: string): boolean {
+export function isValidFullUrl(url: string): boolean {
   if (!url.startsWith('http://') && !url.startsWith('https://')) return false;
   const rest = url.replace(/^https?:\/\//, '');
   return rest.length > 0 && !rest.startsWith('/');

@@ -2,6 +2,7 @@ import test from 'ava';
 import { rehydrateText } from '../../src/core/rehydrate.js';
 import { scrub } from '../../src/core/scrub.js';
 import { SecretDetector } from '../../src/detectors/secret.js';
+import type { ScrubRequest } from '../../src/types/index.js';
 
 const detector = new SecretDetector();
 
@@ -139,13 +140,75 @@ test('does not read a key out of the middle of a longer name', (t) => {
   t.is(detector.detect('server.port=1234567890').length, 0);
 });
 
+const LONG_URL = `https://example.com/${'a/'.repeat(300)}`;
+
 test('leaves a key inside an http(s) URL to the URL detector', (t) => {
   for (const input of [
     'https://api.example.com/v1?token=abcdefghijklmnop',
     'http://api.example.com/v1?a=1&password=abcdefghijklmnop',
-    'https://example.com/?a=1,token=abcdefghijklmnop',
+    // However far into the URL the key sits.
+    `${LONG_URL}?token=abcdefghijklmnop`,
+    `${LONG_URL}?a=1&password=abcdefghijklmnop`,
   ]) {
-    t.is(detector.detect(input).length, 0, input);
+    t.is(detector.detect(input).length, 0, input.slice(-40));
+  }
+});
+
+test('always reports a pair that follows , or ; inside a URL', (t) => {
+  // The scanner reported these before a key could follow any character, and the URL detector
+  // may not cover them (see the next test), so they must not be left to it.
+  for (const input of [
+    'https://example.com/?a=1,token=abcdefghijklmnop',
+    'https://example.com/v1;token=abcdefghijklmnop',
+    `${LONG_URL};token=abcdefghijklmnop`,
+  ]) {
+    const findings = detector.detect(input);
+    t.is(findings.length, 1, input.slice(-40));
+    t.is(findings[0]?.value, 'abcdefghijklmnop', input.slice(-40));
+  }
+});
+
+test('redacts a pair in a URL that the URL detector will not redact', (t) => {
+  const cases: Array<[string, NonNullable<ScrubRequest['options']>, string]> = [
+    // The URL detector rejects a URL with nothing after `https://` but a slash.
+    ['https:///x;token=abcdefghijklmnop', {}, 'https:///x;token=«Secret_1»'],
+    ['https:///x?token=abcdefghijklmnop', {}, 'https:///x?token=«Secret_1»'],
+    // It leaves an allowlisted host's `;` and `,` parameters alone.
+    [
+      'https://example.com/v1;token=abcdefghijklmnop',
+      { urlAllowlist: ['example.com'] },
+      'https://example.com/v1;token=«Secret_1»',
+    ],
+    [
+      'https://example.com/v1,token=abcdefghijklmnop',
+      { urlAllowlist: ['example.com'] },
+      'https://example.com/v1,token=«Secret_1»',
+    ],
+    // And it may be switched off.
+    [
+      'https://example.com/v1;token=abcdefghijklmnop',
+      { disabledDetectors: ['UrlDetector'] },
+      'https://example.com/v1;token=«Secret_1»',
+    ],
+    [
+      'https://example.com/?a=1,token=abcdefghijklmnop',
+      { disabledDetectors: ['UrlDetector'] },
+      'https://example.com/?a=1,token=«Secret_1»',
+    ],
+  ];
+  for (const [content, options, expected] of cases) {
+    const result = scrub({ content, sessionMap: {}, options });
+    t.is(result.scrubbedContent, expected, `${content} ${JSON.stringify(options)}`);
+  }
+});
+
+test('a secret inside a URL leaves one placeholder for the whole URL, however long it is', (t) => {
+  for (const content of [
+    'https://example.com/v1?token=abcdefghijklmnop',
+    `${LONG_URL}?token=abcdefghijklmnop`,
+    `${LONG_URL}?a=1&password=abcdefghijklmnop`,
+  ]) {
+    t.is(scrub({ content, sessionMap: {} }).scrubbedContent, '«Url_1»', content.slice(-40));
   }
 });
 
