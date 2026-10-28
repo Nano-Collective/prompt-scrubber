@@ -1,3 +1,5 @@
+import { isCredentialKeyName } from '../detectors/secret.js';
+import { placeholderTokensIn } from '../session/session-manager.js';
 import { type JsonTextTransform, mapJsonStringField, mapJsonStrings } from './json-scrub.js';
 import type { ProxyProvider } from './types.js';
 
@@ -24,8 +26,11 @@ export interface ScrubOutcome {
   entities: number;
 }
 
-/** Scrub one string. Mirrors the signature `scrub()` is wrapped into. */
-type ScrubFn = (content: string) => { content: string; entities: number };
+/**
+ * Scrub one string. Mirrors the signature `scrub()` is wrapped into. `asSecret` says the
+ * whole string is a secret, whatever it looks like, and is redacted as one.
+ */
+type ScrubFn = (content: string, asSecret?: boolean) => { content: string; entities: number };
 
 /** Sink for the running replacement count. */
 type Accumulate = (n: number) => void;
@@ -535,10 +540,17 @@ function scrubText(value: unknown, scrub: ScrubFn, add: Accumulate): unknown {
   return content;
 }
 
-/** Adapt the proxy's scrub callback to the shape `json-scrub` expects. */
+/**
+ * Adapt the proxy's scrub callback to the shape `json-scrub` expects. A string under a key
+ * that names a credential (`"password": "..."`), however many objects or arrays lie between
+ * (`"password": {"value": "..."}`), is a secret whatever it looks like, so it is redacted
+ * whole. A value that is already one placeholder is left to the plain scrub, which keeps the
+ * token it holds; a value that only contains one is still a secret.
+ */
 function asJsonTransform(scrub: ScrubFn): JsonTextTransform {
-  return (text) => {
-    const { content, entities } = scrub(text);
+  return (text, keys = []) => {
+    const asSecret = keys.some(isCredentialKeyName) && placeholderTokensIn(text)[0] !== text;
+    const { content, entities } = asSecret ? scrub(text, true) : scrub(text);
     return { content, count: entities };
   };
 }

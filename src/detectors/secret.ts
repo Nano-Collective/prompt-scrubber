@@ -293,3 +293,43 @@ export class SecretDetector implements Detector {
     return findings;
   }
 }
+
+// In structured data (tool-call arguments, `metadata`) the key names the field outright, so
+// only a name that ends in a credential word counts, singular or plural (`secrets`, `api_keys`).
+// `key`, `access`, `auth`, `api` or `private` on their own are ordinary field names there
+// (`{"key": "logging.level"}`), where in prose `key: ...` is a good hint. `secret_name`,
+// `token_type` and `tokenizer` do not end in a credential word, and `pwd` is a working
+// directory as often as a password. `tokens` counts too (`tokens`, `access_tokens`), except
+// after a word that makes it a count (`max_tokens`, `prompt_tokens`, `total_tokens`).
+// This is not `isSecretKeyName`, the looser guess that decides whether `key: value` in free
+// text is a secret; the two rules differ on purpose.
+const CREDENTIAL_KEY =
+  /(?:token|(?<!(?:max|min|prompt|completion|total|input|output|cached|reasoning|num|new)[_-]?)tokens|secrets?|passw(?:or)?ds?|passphrases?|credentials?|(?:api|access|private|secret|signing|encryption|master|ssh|auth|session)[_-]?keys?)$/;
+
+export function isCredentialKeyName(key: string): boolean {
+  return CREDENTIAL_KEY.test(key.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase());
+}
+
+/**
+ * Reports its whole input as one secret. The proxy adds it for a string that sits under a
+ * credential key, where the key already says the value is a secret, so the value is redacted
+ * whatever it looks like (a short password, one holding both quote kinds, a passphrase with
+ * spaces) and no other detector can change what is redacted. The finding is certain, not a
+ * guess from a key-name hint, so a `minConfidence` threshold, which drops guesses, never drops it.
+ */
+export const WHOLE_VALUE_SECRET_DETECTOR: Detector = {
+  name: 'WholeValueSecret',
+  detect(text: string): Finding[] {
+    if (text.length === 0) return [];
+    return [
+      {
+        category: 'Secret',
+        span: [0, text.length],
+        value: text,
+        placeholderPrefix: 'Secret',
+        confidence: 1,
+        method: 'key-name',
+      },
+    ];
+  },
+};

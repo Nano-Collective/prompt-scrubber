@@ -11,7 +11,8 @@ import {
 } from '../core/config.js';
 import { addCount } from '../core/counts.js';
 import { loadConfiguredRulePacks } from '../core/rule-packs.js';
-import { scrub } from '../core/scrub.js';
+import { getActiveDetectors, scrub } from '../core/scrub.js';
+import { WHOLE_VALUE_SECRET_DETECTOR } from '../detectors/secret.js';
 import { placeholderTokensIn } from '../session/session-manager.js';
 import type { ScrubOptions } from '../types/index.js';
 import { AuditLog } from './audit-log.js';
@@ -540,8 +541,9 @@ async function handleClientRequest(
     // placeholders for values it has seen before, so round-trips from the
     // client (which sends placeholders) and fresh PII both end up
     // referencing the same map without an explicit rehydrate step.
-    const outcome = scrubChatBody(provider, parsed, (text) => {
-      const scrubbed = scrubTextSync(text, sessionId, map, baseScrubOptions);
+    const outcome = scrubChatBody(provider, parsed, (text, asSecret) => {
+      const options = asSecret ? withWholeValueSecret(baseScrubOptions) : baseScrubOptions;
+      const scrubbed = scrubTextSync(text, sessionId, map, options);
       mergeCounts(trace.byCategory, scrubbed.byCategory);
       mergeCounts(trace.suppressedByCategory, scrubbed.suppressedByCategory);
       trace.suppressed += scrubbed.suppressed;
@@ -653,6 +655,21 @@ async function handleClientRequest(
   res.writeHead(status, responseHeaders);
   res.end(payload);
   finishTrace(trace, emit, status);
+}
+
+/**
+ * Options for a string that sits under a credential key: the request's own, plus a detector
+ * that reports the whole string as a secret. Unchanged when the secret detector is disabled,
+ * so `--disable SecretDetector` still leaves secrets alone.
+ */
+function withWholeValueSecret(options: ScrubOptions): ScrubOptions {
+  if (!getActiveDetectors(options).some((detector) => detector.name === 'SecretDetector')) {
+    return options;
+  }
+  return {
+    ...options,
+    customDetectors: [...(options.customDetectors ?? []), WHOLE_VALUE_SECRET_DETECTOR],
+  };
 }
 
 /**
