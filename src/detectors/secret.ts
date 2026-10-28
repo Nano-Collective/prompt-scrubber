@@ -1,5 +1,6 @@
 import { placeholderTokensIn } from '../session/session-manager.js';
 import type { Detector, Finding, ScoredFinding } from '../types/index.js';
+import { isValidFullUrl, URL_CHARS } from './url.js';
 
 // Confidence per layer. A vendor prefix plus a characteristic length is as close
 // to certain as pattern matching gets; a suggestive key name is a good guess;
@@ -126,13 +127,42 @@ function isSecretKeyName(key: string): boolean {
   return name.split(/[^a-z]+/).some((word) => WEAK_KEY_WORDS.has(word) || KEY_COMPOUND.test(word));
 }
 
-// The key may be quoted (`"api_key": ...` in JSON or YAML). A quoted value runs to its
-// closing quote, so a passphrase with spaces is taken whole; an unquoted one stops at
-// whitespace and at brackets, quotes, commas and semicolons, but keeps `!`, `#`, `$` and
-// the other punctuation a password is allowed to contain. `&` and `?` are left out so a
-// value in a query string stops where the next parameter starts.
-const KV_PATTERN =
-  /(?:^|[\s,;{])["']?([a-zA-Z0-9_.-]+)["']?\s*[:=]\s*(?:"([^"\r\n]{8,})"|'([^'\r\n]{8,})'|([A-Za-z0-9+/\-_.~@!#$%^*=:]{8,}))/gm;
+// A key is a run of name characters that does not continue a longer one, so it is found after
+// whitespace, a backtick, a bracket, `$`, `@`, `&` or `?` just the same (`(password: ...)`,
+// `$password = ...`, `user=bob&password=...`). It may be quoted (`"api_key": ...` in JSON or
+// YAML). Reading the key on its own, then the value only for a secret-looking key, keeps the
+// scan moving on after each separator, so a pair inside another key's value is found too.
+const KEY_PATTERN = /(?<![A-Za-z0-9_.-])["']?([a-zA-Z0-9_.-]+)["']?\s*[:=]\s*/g;
+
+// A quoted value runs to its closing quote, so a passphrase with spaces is taken whole; an
+// unquoted one stops at whitespace and at brackets, quotes, commas and semicolons, but keeps
+// `!`, `#`, `$` and the other punctuation a password is allowed to contain. `&` and `?` are
+// left out so a value in a query string stops where the next parameter starts.
+const VALUE_PATTERN = /"([^"\r\n]{8,})"|'([^'\r\n]{8,})'|([A-Za-z0-9+/\-_.~@!#$%^*=:]{8,})/y;
+
+// A key inside an http(s) URL (`?token=...`) is left to the URL detector, which redacts the
+// whole URL; reporting the value as well would split the URL into two placeholders. The pair
+// counts as inside only when URL characters run unbroken from `http(s)://` through the end of
+// its value, which is the span the URL detector takes: a space, a quote or a brace ends the
+// URL, so a value after one (`https://x.io/a,token: ...`) is still found. A URL the URL
+// detector rejects as malformed (`https:///x`) does not count, since nothing would redact it.
+//
+// Only a pair that the scanner never reported before the key could follow any character is
+// left to the URL detector. One that follows `,` or `;` is always reported, because the URL
+// detector may still not cover it: it skips an allowlisted host's `;`/`,` parameters, and it
+// does not run at all when it is disabled.
+const HTTP_URL = new RegExp(`https?://${URL_CHARS}+`, 'g');
+
+/** The spans of the http(s) URLs in `text`, in order, that the URL detector would redact. */
+function httpUrlSpans(text: string): Array<[number, number]> {
+  const spans: Array<[number, number]> = [];
+  HTTP_URL.lastIndex = 0;
+  let url: RegExpExecArray | null;
+  while ((url = HTTP_URL.exec(text)) !== null) {
+    if (isValidFullUrl(url[0])) spans.push([url.index, url.index + url[0].length]);
+  }
+  return spans;
+}
 
 // --- Layer 3: High-entropy strings ---
 // Only fires when the value is surrounded by quotes or follows an = sign.
@@ -179,18 +209,30 @@ export class SecretDetector implements Detector {
     }
 
     // Layer 2: key-value heuristic
-    KV_PATTERN.lastIndex = 0;
+    KEY_PATTERN.lastIndex = 0;
+    let urlSpans: Array<[number, number]> | undefined;
+    let urlIndex = 0;
     let match: RegExpExecArray | null;
-    while ((match = KV_PATTERN.exec(text)) !== null) {
-      const key = match[1] ?? '';
-      const value = match[2] ?? match[3] ?? match[4] ?? '';
-      const valueStart = match.index + match[0].lastIndexOf(value);
-      if (!isSecretKeyName(key)) {
-        // The value of a non-secret key may itself begin with a `KEY=value` pair
-        // (`found: API_KEY=...`, `config:\nDB_PASSWORD=...`): scan it again.
-        KV_PATTERN.lastIndex = Math.max(match.index + 1, valueStart - 1);
-        continue;
+    while ((match = KEY_PATTERN.exec(text)) !== null) {
+      if (!isSecretKeyName(match[1] ?? '')) continue;
+      VALUE_PATTERN.lastIndex = KEY_PATTERN.lastIndex;
+      const found = VALUE_PATTERN.exec(text);
+      if (!found) continue;
+      KEY_PATTERN.lastIndex = VALUE_PATTERN.lastIndex;
+      const lead = text[match.index - 1];
+      if (lead !== ',' && lead !== ';') {
+        // Matches arrive in order, so the URL spans are walked once rather than searched.
+        urlSpans ??= httpUrlSpans(text);
+        while (urlIndex < urlSpans.length && (urlSpans[urlIndex]?.[1] ?? 0) <= match.index) {
+          urlIndex++;
+        }
+        const url = urlSpans[urlIndex];
+        if (url !== undefined && url[0] <= match.index && KEY_PATTERN.lastIndex <= url[1]) {
+          continue;
+        }
       }
+      const value = found[1] ?? found[2] ?? found[3] ?? '';
+      const valueStart = found.index + (found[3] === undefined ? 1 : 0);
       // Already a placeholder (`api_key="«Secret_1»"`): scrubbing it again would mint a second one.
       if (placeholderTokensIn(value)[0] === value) continue;
 

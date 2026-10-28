@@ -2,6 +2,7 @@ import test from 'ava';
 import { rehydrateText } from '../../src/core/rehydrate.js';
 import { scrub } from '../../src/core/scrub.js';
 import { SecretDetector } from '../../src/detectors/secret.js';
+import type { ScrubRequest } from '../../src/types/index.js';
 
 const detector = new SecretDetector();
 
@@ -109,6 +110,138 @@ test('still redacts a quoted secret that only looks like a placeholder', (t) => 
     t.is(findings.length, 1, input);
     t.is(findings[0]?.value, value, input);
   }
+});
+
+test('detects a KEY=value pair that follows a character other than whitespace', (t) => {
+  const pw = 'Zq8C3HczEdpYwvwux!x9';
+  for (const input of [
+    `\`DB_PASSWORD=${pw}\``,
+    `(password: ${pw})`,
+    `$password = "${pw}"`,
+    `@password = "${pw}"`,
+    `user=bob&password=${pw}`,
+    `curl -d "user=bob&password=${pw}" https://example.com/login`,
+    `?password=${pw}`,
+    `<password=${pw}>`,
+    `|password=${pw}|`,
+    `env/API_KEY=${pw}`,
+    `密码：password=${pw}`,
+    `🔑password=${pw}`,
+    `postgres://db.example.com/app?password=${pw}`,
+  ]) {
+    const findings = detector.detect(input);
+    t.is(findings.length, 1, input);
+    t.is(findings[0]?.value, pw, input);
+  }
+});
+
+test('does not read a key out of the middle of a longer name', (t) => {
+  t.is(detector.detect('max-connections=1234567890').length, 0);
+  t.is(detector.detect('server.port=1234567890').length, 0);
+});
+
+const LONG_URL = `https://example.com/${'a/'.repeat(300)}`;
+
+test('leaves a key inside an http(s) URL to the URL detector', (t) => {
+  for (const input of [
+    'https://api.example.com/v1?token=abcdefghijklmnop',
+    'http://api.example.com/v1?a=1&password=abcdefghijklmnop',
+    // However far into the URL the key sits.
+    `${LONG_URL}?token=abcdefghijklmnop`,
+    `${LONG_URL}?a=1&password=abcdefghijklmnop`,
+  ]) {
+    t.is(detector.detect(input).length, 0, input.slice(-40));
+  }
+});
+
+test('always reports a pair that follows , or ; inside a URL', (t) => {
+  // The scanner reported these before a key could follow any character, and the URL detector
+  // may not cover them (see the next test), so they must not be left to it.
+  for (const input of [
+    'https://example.com/?a=1,token=abcdefghijklmnop',
+    'https://example.com/v1;token=abcdefghijklmnop',
+    `${LONG_URL};token=abcdefghijklmnop`,
+  ]) {
+    const findings = detector.detect(input);
+    t.is(findings.length, 1, input.slice(-40));
+    t.is(findings[0]?.value, 'abcdefghijklmnop', input.slice(-40));
+  }
+});
+
+test('redacts a pair in a URL that the URL detector will not redact', (t) => {
+  const cases: Array<[string, NonNullable<ScrubRequest['options']>, string]> = [
+    // The URL detector rejects a URL with nothing after `https://` but a slash.
+    ['https:///x;token=abcdefghijklmnop', {}, 'https:///x;token=«Secret_1»'],
+    ['https:///x?token=abcdefghijklmnop', {}, 'https:///x?token=«Secret_1»'],
+    // It leaves an allowlisted host's `;` and `,` parameters alone.
+    [
+      'https://example.com/v1;token=abcdefghijklmnop',
+      { urlAllowlist: ['example.com'] },
+      'https://example.com/v1;token=«Secret_1»',
+    ],
+    [
+      'https://example.com/v1,token=abcdefghijklmnop',
+      { urlAllowlist: ['example.com'] },
+      'https://example.com/v1,token=«Secret_1»',
+    ],
+    // And it may be switched off.
+    [
+      'https://example.com/v1;token=abcdefghijklmnop',
+      { disabledDetectors: ['UrlDetector'] },
+      'https://example.com/v1;token=«Secret_1»',
+    ],
+    [
+      'https://example.com/?a=1,token=abcdefghijklmnop',
+      { disabledDetectors: ['UrlDetector'] },
+      'https://example.com/?a=1,token=«Secret_1»',
+    ],
+  ];
+  for (const [content, options, expected] of cases) {
+    const result = scrub({ content, sessionMap: {}, options });
+    t.is(result.scrubbedContent, expected, `${content} ${JSON.stringify(options)}`);
+  }
+});
+
+test('a secret inside a URL leaves one placeholder for the whole URL, however long it is', (t) => {
+  for (const content of [
+    'https://example.com/v1?token=abcdefghijklmnop',
+    `${LONG_URL}?token=abcdefghijklmnop`,
+    `${LONG_URL}?a=1&password=abcdefghijklmnop`,
+  ]) {
+    t.is(scrub({ content, sessionMap: {} }).scrubbedContent, '«Url_1»', content.slice(-40));
+  }
+});
+
+test('still finds a secret that comes after a URL rather than inside it', (t) => {
+  for (const input of [
+    'https://example.com/?a=1 token=abcdefghijklmnop',
+    'https://example.com/?a=1\ttoken=abcdefghijklmnop',
+    'https://example.com/?a=1\ntoken=abcdefghijklmnop',
+    'see https://example.com/x, then token=abcdefghijklmnop',
+    '(https://example.com/?a=1) token=abcdefghijklmnop',
+    // The key runs on from the URL, but its value comes after the URL has ended.
+    'https://example.com/v1,token: abcdefghijklmnop',
+    'https://example.com/v1;password: abcdefghijklmnop',
+    'https://example.com/v1,token="abcdefghijklmnop"',
+    'https://example.com/v1?token="abcdefghijklmnop"',
+    'https://example.com/v1?a=1&password: "abcdefghijklmnop"',
+    // Characters the URL detector does not treat as part of a URL end it, so a key glued on is not in it.
+    'https://example.com/a"token=abcdefghijklmnop"',
+    'https://example.com/a|token=abcdefghijklmnop',
+    'https://example.com/a?x=1#frag{token=abcdefghijklmnop}',
+  ]) {
+    const findings = detector.detect(input);
+    t.is(findings.length, 1, input);
+    t.is(findings[0]?.value, 'abcdefghijklmnop', input);
+  }
+});
+
+test('a secret after `&` is redacted next to an email on one line', (t) => {
+  const result = scrub({
+    content: 'user=bob@example.com&password=Zq8C3HczEdpYwvwux!x9',
+    sessionMap: {},
+  });
+  t.is(result.scrubbedContent, 'user=«Email_1»&password=«Secret_1»');
 });
 
 // --- Positive Cases: High Entropy ---
@@ -361,6 +494,9 @@ test('scans pathological key-value input in linear time', (t) => {
     `found: ${'a='.repeat(50_000)}`,
     'found: x=aaaaaaaa\n'.repeat(20_000),
     'a:'.repeat(50_000),
+    'k:'.repeat(100_000),
+    '::ffff:'.repeat(140_000),
+    '`a:b`'.repeat(50_000),
     `password: ${'!'.repeat(100_000)}`,
     `password="${'a'.repeat(100_000)}`,
     'sk-'.repeat(30_000),

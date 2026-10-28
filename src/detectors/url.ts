@@ -1,7 +1,11 @@
 import type { Detector, Finding } from '../types/index.js';
 
+// The characters a URL can run through, shared with the secret detector so it can tell
+// whether a key sits inside a URL this detector will redact.
+export const URL_CHARS = String.raw`[a-zA-Z0-9\-._~:/?#[\]@!$&'()*+,;=%]`;
+
 // Full HTTP/HTTPS URLs, including paths, query strings, and fragments.
-const FULL_URL_REGEX = /https?:\/\/(?:[a-zA-Z0-9\-._~:/?#[\]@!$&'()*+,;=%]+)/g;
+const FULL_URL_REGEX = new RegExp(`https?://${URL_CHARS}+`, 'g');
 
 // Bare API endpoint pattern: hostname/path (no scheme).
 // Requires: a dot in the hostname (rejects bare words) + at least one path segment.
@@ -49,7 +53,7 @@ function trimTrailingUrlPunctuation(url: string): string {
   return trimmed;
 }
 
-function isValidFullUrl(url: string): boolean {
+export function isValidFullUrl(url: string): boolean {
   if (!url.startsWith('http://') && !url.startsWith('https://')) return false;
   const rest = url.replace(/^https?:\/\//, '');
   return rest.length > 0 && !rest.startsWith('/');
