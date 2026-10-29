@@ -140,10 +140,12 @@ const KEY_PATTERN = /(?<![A-Za-z0-9_.-])["']?([a-zA-Z0-9_.-]+)[\\"'`\])>*]*\s*[:
 // A quoted value runs to its closing quote, so a passphrase with spaces is taken whole; an
 // unquoted one stops at whitespace and at brackets, quotes, commas and semicolons, but keeps
 // `!`, `#`, `$` and the other punctuation a password is allowed to contain. `&` and `?` are
-// left out so a value in a query string stops where the next parameter starts. A value in JSON
-// that is itself a string has escaped quotes (`\"hunter2hunter2\"`) and ends at the next backslash.
+// left out so a value in a query string stops where the next parameter starts. In JSON that is
+// itself a string the quotes are escaped (`\"hunter2hunter2\"`), and an escape inside the value
+// doubles its backslash: `\"` is `\\\"`, `\\` is `\\\\`, `\n` is `\\n`. Those never start with a
+// lone `\"`, which is what ends the value.
 const VALUE_PATTERN =
-  /"([^"\r\n]{8,})"|'([^'\r\n]{8,})'|([A-Za-z0-9+/\-_.~@!#$%^*=:]{8,})|\\"([^"\\\r\n]{8,})\\"/y;
+  /"([^"\r\n]{8,})"|'([^'\r\n]{8,})'|([A-Za-z0-9+/\-_.~@!#$%^*=:]{8,})|\\"((?:[^"\\\r\n]|\\\\\\\\|\\\\\\"|\\\\[^\\"\r\n]){8,})\\"/y;
 
 // A key inside an http(s) URL (`?token=...`) is left to the URL detector, which redacts the
 // whole URL; reporting the value as well would split the URL into two placeholders. The pair
@@ -237,7 +239,8 @@ export class SecretDetector implements Detector {
         }
       }
       const value = found[1] ?? found[2] ?? found[3] ?? found[4] ?? '';
-      const valueStart = found.index + found[0].indexOf(value);
+      const valueStart =
+        found.index + (found[3] !== undefined ? 0 : found[4] !== undefined ? 2 : 1);
       // Already a placeholder (`api_key="«Secret_1»"`): scrubbing it again would mint a second one.
       if (placeholderTokensIn(value)[0] === value) continue;
 

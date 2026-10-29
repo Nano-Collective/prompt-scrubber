@@ -413,6 +413,22 @@ test('detects a secret in JSON that is itself a string, and restores it', (t) =>
   t.is(detector.detect(phrase)[0]?.value, 'my long pass phrase 99');
 });
 
+test('takes a value in JSON-in-a-string whole when it holds an escape', (t) => {
+  for (const [json, value] of [
+    [String.raw`{"body": "{\"password\": \"p@ss\\\"word123\"}"}`, String.raw`p@ss\\\"word123`],
+    [String.raw`{"b": "{\"password\": \"abcdefgh\\\\\"}"}`, String.raw`abcdefgh\\\\`],
+    [String.raw`{"b": "{\"password\": \"line1abc\\nline2xyz\"}"}`, String.raw`line1abc\\nline2xyz`],
+  ] as const) {
+    const findings = detector.detect(json);
+    t.is(findings.length, 1, json);
+    t.is(findings[0]?.value, value, json);
+    t.is(json.slice(...(findings[0]?.span ?? [0, 0])), value, json);
+    const result = scrub({ content: json, sessionMap: {} });
+    t.false(result.scrubbedContent.includes(value), json);
+    t.is(rehydrateText(result.scrubbedContent, result.sessionMap).content, json);
+  }
+});
+
 test('a wrapped key still needs a secret word and a value of its own', (t) => {
   for (const text of [
     'array[index] = abcdefghijkl',
@@ -550,7 +566,8 @@ test('scans pathological key-value input in linear time', (t) => {
     'key]'.repeat(100_000),
     `key${'*'.repeat(200_000)}`,
     '[token]='.repeat(50_000),
-    String.raw`password\": \"`.repeat(20_000),
+    `${String.raw`password\": \"abc`}\n`.repeat(20_000),
+    String.raw`password\": \"` + String.raw`\\\"`.repeat(100_000),
   ]) {
     const start = Date.now();
     detector.detect(input);
