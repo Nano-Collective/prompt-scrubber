@@ -1,0 +1,5 @@
+---
+"@nanocollective/prompt-scrub": patch
+---
+
+Fixed a `KEY=value` secret being left in the clear when markup or brackets closed the key before the separator, as in `**password**: ...`, `` `password`: ... ``, `config['password'] = '...'`, `os.environ["API_KEY"] = "..."` and `[password]=...`. A secret in JSON that is itself a string, one level deep (`{\"password\": \"...\"}`), is now found too, including a value that holds an escaped quote, backslash or newline. A secret after a chained assignment (`old_password = new_password = "..."`) is no longer skipped. A key still needs a secret-looking name and a value of its own.

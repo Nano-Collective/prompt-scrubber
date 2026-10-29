@@ -130,15 +130,25 @@ function isSecretKeyName(key: string): boolean {
 // A key is a run of name characters that does not continue a longer one, so it is found after
 // whitespace, a backtick, a bracket, `$`, `@`, `&` or `?` just the same (`(password: ...)`,
 // `$password = ...`, `user=bob&password=...`). It may be quoted (`"api_key": ...` in JSON or
-// YAML). Reading the key on its own, then the value only for a secret-looking key, keeps the
-// scan moving on after each separator, so a pair inside another key's value is found too.
-const KEY_PATTERN = /(?<![A-Za-z0-9_.-])["']?([a-zA-Z0-9_.-]+)["']?\s*[:=]\s*/g;
+// YAML), and markup or brackets that close the key may sit before the separator
+// (`**password**: ...`, `config['password'] = ...`, `[password]=...`, or `\"password\": ...` in
+// JSON that is itself a string). Reading the key on its own, then the value only for a
+// secret-looking key, keeps the scan moving on after each separator, so a pair inside another
+// key's value is found too.
+const KEY_PATTERN = /(?<![A-Za-z0-9_.-])["']?([a-zA-Z0-9_.-]+)[\\"'`\])>*]*\s*[:=]\s*/g;
 
 // A quoted value runs to its closing quote, so a passphrase with spaces is taken whole; an
 // unquoted one stops at whitespace and at brackets, quotes, commas and semicolons, but keeps
 // `!`, `#`, `$` and the other punctuation a password is allowed to contain. `&` and `?` are
-// left out so a value in a query string stops where the next parameter starts.
-const VALUE_PATTERN = /"([^"\r\n]{8,})"|'([^'\r\n]{8,})'|([A-Za-z0-9+/\-_.~@!#$%^*=:]{8,})/y;
+// left out so a value in a query string stops where the next parameter starts. In JSON that is
+// itself a string the quotes are escaped (`\"hunter2hunter2\"`), and an escape inside the value
+// doubles its backslash: `\"` is `\\\"`, `\\` is `\\\\`, `\n` is `\\n`. Those never start with a
+// lone `\"`, which is what ends the value.
+const VALUE_PATTERN =
+  /"([^"\r\n]{8,})"|'([^'\r\n]{8,})'|([A-Za-z0-9+/\-_.~@!#$%^*=:]{8,})|\\"((?:[^"\\\r\n]|\\\\\\\\|\\\\\\"|\\\\[^\\"\r\n]){8,})\\"/y;
+
+const NEXT_SEPARATOR = /\s*[:=]/y;
+const KEY_NAME_VALUE = /^[A-Za-z0-9_.-]+[:=]?$/;
 
 // A key inside an http(s) URL (`?token=...`) is left to the URL detector, which redacts the
 // whole URL; reporting the value as well would split the URL into two placeholders. The pair
@@ -231,8 +241,9 @@ export class SecretDetector implements Detector {
           continue;
         }
       }
-      const value = found[1] ?? found[2] ?? found[3] ?? '';
-      const valueStart = found.index + (found[3] === undefined ? 1 : 0);
+      const value = found[1] ?? found[2] ?? found[3] ?? found[4] ?? '';
+      const valueStart =
+        found.index + (found[3] !== undefined ? 0 : found[4] !== undefined ? 2 : 1);
       // Already a placeholder (`api_key="«Secret_1»"`): scrubbing it again would mint a second one.
       if (placeholderTokensIn(value)[0] === value) continue;
 
@@ -244,6 +255,14 @@ export class SecretDetector implements Detector {
         confidence: KEY_NAME_CONFIDENCE,
         method: 'key-name',
       });
+
+      // A value that is itself a key name (`old_pass = new_pass = "..."`, `a: new_pass: ...`) is
+      // scanned again as a key, so the pair after it is not skipped. Only a single name is
+      // rescanned, never a longer run, so the scan stays linear.
+      NEXT_SEPARATOR.lastIndex = KEY_PATTERN.lastIndex;
+      if (KEY_NAME_VALUE.test(value) && (/[:=]$/.test(value) || NEXT_SEPARATOR.test(text))) {
+        KEY_PATTERN.lastIndex = found.index;
+      }
     }
 
     // Layer 3: high-entropy strings in quotes or after =
