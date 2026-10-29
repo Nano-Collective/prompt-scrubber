@@ -380,6 +380,52 @@ test('detects a secret under a quoted key', (t) => {
   }
 });
 
+test('detects a secret under a key wrapped in markup or brackets', (t) => {
+  for (const [text, value] of [
+    ['**password**: hunter2hunter2', 'hunter2hunter2'],
+    ['`password`: hunter2hunter2', 'hunter2hunter2'],
+    ['*password*=hunter2hunter2', 'hunter2hunter2'],
+    ["config['password'] = 'hunter2hunter2'", 'hunter2hunter2'],
+    ['config["password"] = "hunter2hunter2"', 'hunter2hunter2'],
+    ['os.environ["API_KEY"] = "abcd1234efgh5678"', 'abcd1234efgh5678'],
+    ["secrets['db']['password'] = 'hunter2hunter2'", 'hunter2hunter2'],
+    ['[password]=hunter2hunter2', 'hunter2hunter2'],
+    ['<password>: hunter2hunter2', 'hunter2hunter2'],
+    ['(password) = hunter2hunter2', 'hunter2hunter2'],
+  ] as const) {
+    const findings = detector.detect(text);
+    t.is(findings.length, 1, text);
+    t.is(findings[0]?.value, value, text);
+    t.is(text.slice(...(findings[0]?.span ?? [0, 0])), value, text);
+  }
+});
+
+test('detects a secret in JSON that is itself a string, and restores it', (t) => {
+  const text = String.raw`{"body": "{\"password\": \"hunter2hunter2\", \"user\": \"bob\"}"}`;
+  t.is(detector.detect(text)[0]?.value, 'hunter2hunter2');
+  const result = scrub({ content: text, sessionMap: {} });
+  t.is(
+    result.scrubbedContent,
+    String.raw`{"body": "{\"password\": \"«Secret_1»\", \"user\": \"bob\"}"}`,
+  );
+  t.is(rehydrateText(result.scrubbedContent, result.sessionMap).content, text);
+  const phrase = String.raw`{\"api_key\": \"my long pass phrase 99\"}`;
+  t.is(detector.detect(phrase)[0]?.value, 'my long pass phrase 99');
+});
+
+test('a wrapped key still needs a secret word and a value of its own', (t) => {
+  for (const text of [
+    'array[index] = abcdefghijkl',
+    'x[monkey] = abcdefghijkl',
+    "pw = config['password']",
+    'if (password) { run(); }',
+    'password** short',
+    'ok [password]=«Secret_1»',
+  ]) {
+    t.is(detector.detect(text).length, 0, text);
+  }
+});
+
 test('takes a password with punctuation whole', (t) => {
   for (const [text, value] of [
     ['password: Secret!Pass123', 'Secret!Pass123'],
@@ -501,6 +547,10 @@ test('scans pathological key-value input in linear time', (t) => {
     `password="${'a'.repeat(100_000)}`,
     'sk-'.repeat(30_000),
     'Bearer '.repeat(20_000),
+    'key]'.repeat(100_000),
+    `key${'*'.repeat(200_000)}`,
+    '[token]='.repeat(50_000),
+    String.raw`password\": \"`.repeat(20_000),
   ]) {
     const start = Date.now();
     detector.detect(input);
