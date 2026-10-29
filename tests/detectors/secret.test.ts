@@ -442,6 +442,30 @@ test('a wrapped key still needs a secret word and a value of its own', (t) => {
   }
 });
 
+test('a wrapped key never swallows text that is not a closing delimiter', (t) => {
+  t.is(detector.detect('password[secretvalue123]=x').length, 0);
+  const found = detector.detect('password[secretvalue123]=hunter2hunter2');
+  t.deepEqual(
+    found.map((f) => f.value),
+    ['hunter2hunter2'],
+  );
+  t.is(detector.detect('password)secretvalue123]: hunter2hunter2')[0]?.value, 'hunter2hunter2');
+});
+
+test('finds the secret after a value that is itself a key name', (t) => {
+  for (const [text, value] of [
+    ['old_password = new_password = "hunter2hunter2"', 'hunter2hunter2'],
+    ['old_password=new_password="hunter2hunter2"', 'hunter2hunter2'],
+    ['password: api_key_value = "hunter2hunter2"', 'hunter2hunter2'],
+    ['**old_password**: new_password = "hunter2hunter2"', 'hunter2hunter2'],
+    ['**access_token**: new_password: abcd1234efgh', 'abcd1234efgh'],
+  ] as const) {
+    const values = detector.detect(text).map((f) => f.value);
+    t.true(values.includes(value), text);
+    t.false(scrub({ content: text, sessionMap: {} }).scrubbedContent.includes(value), text);
+  }
+});
+
 test('takes a password with punctuation whole', (t) => {
   for (const [text, value] of [
     ['password: Secret!Pass123', 'Secret!Pass123'],
@@ -566,6 +590,8 @@ test('scans pathological key-value input in linear time', (t) => {
     'key]'.repeat(100_000),
     `key${'*'.repeat(200_000)}`,
     '[token]='.repeat(50_000),
+    'password='.repeat(50_000),
+    `${'password='.repeat(50_000)} =`,
     `${String.raw`password\": \"abc`}\n`.repeat(20_000),
     String.raw`password\": \"` + String.raw`\\\"`.repeat(100_000),
   ]) {

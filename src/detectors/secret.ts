@@ -147,6 +147,9 @@ const KEY_PATTERN = /(?<![A-Za-z0-9_.-])["']?([a-zA-Z0-9_.-]+)[\\"'`\])>*]*\s*[:
 const VALUE_PATTERN =
   /"([^"\r\n]{8,})"|'([^'\r\n]{8,})'|([A-Za-z0-9+/\-_.~@!#$%^*=:]{8,})|\\"((?:[^"\\\r\n]|\\\\\\\\|\\\\\\"|\\\\[^\\"\r\n]){8,})\\"/y;
 
+const NEXT_SEPARATOR = /\s*[:=]/y;
+const KEY_NAME_VALUE = /^[A-Za-z0-9_.-]+[:=]?$/;
+
 // A key inside an http(s) URL (`?token=...`) is left to the URL detector, which redacts the
 // whole URL; reporting the value as well would split the URL into two placeholders. The pair
 // counts as inside only when URL characters run unbroken from `http(s)://` through the end of
@@ -252,6 +255,14 @@ export class SecretDetector implements Detector {
         confidence: KEY_NAME_CONFIDENCE,
         method: 'key-name',
       });
+
+      // A value that is itself a key name (`old_pass = new_pass = "..."`, `a: new_pass: ...`) is
+      // scanned again as a key, so the pair after it is not skipped. Only a single name is
+      // rescanned, never a longer run, so the scan stays linear.
+      NEXT_SEPARATOR.lastIndex = KEY_PATTERN.lastIndex;
+      if (KEY_NAME_VALUE.test(value) && (/[:=]$/.test(value) || NEXT_SEPARATOR.test(text))) {
+        KEY_PATTERN.lastIndex = found.index;
+      }
     }
 
     // Layer 3: high-entropy strings in quotes or after =
