@@ -30,9 +30,13 @@ const PREFIX_PATTERNS: { regex: RegExp; name: string; confidence?: number }[] = 
   { regex: /ghp_[A-Za-z0-9]{36}/g, name: 'GitHub PAT' },
   { regex: /gho_[A-Za-z0-9]{36}/g, name: 'GitHub OAuth' },
   { regex: /github_pat_[A-Za-z0-9_]{82}/g, name: 'GitHub fine-grained PAT' },
-  // Slack tokens
-  { regex: /xoxb-[0-9]{11}-[0-9]{11}-[A-Za-z0-9]{24}/g, name: 'Slack bot token' },
-  { regex: /xoxp-[0-9]{11}-[0-9]{11}-[0-9]{11}-[A-Za-z0-9]{32}/g, name: 'Slack user token' },
+  // Slack tokens. The digit groups are ids, so a range of lengths is accepted; the secret
+  // part has no upper bound, for the reason given above.
+  { regex: /xoxb-[0-9]{9,15}-[0-9]{9,15}-[A-Za-z0-9]{24,}/g, name: 'Slack bot token' },
+  {
+    regex: /xoxp-[0-9]{9,15}-[0-9]{9,15}-[0-9]{9,15}-[A-Za-z0-9]{32,}/g,
+    name: 'Slack user token',
+  },
   // Google API key
   { regex: /AIza[0-9A-Za-z\-_]{35}/g, name: 'Google API key' },
   // Google OAuth access token
@@ -83,6 +87,15 @@ const PREFIX_PATTERNS: { regex: RegExp; name: string; confidence?: number }[] = 
   {
     regex: /bearer\s+([A-Za-z0-9\-._~+/]{20,}={0,2})/gi,
     name: 'Bearer token',
+    confidence: BEARER_CONFIDENCE,
+  },
+  // Credential after the Basic or token scheme of an Authorization header. Unlike Bearer,
+  // these words are common in prose, so the header name is required. The key scan cannot
+  // find them: it takes the scheme word as the value, and that is below the length floor.
+  {
+    regex:
+      /(?<![A-Za-z0-9_])authorization["']?\s*[:=]\s*["']?(?:basic|token)[ \t]+([A-Za-z0-9\-._~+/]{8,}={0,2})/gi,
+    name: 'Authorization header credential',
     confidence: BEARER_CONFIDENCE,
   },
 ];
