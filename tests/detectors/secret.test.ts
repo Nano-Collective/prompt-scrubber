@@ -668,6 +668,7 @@ const jwtHead = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9';
 const jwtBody = 'eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIn0';
 const webhook = (...parts: string[]) =>
   ['https:/', 'hooks.slack.com', 'services', ...parts].join('/');
+const digits = (n: number) => '31415926535897932'.slice(0, n);
 
 const tokens: [string, string][] = [
   ['Stripe secret key', ['sk', 'live', fill(99)].join('_')],
@@ -678,6 +679,13 @@ const tokens: [string, string][] = [
   ['npm token', `npm_${fill(36)}`],
   ['SendGrid key', `SG.${fill(22)}.${fill(43)}`],
   ['Slack webhook', webhook(`T0${fill(8)}`.toUpperCase(), `B0${fill(8)}`.toUpperCase(), fill(24))],
+  ['Slack bot token', `xoxb-${digits(11)}-${digits(11)}-${fill(24)}`],
+  ['Slack bot token, longer id groups', `xoxb-${digits(12)}-${digits(13)}-${fill(24)}`],
+  ['Slack user token', `xoxp-${digits(11)}-${digits(11)}-${digits(11)}-${fill(32)}`],
+  [
+    'Slack user token, longer id groups',
+    `xoxp-${digits(12)}-${digits(12)}-${digits(13)}-${fill(32)}`,
+  ],
 ];
 
 test('detects each developer credential whole, in prose and in brackets', (t) => {
@@ -745,6 +753,9 @@ test('does not match lookalikes of the developer credentials', (t) => {
     `${jwtHead}.${fill(20)}.${fill(20)}`,
     webhook(),
     `see ${webhook()} for the docs`,
+    `xoxb-${digits(8)}-${digits(12)}-${fill(24)}`,
+    `xoxb-${digits(12)}-${digits(12)}-${fill(23)}`,
+    `xoxp-${digits(12)}-${digits(12)}-${fill(32)}`,
     pem('PUBLIC KEY'),
     pem('CERTIFICATE'),
   ]) {
@@ -772,8 +783,65 @@ test('a developer credential next to another detector is redacted separately', (
   );
 });
 
+const basicCredential = Buffer.from('admin:Zq8C3HczEdpYwv').toString('base64');
+
+test('detects the credential after the Basic or token scheme of an Authorization header', (t) => {
+  const opaque = fill(24);
+  for (const [text, credential] of [
+    [`Authorization: Basic ${basicCredential}`, basicCredential],
+    [`Proxy-Authorization: Basic ${basicCredential}`, basicCredential],
+    [`authorization: basic ${basicCredential}`, basicCredential],
+    [`Authorization = Basic ${basicCredential}`, basicCredential],
+    [`curl -H "Authorization: Basic ${basicCredential}" https://api.example.com`, basicCredential],
+    [`Authorization: token ${opaque}`, opaque],
+    ['Authorization: token abcdEFGHijkl', 'abcdEFGHijkl'],
+    ['Authorization: Basic abcdefgh+ijkl', 'abcdefgh+ijkl'],
+  ] as const) {
+    const findings = detector.detect(text);
+    t.is(findings.length, 1, text);
+    t.is(findings[0]?.value, credential, text);
+    t.is(findings[0]?.confidence, 0.9, text);
+  }
+});
+
+test('leaves Basic and token alone without an Authorization header or a credential', (t) => {
+  for (const text of [
+    'Basic authentication is common',
+    `Basic ${basicCredential}`,
+    'use the token management-and-rotation-policy',
+    'Authorization: Basic <credentials>',
+    'Authorization: Basic abc',
+    'Authorization: Basic',
+    `preauthorization: Basic ${basicCredential}`,
+    'Authorization: basic authentication',
+    'Authorization: Basic Authentication is common',
+    'Authorization: token rotation',
+    'Authorization: token required',
+    'Authorization: token management-and-rotation-policy',
+  ]) {
+    t.is(detector.detect(text).length, 0, text);
+  }
+});
+
+test('scrubs an Authorization header credential, restores it, and is idempotent', (t) => {
+  for (const [text, expected] of [
+    [`Authorization: Basic ${basicCredential}`, 'Authorization: Basic «Secret_1»'],
+    [`Authorization: token ${fill(24)}`, 'Authorization: token «Secret_1»'],
+    [`Authorization: token ghp_${fill(36)}`, 'Authorization: token «Secret_1»'],
+  ] as const) {
+    const result = scrub({ content: text, sessionMap: {} });
+    t.is(result.scrubbedContent, expected, text);
+    t.is(rehydrateText(result.scrubbedContent, result.sessionMap).content, text);
+    t.is(scrub({ content: expected, sessionMap: result.sessionMap }).scrubbedContent, expected);
+  }
+});
+
 test('scans repeated credential prefixes in linear time', (t) => {
   for (const input of [
+    'Authorization: Basic a '.repeat(20_000),
+    `authorization${' '.repeat(100_000)}`,
+    'xoxb-'.repeat(30_000),
+    `xoxb-${digits(15)}-`.repeat(20_000),
     'eyJ'.repeat(30_000),
     `eyJ${'a'.repeat(12)}.`.repeat(20_000),
     `${rule}BEGIN PRIVATE KEY${rule}\n${fill(64)}\n`.repeat(5_000),

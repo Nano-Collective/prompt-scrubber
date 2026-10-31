@@ -11,10 +11,20 @@ const URL_CREDENTIALS_CONFIDENCE = 0.95;
 const KEY_NAME_CONFIDENCE = 0.7;
 const ENTROPY_CONFIDENCE = 0.6;
 
+// A credential after the Basic or token scheme is base64 or an opaque token, so it holds a digit,
+// a `+` or `/`, or a capital after its first letter. A plain word (`authentication`, `rotation`,
+// `Required`) holds none of these.
+const LOOKS_LIKE_CREDENTIAL = /[0-9+/]|.[A-Z]/;
+
 // --- Layer 1: Known API key prefixes ---
 // These are high-precision patterns: specific vendor prefixes + characteristic lengths.
 // `confidence` defaults to PREFIX_CONFIDENCE below; only Bearer overrides it.
-const PREFIX_PATTERNS: { regex: RegExp; name: string; confidence?: number }[] = [
+const PREFIX_PATTERNS: {
+  regex: RegExp;
+  name: string;
+  confidence?: number;
+  shape?: RegExp;
+}[] = [
   // OpenAI and Anthropic: sk-... with no upper bound on the length. Project keys
   // (sk-proj-) run to about 164 characters and Anthropic keys to about 108, so a
   // cap would redact the head of a key and leave the tail in the clear. The match
@@ -30,9 +40,13 @@ const PREFIX_PATTERNS: { regex: RegExp; name: string; confidence?: number }[] = 
   { regex: /ghp_[A-Za-z0-9]{36}/g, name: 'GitHub PAT' },
   { regex: /gho_[A-Za-z0-9]{36}/g, name: 'GitHub OAuth' },
   { regex: /github_pat_[A-Za-z0-9_]{82}/g, name: 'GitHub fine-grained PAT' },
-  // Slack tokens
-  { regex: /xoxb-[0-9]{11}-[0-9]{11}-[A-Za-z0-9]{24}/g, name: 'Slack bot token' },
-  { regex: /xoxp-[0-9]{11}-[0-9]{11}-[0-9]{11}-[A-Za-z0-9]{32}/g, name: 'Slack user token' },
+  // Slack tokens. The digit groups are ids, so a range of lengths is accepted; the secret
+  // part has no upper bound, for the reason given above.
+  { regex: /xoxb-[0-9]{9,15}-[0-9]{9,15}-[A-Za-z0-9]{24,}/g, name: 'Slack bot token' },
+  {
+    regex: /xoxp-[0-9]{9,15}-[0-9]{9,15}-[0-9]{9,15}-[A-Za-z0-9]{32,}/g,
+    name: 'Slack user token',
+  },
   // Google API key
   { regex: /AIza[0-9A-Za-z\-_]{35}/g, name: 'Google API key' },
   // Google OAuth access token
@@ -84,6 +98,17 @@ const PREFIX_PATTERNS: { regex: RegExp; name: string; confidence?: number }[] = 
     regex: /bearer\s+([A-Za-z0-9\-._~+/]{20,}={0,2})/gi,
     name: 'Bearer token',
     confidence: BEARER_CONFIDENCE,
+  },
+  // Credential after the Basic or token scheme of an Authorization header. Unlike Bearer,
+  // these words are common in prose, so the header name is required and the value must look
+  // like a credential. The key scan cannot find them: it takes the scheme word as the value,
+  // and that is below the length floor.
+  {
+    regex:
+      /(?<![A-Za-z0-9_])authorization["']?\s*[:=]\s*["']?(?:basic|token)[ \t]+([A-Za-z0-9\-._~+/]{8,}={0,2})/gi,
+    name: 'Authorization header credential',
+    confidence: BEARER_CONFIDENCE,
+    shape: LOOKS_LIKE_CREDENTIAL,
   },
 ];
 
@@ -197,7 +222,7 @@ export class SecretDetector implements Detector {
     const raw: ScoredFinding[] = [];
 
     // Layer 1: prefix-based patterns
-    for (const { regex, confidence = PREFIX_CONFIDENCE } of PREFIX_PATTERNS) {
+    for (const { regex, confidence = PREFIX_CONFIDENCE, shape } of PREFIX_PATTERNS) {
       regex.lastIndex = 0;
       let match: RegExpExecArray | null;
       while ((match = regex.exec(text)) !== null) {
@@ -206,6 +231,7 @@ export class SecretDetector implements Detector {
           match[1] !== undefined && match[1].length > 0 && !match[0].startsWith(match[1])
             ? match[1]
             : match[0];
+        if (shape && !shape.test(value)) continue;
         const start = match.index + (match[0].length - value.length);
         raw.push({
           category: 'Secret',
