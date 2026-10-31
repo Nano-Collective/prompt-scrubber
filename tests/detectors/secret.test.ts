@@ -794,6 +794,8 @@ test('detects the credential after the Basic or token scheme of an Authorization
     [`Authorization = Basic ${basicCredential}`, basicCredential],
     [`curl -H "Authorization: Basic ${basicCredential}" https://api.example.com`, basicCredential],
     [`Authorization: token ${opaque}`, opaque],
+    ['Authorization: token abcdEFGHijkl', 'abcdEFGHijkl'],
+    ['Authorization: Basic abcdefgh+ijkl', 'abcdefgh+ijkl'],
   ] as const) {
     const findings = detector.detect(text);
     t.is(findings.length, 1, text);
@@ -811,6 +813,11 @@ test('leaves Basic and token alone without an Authorization header or a credenti
     'Authorization: Basic abc',
     'Authorization: Basic',
     `preauthorization: Basic ${basicCredential}`,
+    'Authorization: basic authentication',
+    'Authorization: Basic Authentication is common',
+    'Authorization: token rotation',
+    'Authorization: token required',
+    'Authorization: token management-and-rotation-policy',
   ]) {
     t.is(detector.detect(text).length, 0, text);
   }
