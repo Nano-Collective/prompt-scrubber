@@ -24,6 +24,7 @@ const PREFIX_PATTERNS: {
   name: string;
   confidence?: number;
   shape?: RegExp;
+  groupIsValue?: boolean;
 }[] = [
   // OpenAI and Anthropic: sk-... with no upper bound on the length. Project keys
   // (sk-proj-) run to about 164 characters and Anthropic keys to about 108, so a
@@ -109,6 +110,7 @@ const PREFIX_PATTERNS: {
     name: 'Authorization header credential',
     confidence: BEARER_CONFIDENCE,
     shape: LOOKS_LIKE_CREDENTIAL,
+    groupIsValue: true,
   },
 ];
 
@@ -222,13 +224,17 @@ export class SecretDetector implements Detector {
     const raw: ScoredFinding[] = [];
 
     // Layer 1: prefix-based patterns
-    for (const { regex, confidence = PREFIX_CONFIDENCE, shape } of PREFIX_PATTERNS) {
+    for (const { regex, confidence = PREFIX_CONFIDENCE, shape, groupIsValue } of PREFIX_PATTERNS) {
       regex.lastIndex = 0;
       let match: RegExpExecArray | null;
       while ((match = regex.exec(text)) !== null) {
-        // For Bearer token, capture group 1 is the token value; otherwise use full match
+        // For Bearer token, capture group 1 is the token value; otherwise use full match.
+        // A pattern with `groupIsValue` always takes the group: the `startsWith` test cannot
+        // tell a group from a match that merely begins with the same text.
         const value =
-          match[1] !== undefined && match[1].length > 0 && !match[0].startsWith(match[1])
+          match[1] !== undefined &&
+          match[1].length > 0 &&
+          (groupIsValue || !match[0].startsWith(match[1]))
             ? match[1]
             : match[0];
         if (shape && !shape.test(value)) continue;

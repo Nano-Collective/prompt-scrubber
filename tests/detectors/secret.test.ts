@@ -836,6 +836,55 @@ test('scrubs an Authorization header credential, restores it, and is idempotent'
   }
 });
 
+test('takes only the credential, never the header, when it repeats the start of the header', (t) => {
+  for (const text of ['Authorization: Basic Authorization', 'Authorization: Basic Authoriz']) {
+    t.is(detector.detect(text).length, 0, text);
+  }
+  const findings = detector.detect('AUTHORIZATION: Basic AUTHORIZATION');
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, 'AUTHORIZATION');
+  t.deepEqual(findings[0]?.span, [21, 34]);
+});
+
+test('an Authorization credential next to another detector is redacted separately', (t) => {
+  for (const [text, expected] of [
+    [
+      `Authorization: Basic ${basicCredential} bob@example.com`,
+      'Authorization: Basic «Secret_1» «Email_1»',
+    ],
+    [
+      `bob@example.com Authorization: Basic ${basicCredential}`,
+      '«Email_1» Authorization: Basic «Secret_1»',
+    ],
+    [
+      `Authorization: Basic ${basicCredential} 10.1.2.3`,
+      'Authorization: Basic «Secret_1» «IpAddress_1»',
+    ],
+  ] as const) {
+    const result = scrub({ content: text, sessionMap: {} });
+    t.is(result.scrubbedContent, expected, text);
+    t.is(rehydrateText(result.scrubbedContent, result.sessionMap).content, text);
+  }
+});
+
+test('an Authorization credential next to a vendor key gets its own placeholder', (t) => {
+  const opaque = fill(24);
+  const key = `ghp_${fill(36)}`;
+  for (const text of [
+    `Authorization: token ${opaque} ${key}`,
+    `${key} Authorization: Basic ${basicCredential}`,
+  ]) {
+    const result = scrub({ content: text, sessionMap: {} });
+    const out = String(result.scrubbedContent);
+    t.regex(
+      out,
+      /^(?:Authorization: token «Secret_\d» «Secret_\d»|«Secret_\d» Authorization: Basic «Secret_\d»)$/,
+    );
+    t.is(new Set(out.match(/«Secret_\d»/g)).size, 2, out);
+    t.is(rehydrateText(result.scrubbedContent, result.sessionMap).content, text);
+  }
+});
+
 test('scans repeated credential prefixes in linear time', (t) => {
   for (const input of [
     'Authorization: Basic a '.repeat(20_000),
