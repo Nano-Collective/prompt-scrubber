@@ -98,6 +98,28 @@ test('scans long runs of local-part characters in linear time', (t) => {
   }
 });
 
+test('finds an address that is followed by an underscore', (t) => {
+  for (const [text, address] of [
+    ['see alice@example.com_backup.zip', 'alice@example.com'],
+    ['mail alice@example.com_', 'alice@example.com'],
+    ['mail a@b.co.uk_old', 'a@b.co.uk'],
+  ] as const) {
+    const findings = detector.detect(text);
+    t.is(findings.length, 1, text);
+    t.is(findings[0]?.value, address, text);
+    const [start, end] = findings[0]!.span;
+    t.is(text.slice(start, end), address, text);
+  }
+  // A digit or a further label right after the top-level label still means no address.
+  t.is(detector.detect('alice@example.com2').length, 0);
+});
+
+test('many addresses followed by an underscore scan in linear time', (t) => {
+  const start = Date.now();
+  t.is(detector.detect('a@b.cc_'.repeat(30_000)).length, 15_000);
+  t.true(Date.now() - start < 1000, `took ${Date.now() - start}ms`);
+});
+
 test('many addresses with an unfinished domain scan in linear time', (t) => {
   const start = Date.now();
   t.deepEqual(detector.detect('a@a.'.repeat(25_000)), []);

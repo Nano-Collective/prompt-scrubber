@@ -10,8 +10,10 @@ const HEX_GROUP = String.raw`[0-9a-fA-F]{1,4}`;
 // Negative lookaround ensures we do not match 5+ segment versions (e.g. 1.2.3.4.5)
 // while still allowing sentence-ending periods (e.g. "IP is 10.0.0.1.").
 // An optional CIDR suffix is absorbed so 192.168.1.1/24 does not leave a dangling mask.
+// The address may be followed by an underscore (`10.0.0.1_old`), which `\b` would reject,
+// but not by a letter.
 const IPV4_REGEX = new RegExp(
-  String.raw`(?<![0-9]\.)(?<![0-9])\b${V4_ADDRESS}\b(?:\/(?:3[0-2]|[12]?[0-9]))?(?!\.[0-9])(?![0-9])`,
+  String.raw`(?<![0-9]\.)(?<![0-9])\b${V4_ADDRESS}(?![A-Za-z])(?:\/(?:3[0-2]|[12]?[0-9]))?(?!\.[0-9])(?![0-9])`,
   'g',
 );
 
