@@ -1,4 +1,6 @@
 import test from 'ava';
+import { rehydrateText } from '../../src/core/rehydrate.js';
+import { scrub } from '../../src/core/scrub.js';
 import { EmailDetector } from '../../src/detectors/email.js';
 
 const detector = new EmailDetector();
@@ -112,6 +114,30 @@ test('finds an address that is followed by an underscore', (t) => {
   }
   // A digit or a further label right after the top-level label still means no address.
   t.is(detector.detect('alice@example.com2').length, 0);
+});
+
+test('an address followed by an underscore is redacted next to another detector', (t) => {
+  for (const [text, scrubbed] of [
+    ['gw 192.168.10.25_old mail bob@example.com', 'gw «IpAddress_1»_old mail «Email_1»'],
+    ['alice@example.com_old 192.168.10.25_old', '«Email_1»_old «IpAddress_1»_old'],
+    ['see alice@example.com_old and https://example.com/status', 'see «Email_1»_old and «Url_1»'],
+    ['alice@example.com_old /home/alice/notes.txt', '«Email_1»_old «Path_1»'],
+    [String.raw`alice@example.com_old C:\Users\alice\notes.txt`, '«Email_1»_old «Path_1»'],
+    [String.raw`C:\Users\alice\notes.txt alice@example.com_old`, '«Path_1» «Email_1»_old'],
+  ] as const) {
+    const result = scrub({ content: text, sessionMap: {} });
+    t.is(result.scrubbedContent, scrubbed, text);
+    t.is(rehydrateText(result.scrubbedContent, result.sessionMap).content, text);
+  }
+});
+
+test('an address followed by an underscore inside a URL is split out whole', (t) => {
+  const text = 'https://example.com/x?mail=alice@example.com_old';
+  const result = scrub({ content: text, sessionMap: {} });
+  const out = String(result.scrubbedContent);
+  t.false(out.includes('alice'), out);
+  t.is(out.match(/«Email_\d»/g)?.length, 1, out);
+  t.is(rehydrateText(result.scrubbedContent, result.sessionMap).content, text);
 });
 
 test('many addresses followed by an underscore scan in linear time', (t) => {
