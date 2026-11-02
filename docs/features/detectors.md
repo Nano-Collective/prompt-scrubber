@@ -63,6 +63,7 @@ produced it.
 | --- | --- | --- | --- |
 | `SecretDetector` | Vendor key prefix (`sk-`, `ghp_`, `AKIA`, ...) | 0.99 | `exact-pattern` |
 | `SecretDetector` | `Bearer` token | 0.90 | `exact-pattern` |
+| `SecretDetector` | Credential after `Basic` or `token` in an `Authorization` header | 0.90 | `exact-pattern` |
 | `SecretDetector` | Credentials in a URL (`scheme://user:pass@host`) | 0.95 | `exact-pattern` |
 | `SecretDetector` | Suggestive key name (`API_KEY=...`) | 0.70 | `key-name` |
 | `SecretDetector` | High-entropy string | 0.60 | `entropy` |
