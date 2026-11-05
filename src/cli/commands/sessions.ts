@@ -102,8 +102,9 @@ export function setupSessionsCommands(program: Command) {
           console.log('No sessions to remove.');
           return;
         }
+        // Locked like `scrub`: a save landing after the delete would bring the session back.
         for (const session of sessions) {
-          deleteSessionMap(session.id);
+          withSessionLock(session.id, () => deleteSessionMap(session.id));
         }
         console.log(`Deleted ${sessions.length} sessions.`);
         return;
@@ -114,7 +115,7 @@ export function setupSessionsCommands(program: Command) {
         process.exit(1);
       }
 
-      const success = deleteSessionMap(id);
+      const success = withSessionLock(id, () => deleteSessionMap(id));
       if (success) {
         console.log(`Session ${id} deleted.`);
       } else {

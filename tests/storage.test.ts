@@ -1,4 +1,3 @@
-import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -577,31 +576,123 @@ test.serial(
   },
 );
 
-test.serial('withSessionLock takes over a lock whose owner process has died', (t) => {
-  const lockPath = `${getSessionStoragePath('lock-stale')}.lock`;
+// A PID no operating system hands out (above Linux's pid_max of 2^22 and macOS's
+// 99999), so it can never belong to a live process, unlike the PID of a child that
+// has exited, which the OS may reuse at once.
+const DEAD_PID = 2 ** 31 - 2;
+
+/** Writes a lock file owned by `pid`, last modified `ageMs` ago. */
+function writeLockFile(lockPath: string, pid: number | string, ageMs: number): void {
   fs.mkdirSync(path.dirname(lockPath), { recursive: true });
-  // A PID that is known to be gone: a child that has already exited.
-  fs.writeFileSync(lockPath, String(spawnSync(process.execPath, ['-e', '']).pid));
-  const hourAgo = new Date(Date.now() - 3_600_000);
-  fs.utimesSync(lockPath, hourAgo, hourAgo);
+  fs.writeFileSync(lockPath, String(pid));
+  const mtime = new Date(Date.now() - ageMs);
+  fs.utimesSync(lockPath, mtime, mtime);
+}
+
+const HOUR_MS = 3_600_000;
+
+test.serial('the dead PID used by the stale-lock tests is gone on this platform', (t) => {
+  t.throws(() => process.kill(DEAD_PID, 0), { code: 'ESRCH' });
+});
+
+test.serial('withSessionLock takes over an old lock whose owner process has died', (t) => {
+  const lockPath = `${getSessionStoragePath('lock-stale')}.lock`;
+  writeLockFile(lockPath, DEAD_PID, HOUR_MS);
 
   t.is(
-    withSessionLock('lock-stale', () => 'ran', 100),
+    withSessionLock('lock-stale', () => 'ran', 2_000),
     'ran',
   );
   t.false(fs.existsSync(lockPath));
+  t.false(fs.existsSync(`${lockPath}.takeover`));
+});
+
+test.serial('withSessionLock takes over an old lock with no PID in it', (t) => {
+  const lockPath = `${getSessionStoragePath('lock-empty')}.lock`;
+  writeLockFile(lockPath, '', HOUR_MS); // the holder died between creating the lock and writing its PID
+
+  t.is(
+    withSessionLock('lock-empty', () => 'ran', 2_000),
+    'ran',
+  );
 });
 
 test.serial('withSessionLock leaves a fresh lock alone even if its PID looks dead', (t) => {
   // A holder that has just released and exited looks dead too; taking its lock
   // over would delete whatever new holder's lock now sits at that path.
   const lockPath = `${getSessionStoragePath('lock-fresh')}.lock`;
-  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
-  fs.writeFileSync(lockPath, String(spawnSync(process.execPath, ['-e', '']).pid));
+  writeLockFile(lockPath, DEAD_PID, 0);
 
   t.throws(() => withSessionLock('lock-fresh', () => 1, 100), { message: /Timed out/ });
   t.true(fs.existsSync(lockPath));
   fs.rmSync(lockPath);
+});
+
+test.serial(
+  'withSessionLock does not break a stale lock while another waiter is taking over',
+  (t) => {
+    // Two waiters that both saw the stale lock must not both delete it: the second
+    // delete could remove the lock the first waiter's successor just created.
+    const lockPath = `${getSessionStoragePath('lock-takeover-busy')}.lock`;
+    writeLockFile(lockPath, DEAD_PID, HOUR_MS);
+    writeLockFile(`${lockPath}.takeover`, process.pid, 0); // another waiter, alive, mid-takeover
+
+    t.throws(() => withSessionLock('lock-takeover-busy', () => 1, 150), { message: /Timed out/ });
+    t.true(fs.existsSync(lockPath));
+    fs.rmSync(lockPath);
+    fs.rmSync(`${lockPath}.takeover`);
+  },
+);
+
+test.serial('withSessionLock clears a takeover file left behind by a crashed waiter', (t) => {
+  const lockPath = `${getSessionStoragePath('lock-takeover-stale')}.lock`;
+  writeLockFile(lockPath, DEAD_PID, HOUR_MS);
+  writeLockFile(`${lockPath}.takeover`, DEAD_PID, HOUR_MS);
+
+  t.is(
+    withSessionLock('lock-takeover-stale', () => 'ran', 2_000),
+    'ran',
+  );
+  t.false(fs.existsSync(lockPath));
+  t.false(fs.existsSync(`${lockPath}.takeover`));
+});
+
+test.serial('withSessionLock keeps the result when its lock file cannot be removed', (t) => {
+  const lockPath = `${getSessionStoragePath('lock-stuck')}.lock`;
+  const result = withSessionLock('lock-stuck', () => {
+    // Swap the lock for a non-empty directory so that releasing it fails.
+    fs.rmSync(lockPath);
+    fs.mkdirSync(lockPath);
+    fs.writeFileSync(path.join(lockPath, 'x'), '');
+    return 'saved';
+  });
+  t.is(result, 'saved');
+  fs.rmSync(lockPath, { recursive: true, force: true });
+});
+
+test.serial('gcSessions deletes an expired session and leaves no lock behind', (t) => {
+  const id = 'gc-lock-clean';
+  writeSessionMap(id, { '«Email_1»': 'old@test.com' });
+  const expiredPath = getSessionStoragePath(id);
+  const tenDaysAgo = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
+  fs.utimesSync(expiredPath, tenDaysAgo, tenDaysAgo);
+
+  t.is(gcSessions(7), 1);
+  t.false(fs.existsSync(expiredPath));
+  t.false(fs.existsSync(`${expiredPath}.lock`));
+});
+
+test.serial('gcSessions skips an expired session that a live process has locked', (t) => {
+  const id = 'gc-lock-held';
+  writeSessionMap(id, { '«Email_1»': 'busy@test.com' });
+  const sessionPath = getSessionStoragePath(id);
+  const tenDaysAgo = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
+  fs.utimesSync(sessionPath, tenDaysAgo, tenDaysAgo);
+  writeLockFile(`${sessionPath}.lock`, process.pid, 0); // a scrub mid-save
+
+  t.is(gcSessions(7), 0);
+  t.true(fs.existsSync(sessionPath));
+  fs.rmSync(`${sessionPath}.lock`);
 });
 
 test.serial('withSessionLock refuses an invalid session ID', (t) => {

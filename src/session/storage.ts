@@ -153,6 +153,12 @@ export function writeSessionMap(sessionId: string, map: SessionMap): void {
 const LOCK_TIMEOUT_MS = 30_000;
 const LOCK_RETRY_MS = 25;
 const LOCK_STALE_MS = 2_000;
+// How long a waiter gives a session another process is using before skipping it
+// during garbage collection, which is best effort and must not stall a command.
+const GC_LOCK_TIMEOUT_MS = 1_000;
+// Windows reports a lock that is being deleted as EPERM, which clears within
+// moments. A streak this long (about a second) is a real permission problem.
+const LOCK_EPERM_RETRIES = 40;
 
 function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
@@ -178,9 +184,17 @@ function renameWithRetry(from: string, to: string): void {
   }
 }
 
+/**
+ * Best effort. Called from a `finally`, so throwing here would replace the result
+ * of work that already finished (a scrub that already saved its session) with an
+ * error. A lock that cannot be removed is left to be taken over as stale once its
+ * owner has exited.
+ */
 function releaseLock(lockPath: string): void {
-  // Windows can refuse a delete while another process is mid-read of the file.
-  fs.rmSync(lockPath, { force: true, maxRetries: 5, retryDelay: 20 });
+  try {
+    // Windows can refuse a delete while another process is mid-read of the file.
+    fs.rmSync(lockPath, { force: true, maxRetries: 5, retryDelay: 20 });
+  } catch {}
 }
 
 /**
@@ -204,6 +218,34 @@ function isLockStale(lockPath: string): boolean {
 }
 
 /**
+ * Removes `lockPath` if it is stale. Deleting by path is not atomic: two waiters
+ * can both judge the same lock stale, the first deletes it and a new holder
+ * creates its own lock at that path, and the second then deletes the new
+ * holder's live lock. So only one waiter at a time may delete a lock (the
+ * `.takeover` file, created with `wx`), and it checks staleness again while
+ * holding that. Nothing else removes a lock that passes the check - a live
+ * holder is not stale - so what it checked is what it deletes.
+ *
+ * The takeover file is held for microseconds. One left behind by a crash inside
+ * that window is cleared by the same age and PID rule.
+ */
+function breakStaleLock(lockPath: string): void {
+  const takeoverPath = `${lockPath}.takeover`;
+  try {
+    fs.writeFileSync(takeoverPath, String(process.pid), { flag: 'wx', mode: 0o600 });
+  } catch {
+    // Another waiter is taking over; the caller retries.
+    if (isLockStale(takeoverPath)) releaseLock(takeoverPath);
+    return;
+  }
+  try {
+    if (isLockStale(lockPath)) releaseLock(lockPath);
+  } finally {
+    releaseLock(takeoverPath);
+  }
+}
+
+/**
  * Runs `fn` while holding an exclusive lock on the session, so that a
  * read-modify-write of the session file cannot interleave with another
  * process's. The file is read when a session is opened and rewritten whole on
@@ -214,25 +256,27 @@ function isLockStale(lockPath: string): boolean {
  * has to span the read as well.
  *
  * Waits up to `timeoutMs` for the current holder, and takes over a lock left by
- * a process that died. Not re-entrant.
+ * a process that died. Not re-entrant. The wait blocks the whole event loop
+ * (it is a synchronous sleep), so a caller that must stay responsive should not
+ * share a session ID with other processes.
  */
 export function withSessionLock<T>(sessionId: string, fn: () => T, timeoutMs = LOCK_TIMEOUT_MS): T {
   const lockPath = `${getSessionStoragePath(sessionId)}.lock`;
   fs.mkdirSync(path.dirname(lockPath), { recursive: true, mode: 0o700 });
   const deadline = Date.now() + timeoutMs;
+  let denied = 0;
 
   for (;;) {
     try {
       fs.writeFileSync(lockPath, String(process.pid), { flag: 'wx', mode: 0o600 });
       break;
     } catch (error) {
-      // EPERM: Windows reports a lock that is being deleted as a permission error.
       const code = (error as NodeJS.ErrnoException).code;
       if (code !== 'EEXIST' && code !== 'EPERM') throw error;
-      if (isLockStale(lockPath)) {
-        releaseLock(lockPath);
-        continue;
-      }
+      // Rethrow a lasting EPERM as itself instead of reporting it as a timeout.
+      denied = code === 'EPERM' ? denied + 1 : 0;
+      if (denied > LOCK_EPERM_RETRIES) throw error;
+      if (isLockStale(lockPath)) breakStaleLock(lockPath);
       if (Date.now() >= deadline) {
         throw new Error(
           `Timed out after ${timeoutMs} ms waiting for another prompt-scrub process to finish with session ${JSON.stringify(sessionId)}. If none is running, delete ${lockPath}.`,
@@ -317,13 +361,24 @@ export function gcSessions(ttlDays: number): number {
   for (const file of files) {
     const filePath = path.join(sessionsDir, file);
     try {
-      const stats = fs.statSync(filePath);
-      const ageMs = now - stats.mtimeMs;
-      if (ageMs >= ttlMs) {
+      const expired = () => now - fs.statSync(filePath).mtimeMs >= ttlMs;
+      if (!expired()) continue;
+      const id = path.basename(file, '.json');
+      if (file.endsWith('.json') && isValidSessionId(id)) {
+        // A scrub may be reading or saving this session right now. Take its lock
+        // and look again: a save that landed since the check above makes it
+        // current, and deleting it would throw away that scrub's mappings.
+        withSessionLock(
+          id,
+          () => {
+            if (!expired()) return;
+            fs.unlinkSync(filePath);
+            deletedCount++;
+          },
+          GC_LOCK_TIMEOUT_MS,
+        );
+      } else {
         fs.unlinkSync(filePath);
-        if (file.endsWith('.json')) {
-          deletedCount++;
-        }
       }
     } catch {
       // Best-effort cleanup: ignore individual failures so other files can still be processed.

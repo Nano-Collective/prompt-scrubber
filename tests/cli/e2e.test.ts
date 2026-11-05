@@ -1067,9 +1067,12 @@ test('CLI: scrub --json keeps stdout parseable when a rule pack fails to load', 
 test.serial(
   'CLI: concurrent scrubs sharing a --session-id each keep their own placeholder',
   async (t) => {
+    // Eight `tsx` start-ups, then eight scrubs that take the session lock in turn, then
+    // eight `rehydrate` runs: far beyond AVA's 10 s default on a slow or loaded machine.
+    t.timeout(120_000);
     const count = 8;
     const run = (args: string[], input: string) =>
-      new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve) => {
+      new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve, reject) => {
         const child = spawn(process.execPath, ['--import', 'tsx', cliEntry, ...args], {
           env: {
             ...process.env,
@@ -1080,6 +1083,10 @@ test.serial(
         let stderr = '';
         child.stdout.on('data', (chunk) => (stdout += chunk));
         child.stderr.on('data', (chunk) => (stderr += chunk));
+        // A failed spawn (EMFILE, ENOENT) or a broken stdin pipe fails the test with its
+        // real cause instead of hanging until the timeout.
+        child.on('error', reject);
+        child.stdin.on('error', reject);
         child.on('close', (status) => resolve({ status, stdout, stderr }));
         child.stdin.end(input);
       });
