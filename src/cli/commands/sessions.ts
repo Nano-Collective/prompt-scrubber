@@ -8,7 +8,9 @@ import {
   isSessionEncrypted,
   listSessions,
   readSessionMap,
+  SessionLockTimeoutError,
   sessionExists,
+  withSessionLock,
   writeSessionMap,
 } from '../../session/storage.js';
 import type { SessionMap } from '../../types/index.js';
@@ -101,10 +103,24 @@ export function setupSessionsCommands(program: Command) {
           console.log('No sessions to remove.');
           return;
         }
+        // Locked like `scrub`: a save landing after the delete would bring the session back.
+        // A session another process is using is skipped, not allowed to stop the rest.
+        let deleted = 0;
+        let busy = 0;
         for (const session of sessions) {
-          deleteSessionMap(session.id);
+          try {
+            if (withSessionLock(session.id, () => deleteSessionMap(session.id))) deleted += 1;
+          } catch (err: unknown) {
+            if (!(err instanceof SessionLockTimeoutError)) throw err;
+            console.error(err.message);
+            busy += 1;
+          }
         }
-        console.log(`Deleted ${sessions.length} sessions.`);
+        console.log(`Deleted ${deleted} sessions.`);
+        if (busy > 0) {
+          console.error(`${busy} session(s) in use were not deleted.`);
+          process.exit(1);
+        }
         return;
       }
 
@@ -113,7 +129,15 @@ export function setupSessionsCommands(program: Command) {
         process.exit(1);
       }
 
-      const success = deleteSessionMap(id);
+      let success: boolean;
+      try {
+        success = withSessionLock(id, () => deleteSessionMap(id));
+      } catch (err: unknown) {
+        if (!(err instanceof SessionLockTimeoutError)) throw err;
+        console.error(err.message);
+        process.exit(1);
+        return;
+      }
       if (success) {
         console.log(`Session ${id} deleted.`);
       } else {
@@ -165,34 +189,43 @@ export function setupSessionsCommands(program: Command) {
       let skipped = 0;
       let missing = 0;
       for (const sessionId of targets) {
-        // Guard against fabricating an empty session: a missing file must
-        // never produce a new file on the encrypt path.
-        if (!sessionExists(sessionId)) {
-          missing += 1;
-          if (id) {
-            console.error(`Session ${sessionId} not found.`);
-            process.exit(1);
-            return;
-          }
-          continue;
-        }
-
-        const alreadyEncrypted = isSessionEncrypted(sessionId);
-        if (alreadyEncrypted && !options.rekey) {
-          skipped += 1;
-          continue;
-        }
+        let outcome: 'missing' | 'skipped' | 'encrypted';
         try {
-          const map = readSessionMap(sessionId);
-          writeSessionMap(sessionId, map);
-          encrypted += 1;
+          // Everything is decided under the lock, not before it: a `sessions rm` or a
+          // scrub that lands between a check and the rewrite would make the check stale.
+          outcome = withSessionLock(sessionId, () => {
+            // Guard against fabricating an empty session: a missing file must
+            // never produce a new file on the encrypt path.
+            if (!sessionExists(sessionId)) return 'missing';
+            if (isSessionEncrypted(sessionId) && !options.rekey) return 'skipped';
+            writeSessionMap(sessionId, readSessionMap(sessionId));
+            return 'encrypted';
+          });
         } catch (err: unknown) {
           if (err instanceof SessionDecryptionError) {
             console.error(`Session ${sessionId}: ${err.message}`);
             process.exit(1);
             return;
           }
+          if (err instanceof SessionLockTimeoutError) {
+            console.error(err.message);
+            process.exit(1);
+            return;
+          }
           throw err;
+        }
+
+        if (outcome === 'missing') {
+          missing += 1;
+          if (id) {
+            console.error(`Session ${sessionId} not found.`);
+            process.exit(1);
+            return;
+          }
+        } else if (outcome === 'skipped') {
+          skipped += 1;
+        } else {
+          encrypted += 1;
         }
       }
 

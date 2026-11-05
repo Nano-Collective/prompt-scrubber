@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import test from 'ava';
 import { rehydrate } from '../../src/core/rehydrate.js';
 import { DEFAULT_CONFIDENCE, scrub } from '../../src/core/scrub.js';
+import { getSessionStoragePath } from '../../src/session/storage.js';
 import type { Detector } from '../../src/types/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -140,6 +141,26 @@ test('returns a valid sessionId', (t) => {
   const result = scrub({ content: 'Call +44 7911 123456' });
   t.truthy(result.sessionId);
   t.is(typeof result.sessionId, 'string');
+});
+
+test('a sessionMap keeps scrub off the disk lock, even while the session is locked', (t) => {
+  // The in-memory path (the proxy's) must neither wait on nor touch the session
+  // lock. If it did, this call would block on the held lock and then throw.
+  const lockPath = `${getSessionStoragePath('stateless-lock')}.lock`;
+  const owner = `${process.pid}:another-process`; // live and fresh: neither stale nor ours
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  fs.writeFileSync(lockPath, owner);
+  try {
+    const result = scrub({
+      content: 'mail stateless@example.com',
+      sessionId: 'stateless-lock',
+      sessionMap: {},
+    });
+    t.is(result.scrubbedContent, 'mail «Email_1»');
+    t.is(fs.readFileSync(lockPath, 'utf-8'), owner);
+  } finally {
+    fs.rmSync(lockPath, { force: true });
+  }
 });
 
 test('disabledDetectors suppresses named detector', (t) => {

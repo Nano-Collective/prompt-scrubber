@@ -11,6 +11,7 @@ import { SecretDetector } from '../detectors/secret.js';
 import { SsnDetector } from '../detectors/ssn.js';
 import { UrlDetector } from '../detectors/url.js';
 import { SessionManager } from '../session/session-manager.js';
+import { withSessionLock } from '../session/storage.js';
 import type {
   Detector,
   Message,
@@ -227,8 +228,24 @@ export function getActiveDetectors(options?: ScrubRequest['options']): Detector[
  * mutated in place as new placeholders are created (it is also returned as
  * `result.sessionMap`, which is the same reference). Callers may rely on either
  * the returned value or the in-place mutation, but must not pass a frozen map.
+ *
+ * Disk mode: when `sessionId` is given without `sessionMap`, the session file is
+ * locked from reading it until saving it, so processes that share an ID do not
+ * overwrite each other. The call is synchronous: if another process holds the lock
+ * it blocks the whole event loop for up to 30 seconds and then throws a
+ * `SessionLockTimeoutError`. Passing `sessionMap` takes no lock and touches no file.
  */
 export function scrub(request: ScrubRequest): ScrubResult {
+  const { sessionId, sessionMap } = request;
+  // A named on-disk session is read on open and rewritten whole on save, so hold
+  // its lock across the whole read -> scrub -> save (see `withSessionLock`).
+  if (sessionId && !sessionMap) {
+    return withSessionLock(sessionId, () => scrubWithSession(request));
+  }
+  return scrubWithSession(request);
+}
+
+function scrubWithSession(request: ScrubRequest): ScrubResult {
   const { content, sessionId, sessionMap, options } = request;
 
   const session = new SessionManager(sessionId, sessionMap);
