@@ -189,6 +189,14 @@ test('skips a full URL with a path when its exact subdomain is allowlisted', (t)
   }
 });
 
+test('still redacts a bare endpoint next to an allowlisted full URL', (t) => {
+  const findings = new UrlDetector(['docs.example.org']).detect(
+    'see https://docs.example.org/page and api.other.com/v1 for details',
+  );
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, 'api.other.com/v1');
+});
+
 test('still detects a sibling subdomain when only one subdomain is allowlisted', (t) => {
   const findings = new UrlDetector(['docs.example.org']).detect(
     'see https://other.example.org/page for details',
