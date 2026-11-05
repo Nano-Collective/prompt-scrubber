@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -1063,3 +1063,42 @@ test('CLI: scrub --json keeps stdout parseable when a rule pack fails to load', 
   t.regex(result.stderr, /rule pack "non-existent-pack" failed to load/);
   t.is(JSON.parse(result.stdout).content, 'mail «Email_1»');
 });
+
+test.serial(
+  'CLI: concurrent scrubs sharing a --session-id each keep their own placeholder',
+  async (t) => {
+    const count = 8;
+    const run = (args: string[], input: string) =>
+      new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve) => {
+        const child = spawn(process.execPath, ['--import', 'tsx', cliEntry, ...args], {
+          env: {
+            ...process.env,
+            PROMPT_SCRUB_CONFIG_DIR: path.join(tmpConfigDir, 'prompt-scrub'),
+          },
+        });
+        let stdout = '';
+        let stderr = '';
+        child.stdout.on('data', (chunk) => (stdout += chunk));
+        child.stderr.on('data', (chunk) => (stderr += chunk));
+        child.on('close', (status) => resolve({ status, stdout, stderr }));
+        child.stdin.end(input);
+      });
+
+    const text = (i: number) => `contact user${i}@example.com please`;
+    const scrubs = await Promise.all(
+      Array.from({ length: count }, (_, i) =>
+        run(['scrub', '-q', '--session-id', 'concurrent'], text(i)),
+      ),
+    );
+    for (const result of scrubs) {
+      t.is(result.status, 0, result.stderr);
+    }
+    const outputs = scrubs.map((r) => r.stdout);
+    t.is(new Set(outputs).size, count); // no two emails share a placeholder
+
+    for (const [i, output] of outputs.entries()) {
+      const rehydrated = runCli(['rehydrate', '--session-id', 'concurrent'], output);
+      t.is(rehydrated.stdout, text(i));
+    }
+  },
+);

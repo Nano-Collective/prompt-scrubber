@@ -9,6 +9,7 @@ import {
   listSessions,
   readSessionMap,
   sessionExists,
+  withSessionLock,
   writeSessionMap,
 } from '../../session/storage.js';
 import type { SessionMap } from '../../types/index.js';
@@ -183,8 +184,8 @@ export function setupSessionsCommands(program: Command) {
           continue;
         }
         try {
-          const map = readSessionMap(sessionId);
-          writeSessionMap(sessionId, map);
+          // Locked like `scrub`: a save landing between this read and write would be lost.
+          withSessionLock(sessionId, () => writeSessionMap(sessionId, readSessionMap(sessionId)));
           encrypted += 1;
         } catch (err: unknown) {
           if (err instanceof SessionDecryptionError) {

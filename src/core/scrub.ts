@@ -11,6 +11,7 @@ import { SecretDetector } from '../detectors/secret.js';
 import { SsnDetector } from '../detectors/ssn.js';
 import { UrlDetector } from '../detectors/url.js';
 import { SessionManager } from '../session/session-manager.js';
+import { withSessionLock } from '../session/storage.js';
 import type {
   Detector,
   Message,
@@ -229,6 +230,16 @@ export function getActiveDetectors(options?: ScrubRequest['options']): Detector[
  * the returned value or the in-place mutation, but must not pass a frozen map.
  */
 export function scrub(request: ScrubRequest): ScrubResult {
+  const { sessionId, sessionMap } = request;
+  // A named on-disk session is read on open and rewritten whole on save, so hold
+  // its lock across the whole read -> scrub -> save (see `withSessionLock`).
+  if (sessionId && !sessionMap) {
+    return withSessionLock(sessionId, () => scrubWithSession(request));
+  }
+  return scrubWithSession(request);
+}
+
+function scrubWithSession(request: ScrubRequest): ScrubResult {
   const { content, sessionId, sessionMap, options } = request;
 
   const session = new SessionManager(sessionId, sessionMap);

@@ -139,7 +139,7 @@ export function writeSessionMap(sessionId: string, map: SessionMap): void {
       : JSON.stringify(map, null, 2);
 
     fs.writeFileSync(tmpPath, payload, { encoding: 'utf-8', mode: 0o600 });
-    fs.renameSync(tmpPath, filePath);
+    renameWithRetry(tmpPath, filePath);
   } catch (error) {
     if (fs.existsSync(tmpPath)) {
       try {
@@ -147,6 +147,105 @@ export function writeSessionMap(sessionId: string, map: SessionMap): void {
       } catch {}
     }
     throw error;
+  }
+}
+
+const LOCK_TIMEOUT_MS = 30_000;
+const LOCK_RETRY_MS = 25;
+const LOCK_STALE_MS = 2_000;
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Renames over `to`, retrying briefly when it is refused. Windows fails a rename
+ * onto a file another process has open for reading (`EPERM`/`EACCES`/`EBUSY`),
+ * and readers such as `rehydrate` take no lock.
+ */
+function renameWithRetry(from: string, to: string): void {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      fs.renameSync(from, to);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (attempt >= 20 || (code !== 'EPERM' && code !== 'EACCES' && code !== 'EBUSY')) {
+        throw error;
+      }
+      sleepSync(10);
+    }
+  }
+}
+
+function releaseLock(lockPath: string): void {
+  // Windows can refuse a delete while another process is mid-read of the file.
+  fs.rmSync(lockPath, { force: true, maxRetries: 5, retryDelay: 20 });
+}
+
+/**
+ * A lock is stale when it is old and the process that wrote its PID into it no
+ * longer exists. The age matters: a holder that has just released and exited
+ * also looks dead, and by the time a waiter acts on that the file may be a new
+ * holder's lock. A lock is held for milliseconds, so one this old can only be
+ * left behind by a crash.
+ */
+function isLockStale(lockPath: string): boolean {
+  try {
+    if (Date.now() - fs.statSync(lockPath).mtimeMs < LOCK_STALE_MS) return false;
+    const pid = Number.parseInt(fs.readFileSync(lockPath, 'utf-8'), 10);
+    // No PID: the holder died between creating the lock and writing it.
+    if (!Number.isInteger(pid) || pid <= 0) return true;
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ESRCH';
+  }
+}
+
+/**
+ * Runs `fn` while holding an exclusive lock on the session, so that a
+ * read-modify-write of the session file cannot interleave with another
+ * process's. The file is read when a session is opened and rewritten whole on
+ * save: without the lock, two processes sharing an ID number their
+ * placeholders from the same starting state (two values get `«Email_1»`) and the
+ * last save erases the other's mappings. Placeholders are already in the output
+ * by the time a save happens, so they cannot be renumbered afterwards - the lock
+ * has to span the read as well.
+ *
+ * Waits up to `timeoutMs` for the current holder, and takes over a lock left by
+ * a process that died. Not re-entrant.
+ */
+export function withSessionLock<T>(sessionId: string, fn: () => T, timeoutMs = LOCK_TIMEOUT_MS): T {
+  const lockPath = `${getSessionStoragePath(sessionId)}.lock`;
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true, mode: 0o700 });
+  const deadline = Date.now() + timeoutMs;
+
+  for (;;) {
+    try {
+      fs.writeFileSync(lockPath, String(process.pid), { flag: 'wx', mode: 0o600 });
+      break;
+    } catch (error) {
+      // EPERM: Windows reports a lock that is being deleted as a permission error.
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'EEXIST' && code !== 'EPERM') throw error;
+      if (isLockStale(lockPath)) {
+        releaseLock(lockPath);
+        continue;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `Timed out after ${timeoutMs} ms waiting for another prompt-scrub process to finish with session ${JSON.stringify(sessionId)}. If none is running, delete ${lockPath}.`,
+        );
+      }
+      sleepSync(LOCK_RETRY_MS);
+    }
+  }
+
+  try {
+    return fn();
+  } finally {
+    releaseLock(lockPath);
   }
 }
 

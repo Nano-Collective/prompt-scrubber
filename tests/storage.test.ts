@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,6 +12,7 @@ import {
   isSessionEncrypted,
   listSessions,
   readSessionMap,
+  withSessionLock,
   writeSessionMap,
 } from '../src/session/storage.js';
 
@@ -526,4 +528,88 @@ test('writeSessionMap and readSessionMap refuse a traversal ID and touch nothing
   t.throws(() => deleteSessionMap('../../outside/victim'), { message: /Invalid session ID/ });
   t.false(fs.existsSync(path.join(outside, 'pwned.json')));
   t.true(fs.existsSync(path.join(outside, 'victim.json')));
+});
+
+test.serial('withSessionLock returns the result and removes its lock file', (t) => {
+  const lockPath = `${getSessionStoragePath('lock-basic')}.lock`;
+  const result = withSessionLock('lock-basic', () => {
+    t.true(fs.existsSync(lockPath));
+    return 42;
+  });
+  t.is(result, 42);
+  t.false(fs.existsSync(lockPath));
+});
+
+test.serial('withSessionLock removes its lock file when the callback throws', (t) => {
+  const lockPath = `${getSessionStoragePath('lock-throws')}.lock`;
+  t.throws(
+    () =>
+      withSessionLock('lock-throws', () => {
+        throw new Error('boom');
+      }),
+    { message: 'boom' },
+  );
+  t.false(fs.existsSync(lockPath));
+});
+
+test.serial(
+  'withSessionLock times out with a clear error while a live process holds the lock',
+  (t) => {
+    const lockPath = `${getSessionStoragePath('lock-held')}.lock`;
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+    fs.writeFileSync(lockPath, String(process.pid)); // this test process is alive
+
+    let ran = false;
+    t.throws(
+      () =>
+        withSessionLock(
+          'lock-held',
+          () => {
+            ran = true;
+          },
+          100,
+        ),
+      { message: /Timed out after 100 ms.*"lock-held".*delete /s },
+    );
+    t.false(ran);
+    t.true(fs.existsSync(lockPath)); // the holder's lock is left alone
+    fs.rmSync(lockPath);
+  },
+);
+
+test.serial('withSessionLock takes over a lock whose owner process has died', (t) => {
+  const lockPath = `${getSessionStoragePath('lock-stale')}.lock`;
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  // A PID that is known to be gone: a child that has already exited.
+  fs.writeFileSync(lockPath, String(spawnSync(process.execPath, ['-e', '']).pid));
+  const hourAgo = new Date(Date.now() - 3_600_000);
+  fs.utimesSync(lockPath, hourAgo, hourAgo);
+
+  t.is(
+    withSessionLock('lock-stale', () => 'ran', 100),
+    'ran',
+  );
+  t.false(fs.existsSync(lockPath));
+});
+
+test.serial('withSessionLock leaves a fresh lock alone even if its PID looks dead', (t) => {
+  // A holder that has just released and exited looks dead too; taking its lock
+  // over would delete whatever new holder's lock now sits at that path.
+  const lockPath = `${getSessionStoragePath('lock-fresh')}.lock`;
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  fs.writeFileSync(lockPath, String(spawnSync(process.execPath, ['-e', '']).pid));
+
+  t.throws(() => withSessionLock('lock-fresh', () => 1, 100), { message: /Timed out/ });
+  t.true(fs.existsSync(lockPath));
+  fs.rmSync(lockPath);
+});
+
+test.serial('withSessionLock refuses an invalid session ID', (t) => {
+  t.throws(() => withSessionLock('../escape', () => 1), { message: /Invalid session ID/ });
+});
+
+test.serial('listSessions does not report a lock file as a session', (t) => {
+  withSessionLock('lock-listed', () => {
+    t.false(listSessions().some((s) => s.id.startsWith('lock-listed')));
+  });
 });
