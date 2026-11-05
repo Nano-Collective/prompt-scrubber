@@ -228,6 +228,12 @@ export function getActiveDetectors(options?: ScrubRequest['options']): Detector[
  * mutated in place as new placeholders are created (it is also returned as
  * `result.sessionMap`, which is the same reference). Callers may rely on either
  * the returned value or the in-place mutation, but must not pass a frozen map.
+ *
+ * Disk mode: when `sessionId` is given without `sessionMap`, the session file is
+ * locked from reading it until saving it, so processes that share an ID do not
+ * overwrite each other. The call is synchronous: if another process holds the lock
+ * it blocks the whole event loop for up to 30 seconds and then throws a
+ * `SessionLockTimeoutError`. Passing `sessionMap` takes no lock and touches no file.
  */
 export function scrub(request: ScrubRequest): ScrubResult {
   const { sessionId, sessionMap } = request;

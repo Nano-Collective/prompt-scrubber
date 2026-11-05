@@ -151,6 +151,24 @@ export function writeSessionMap(sessionId: string, map: SessionMap): void {
   }
 }
 
+/**
+ * Thrown by `withSessionLock` (and so by `scrub()` with a `sessionId`) when another
+ * process holds the session's lock for the whole wait. Catch it to tell a busy
+ * session apart from a genuine failure.
+ */
+export class SessionLockTimeoutError extends Error {
+  constructor(
+    public readonly sessionId: string,
+    public readonly lockPath: string,
+    public readonly timeoutMs: number,
+  ) {
+    super(
+      `Timed out after ${timeoutMs} ms waiting for another prompt-scrub process to finish with session ${JSON.stringify(sessionId)}. If none is running, delete ${lockPath}.`,
+    );
+    this.name = 'SessionLockTimeoutError';
+  }
+}
+
 const LOCK_TIMEOUT_MS = 30_000;
 const LOCK_RETRY_MS = 25;
 const LOCK_STALE_MS = 2_000;
@@ -307,9 +325,7 @@ export function withSessionLock<T>(sessionId: string, fn: () => T, timeoutMs = L
       if (denied > LOCK_EPERM_RETRIES) throw error;
       if (isLockStale(lockPath)) breakStaleLock(lockPath);
       if (Date.now() >= deadline) {
-        throw new Error(
-          `Timed out after ${timeoutMs} ms waiting for another prompt-scrub process to finish with session ${JSON.stringify(sessionId)}. If none is running, delete ${lockPath}.`,
-        );
+        throw new SessionLockTimeoutError(sessionId, lockPath, timeoutMs);
       }
       sleepSync(LOCK_RETRY_MS);
     }
@@ -408,6 +424,8 @@ export function gcSessions(ttlDays: number): number {
         );
       } else {
         fs.unlinkSync(filePath);
+        // Keep the reported count equal to the sessions deleted, whatever their name.
+        if (file.endsWith('.json')) deletedCount++;
       }
     } catch {
       // Best-effort cleanup: ignore individual failures so other files can still be processed.

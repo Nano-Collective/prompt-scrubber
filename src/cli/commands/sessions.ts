@@ -8,6 +8,7 @@ import {
   isSessionEncrypted,
   listSessions,
   readSessionMap,
+  SessionLockTimeoutError,
   sessionExists,
   withSessionLock,
   writeSessionMap,
@@ -103,10 +104,23 @@ export function setupSessionsCommands(program: Command) {
           return;
         }
         // Locked like `scrub`: a save landing after the delete would bring the session back.
+        // A session another process is using is skipped, not allowed to stop the rest.
+        let deleted = 0;
+        let busy = 0;
         for (const session of sessions) {
-          withSessionLock(session.id, () => deleteSessionMap(session.id));
+          try {
+            if (withSessionLock(session.id, () => deleteSessionMap(session.id))) deleted += 1;
+          } catch (err: unknown) {
+            if (!(err instanceof SessionLockTimeoutError)) throw err;
+            console.error(err.message);
+            busy += 1;
+          }
         }
-        console.log(`Deleted ${sessions.length} sessions.`);
+        console.log(`Deleted ${deleted} sessions.`);
+        if (busy > 0) {
+          console.error(`${busy} session(s) in use were not deleted.`);
+          process.exit(1);
+        }
         return;
       }
 
@@ -115,7 +129,15 @@ export function setupSessionsCommands(program: Command) {
         process.exit(1);
       }
 
-      const success = withSessionLock(id, () => deleteSessionMap(id));
+      let success: boolean;
+      try {
+        success = withSessionLock(id, () => deleteSessionMap(id));
+      } catch (err: unknown) {
+        if (!(err instanceof SessionLockTimeoutError)) throw err;
+        console.error(err.message);
+        process.exit(1);
+        return;
+      }
       if (success) {
         console.log(`Session ${id} deleted.`);
       } else {
@@ -182,6 +204,11 @@ export function setupSessionsCommands(program: Command) {
         } catch (err: unknown) {
           if (err instanceof SessionDecryptionError) {
             console.error(`Session ${sessionId}: ${err.message}`);
+            process.exit(1);
+            return;
+          }
+          if (err instanceof SessionLockTimeoutError) {
+            console.error(err.message);
             process.exit(1);
             return;
           }

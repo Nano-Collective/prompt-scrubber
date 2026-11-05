@@ -27,7 +27,7 @@ const result = scrub({
 // result.stats summarises what was replaced in this call
 ```
 
-`scrub()` is synchronous. When you pass a `sessionId`, it holds a lock on that session's file from reading it until saving it, so processes that share an ID do not overwrite each other. If another process holds the lock, `scrub()` **blocks the whole event loop** (a synchronous wait, not a promise) for up to 30 seconds and then throws an error that names the lock file. A long-running server that must stay responsive should not share one session ID between processes: give each its own ID, or pass `sessionMap` to keep the session in memory, which takes no lock and touches no file.
+`scrub()` is synchronous. When you pass a `sessionId`, it holds a lock on that session's file from reading it until saving it, so processes that share an ID do not overwrite each other. If another process holds the lock, `scrub()` **blocks the whole event loop** (a synchronous wait, not a promise) for up to 30 seconds and then throws a `SessionLockTimeoutError` (exported from the package) whose message names the lock file, so you can tell a busy session apart from a real failure. A long-running server that must stay responsive should not share one session ID between processes: give each its own ID, or pass `sessionMap` to keep the session in memory, which takes no lock and touches no file.
 
 ### `rehydrate`
 

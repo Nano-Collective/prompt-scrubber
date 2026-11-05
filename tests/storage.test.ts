@@ -11,6 +11,7 @@ import {
   isSessionEncrypted,
   listSessions,
   readSessionMap,
+  SessionLockTimeoutError,
   withSessionLock,
   writeSessionMap,
 } from '../src/session/storage.js';
@@ -559,7 +560,7 @@ test.serial(
     fs.writeFileSync(lockPath, String(process.pid)); // this test process is alive
 
     let ran = false;
-    t.throws(
+    const error = t.throws(
       () =>
         withSessionLock(
           'lock-held',
@@ -568,8 +569,14 @@ test.serial(
           },
           100,
         ),
-      { message: /Timed out after 100 ms.*"lock-held".*delete /s },
+      {
+        instanceOf: SessionLockTimeoutError,
+        message: /Timed out after 100 ms.*"lock-held".*delete /s,
+      },
     );
+    t.is(error?.name, 'SessionLockTimeoutError');
+    t.is(error?.sessionId, 'lock-held');
+    t.is(error?.lockPath, lockPath);
     t.false(ran);
     t.true(fs.existsSync(lockPath)); // the holder's lock is left alone
     fs.rmSync(lockPath);
@@ -726,6 +733,22 @@ test.serial('gcSessions deletes an expired session and leaves no lock behind', (
   t.false(fs.existsSync(expiredPath));
   t.false(fs.existsSync(`${expiredPath}.lock`));
 });
+
+// A name that is a legal file name on POSIX but not a valid session ID (so no lock is taken
+// for it). Windows cannot create such a file.
+(process.platform === 'win32' ? test.skip : test.serial)(
+  'gcSessions counts a deleted .json file whose name is not a valid session ID',
+  (t) => {
+    const file = path.join(path.dirname(getSessionStoragePath('probe')), 'a<b>.json');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, '{}');
+    const tenDaysAgo = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
+    fs.utimesSync(file, tenDaysAgo, tenDaysAgo);
+
+    t.is(gcSessions(7), 1);
+    t.false(fs.existsSync(file));
+  },
+);
 
 test.serial('gcSessions skips an expired session that a live process has locked', (t) => {
   const id = 'gc-lock-held';

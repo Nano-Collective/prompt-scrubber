@@ -4,6 +4,7 @@ export { rehydrate } from './core/rehydrate.js';
 // it rather than hardcode 0.5 and hope it never moves.
 export { DEFAULT_CONFIDENCE, scrub } from './core/scrub.js';
 export { SessionManager } from './session/session-manager.js';
+export { SessionLockTimeoutError } from './session/storage.js';
 export * from './types/index.js';
 export {
   clearCachedEncryptionKey,
