@@ -122,6 +122,9 @@ export class UrlDetector implements Detector {
 
   detect(text: string): Finding[] {
     const raw: Finding[] = [];
+    // Spans of every full URL, allowlisted or not, so the bare-endpoint pass
+    // cannot re-match the tail of one (e.g. `example.org/page` in `https://docs.example.org/page`).
+    const fullUrlSpans: Array<[number, number]> = [];
 
     FULL_URL_REGEX.lastIndex = 0;
     let match: RegExpExecArray | null;
@@ -129,6 +132,7 @@ export class UrlDetector implements Detector {
       const originalValue = match[0];
       const value = trimTrailingUrlPunctuation(originalValue);
       if (!isValidFullUrl(value)) continue;
+      fullUrlSpans.push([match.index, match.index + value.length]);
       if (this.isHostAllowed(value)) continue;
 
       raw.push({
@@ -149,9 +153,7 @@ export class UrlDetector implements Detector {
       if (!isValidBareApi(value)) continue;
 
       // Skip if already covered by a full URL match
-      const alreadyCovered = raw.some(
-        (existing) => start >= existing.span[0] && start < existing.span[1],
-      );
+      const alreadyCovered = fullUrlSpans.some(([from, to]) => start >= from && start < to);
       if (!alreadyCovered && !this.isHostAllowed(value)) {
         raw.push({
           category: 'Url',
