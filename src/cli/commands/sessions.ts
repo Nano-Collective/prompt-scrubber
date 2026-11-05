@@ -167,27 +167,18 @@ export function setupSessionsCommands(program: Command) {
       let skipped = 0;
       let missing = 0;
       for (const sessionId of targets) {
-        // Guard against fabricating an empty session: a missing file must
-        // never produce a new file on the encrypt path.
-        if (!sessionExists(sessionId)) {
-          missing += 1;
-          if (id) {
-            console.error(`Session ${sessionId} not found.`);
-            process.exit(1);
-            return;
-          }
-          continue;
-        }
-
-        const alreadyEncrypted = isSessionEncrypted(sessionId);
-        if (alreadyEncrypted && !options.rekey) {
-          skipped += 1;
-          continue;
-        }
+        let outcome: 'missing' | 'skipped' | 'encrypted';
         try {
-          // Locked like `scrub`: a save landing between this read and write would be lost.
-          withSessionLock(sessionId, () => writeSessionMap(sessionId, readSessionMap(sessionId)));
-          encrypted += 1;
+          // Everything is decided under the lock, not before it: a `sessions rm` or a
+          // scrub that lands between a check and the rewrite would make the check stale.
+          outcome = withSessionLock(sessionId, () => {
+            // Guard against fabricating an empty session: a missing file must
+            // never produce a new file on the encrypt path.
+            if (!sessionExists(sessionId)) return 'missing';
+            if (isSessionEncrypted(sessionId) && !options.rekey) return 'skipped';
+            writeSessionMap(sessionId, readSessionMap(sessionId));
+            return 'encrypted';
+          });
         } catch (err: unknown) {
           if (err instanceof SessionDecryptionError) {
             console.error(`Session ${sessionId}: ${err.message}`);
@@ -195,6 +186,19 @@ export function setupSessionsCommands(program: Command) {
             return;
           }
           throw err;
+        }
+
+        if (outcome === 'missing') {
+          missing += 1;
+          if (id) {
+            console.error(`Session ${sessionId} not found.`);
+            process.exit(1);
+            return;
+          }
+        } else if (outcome === 'skipped') {
+          skipped += 1;
+        } else {
+          encrypted += 1;
         }
       }
 

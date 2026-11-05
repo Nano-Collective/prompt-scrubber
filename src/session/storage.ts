@@ -1,3 +1,4 @@
+import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { getConfigDir, loadConfig } from '../core/config.js';
@@ -153,12 +154,23 @@ export function writeSessionMap(sessionId: string, map: SessionMap): void {
 const LOCK_TIMEOUT_MS = 30_000;
 const LOCK_RETRY_MS = 25;
 const LOCK_STALE_MS = 2_000;
-// How long a waiter gives a session another process is using before skipping it
-// during garbage collection, which is best effort and must not stall a command.
-const GC_LOCK_TIMEOUT_MS = 1_000;
+// Garbage collection is best effort and must not stall a command, so it does not
+// wait at all: a session that is locked right now is in use, and is skipped.
+const GC_LOCK_TIMEOUT_MS = 0;
 // Windows reports a lock that is being deleted as EPERM, which clears within
 // moments. A streak this long (about a second) is a real permission problem.
 const LOCK_EPERM_RETRIES = 40;
+
+// Written into every lock file. The PID alone cannot tell this module's own lock
+// from a worker thread's in the same process, so a random part names this module
+// instance. `heldLocks` are the lock files this instance holds right now.
+const LOCK_OWNER = `${process.pid}:${crypto.randomUUID()}`;
+const heldLocks = new Set<string>();
+
+function createLockFile(lockPath: string): void {
+  fs.writeFileSync(lockPath, LOCK_OWNER, { flag: 'wx', mode: 0o600 });
+  heldLocks.add(lockPath);
+}
 
 function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
@@ -187,14 +199,24 @@ function renameWithRetry(from: string, to: string): void {
 /**
  * Best effort. Called from a `finally`, so throwing here would replace the result
  * of work that already finished (a scrub that already saved its session) with an
- * error. A lock that cannot be removed is left to be taken over as stale once its
- * owner has exited.
+ * error. Windows can refuse a delete while another process is mid-read of the
+ * file, so that is retried by hand (`rmSync` ignores its retry options unless
+ * it is recursive). A lock that still cannot be removed is no longer held, so
+ * this process takes it back on its next attempt (see `isLockStale`), and any
+ * other process takes it over once this one has exited.
  */
 function releaseLock(lockPath: string): void {
-  try {
-    // Windows can refuse a delete while another process is mid-read of the file.
-    fs.rmSync(lockPath, { force: true, maxRetries: 5, retryDelay: 20 });
-  } catch {}
+  heldLocks.delete(lockPath);
+  for (let attempt = 0; attempt < 10; attempt++) {
+    try {
+      fs.unlinkSync(lockPath);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'EPERM' && code !== 'EBUSY' && code !== 'EACCES') return;
+      sleepSync(20);
+    }
+  }
 }
 
 /**
@@ -203,11 +225,18 @@ function releaseLock(lockPath: string): void {
  * also looks dead, and by the time a waiter acts on that the file may be a new
  * holder's lock. A lock is held for milliseconds, so one this old can only be
  * left behind by a crash.
+ *
+ * A lock this module instance wrote but no longer holds is stale at once,
+ * however young. Its release failed, and the PID rule would keep it for as long
+ * as this process lives (a server, watch mode). Calls are synchronous and not
+ * re-entrant, so this instance is never mid-work while it waits for its own lock.
  */
 function isLockStale(lockPath: string): boolean {
   try {
+    const owner = fs.readFileSync(lockPath, 'utf-8');
+    if (owner === LOCK_OWNER) return !heldLocks.has(lockPath);
     if (Date.now() - fs.statSync(lockPath).mtimeMs < LOCK_STALE_MS) return false;
-    const pid = Number.parseInt(fs.readFileSync(lockPath, 'utf-8'), 10);
+    const pid = Number.parseInt(owner, 10);
     // No PID: the holder died between creating the lock and writing it.
     if (!Number.isInteger(pid) || pid <= 0) return true;
     process.kill(pid, 0);
@@ -232,7 +261,7 @@ function isLockStale(lockPath: string): boolean {
 function breakStaleLock(lockPath: string): void {
   const takeoverPath = `${lockPath}.takeover`;
   try {
-    fs.writeFileSync(takeoverPath, String(process.pid), { flag: 'wx', mode: 0o600 });
+    createLockFile(takeoverPath);
   } catch {
     // Another waiter is taking over; the caller retries.
     if (isLockStale(takeoverPath)) releaseLock(takeoverPath);
@@ -268,7 +297,7 @@ export function withSessionLock<T>(sessionId: string, fn: () => T, timeoutMs = L
 
   for (;;) {
     try {
-      fs.writeFileSync(lockPath, String(process.pid), { flag: 'wx', mode: 0o600 });
+      createLockFile(lockPath);
       break;
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;

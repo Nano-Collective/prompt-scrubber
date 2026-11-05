@@ -670,6 +670,51 @@ test.serial('withSessionLock keeps the result when its lock file cannot be remov
   fs.rmSync(lockPath, { recursive: true, force: true });
 });
 
+test.serial('withSessionLock takes back its own lock when an earlier release failed', (t) => {
+  // A long-running process (a server, watch mode) stays alive, so the PID in a
+  // leaked lock never looks dead; the process must still be able to reuse the session.
+  const lockPath = `${getSessionStoragePath('lock-leaked')}.lock`;
+  let owner = '';
+  withSessionLock('lock-leaked', () => {
+    owner = fs.readFileSync(lockPath, 'utf-8');
+  });
+  t.false(fs.existsSync(lockPath));
+  fs.writeFileSync(lockPath, owner); // as if the release above had failed
+
+  t.is(
+    withSessionLock('lock-leaked', () => 'again', 150),
+    'again',
+  );
+  t.false(fs.existsSync(lockPath));
+});
+
+test.serial(
+  'withSessionLock does not take back a lock another thread of this process holds',
+  (t) => {
+    // Same PID, different module instance (as a worker thread would have).
+    const lockPath = `${getSessionStoragePath('lock-thread')}.lock`;
+    writeLockFile(lockPath, `${process.pid}:another-module-instance`, 0);
+
+    t.throws(() => withSessionLock('lock-thread', () => 1, 150), { message: /Timed out/ });
+    t.true(fs.existsSync(lockPath));
+    fs.rmSync(lockPath);
+  },
+);
+
+test.serial(
+  'withSessionLock is not re-entrant: a nested lock on the same session times out',
+  (t) => {
+    t.throws(
+      () =>
+        withSessionLock('lock-nested', () => {
+          withSessionLock('lock-nested', () => 1, 150);
+        }),
+      { message: /Timed out/ },
+    );
+    t.false(fs.existsSync(`${getSessionStoragePath('lock-nested')}.lock`));
+  },
+);
+
 test.serial('gcSessions deletes an expired session and leaves no lock behind', (t) => {
   const id = 'gc-lock-clean';
   writeSessionMap(id, { '«Email_1»': 'old@test.com' });
