@@ -262,6 +262,8 @@ An audit record looks like this:
 
 ## Session Management
 
+A session ID can be shared by several processes at once. `scrub --session-id <id>` and `sessions rm`, `gc` and `encrypt` lock the session file while they work, so processes that share an ID wait for each other for up to 30 seconds. If the session is still in use after that, `scrub`, `sessions rm <id>` and `sessions encrypt` print the error and exit `1`. `sessions rm --all` skips a session in use, deletes the rest, reports how many it deleted and exits `1`. `sessions gc` leaves an expired session that is in use for the next run. See [Session Management](../features/session-management.md).
+
 ### `prompt-scrub sessions list`
 Lists all known session IDs currently stored on disk along with their file sizes.
 
