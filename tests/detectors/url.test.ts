@@ -179,6 +179,32 @@ test('skips URL when host is a subdomain of an allowlisted domain', (t) => {
   t.is(findings.length, 0);
 });
 
+test('skips a full URL with a path when its exact subdomain is allowlisted', (t) => {
+  for (const [host, url] of [
+    ['docs.example.org', 'https://docs.example.org/page'],
+    ['developer.mozilla.org', 'https://developer.mozilla.org/en-US/docs/Web'],
+    ['api.v2.example.org', 'https://api.v2.example.org/items'],
+  ] as const) {
+    t.is(new UrlDetector([host]).detect(`see ${url} for details`).length, 0, url);
+  }
+});
+
+test('still redacts a bare endpoint next to an allowlisted full URL', (t) => {
+  const findings = new UrlDetector(['docs.example.org']).detect(
+    'see https://docs.example.org/page and api.other.com/v1 for details',
+  );
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, 'api.other.com/v1');
+});
+
+test('still detects a sibling subdomain when only one subdomain is allowlisted', (t) => {
+  const findings = new UrlDetector(['docs.example.org']).detect(
+    'see https://other.example.org/page for details',
+  );
+  t.is(findings.length, 1);
+  t.is(findings[0]?.value, 'https://other.example.org/page');
+});
+
 test('detects URL when host is NOT in allowlist', (t) => {
   const allowlistDetector = new UrlDetector(['example.com']);
   const findings = allowlistDetector.detect('Visit https://otherdomain.com/path');

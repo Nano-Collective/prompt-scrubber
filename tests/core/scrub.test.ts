@@ -35,6 +35,14 @@ test('scrubs a single email from a plain string', (t) => {
   t.truthy(result.sessionId);
 });
 
+test('keeps an allowlisted subdomain URL whole next to another detector match', (t) => {
+  const result = scrub({
+    content: 'Mail alice@corp.com about https://docs.example.org/page',
+    options: { urlAllowlist: ['docs.example.org'] },
+  });
+  t.is(result.scrubbedContent, 'Mail «Email_1» about https://docs.example.org/page');
+});
+
 test('scrubs multiple finding types in one pass', (t) => {
   const result = scrub({
     content: 'Email: alice@foo.com  URL: https://api.example.com',
