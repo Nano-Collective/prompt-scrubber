@@ -10,8 +10,10 @@ const HEX_GROUP = String.raw`[0-9a-fA-F]{1,4}`;
 // Negative lookaround ensures we do not match 5+ segment versions (e.g. 1.2.3.4.5)
 // while still allowing sentence-ending periods (e.g. "IP is 10.0.0.1.").
 // An optional CIDR suffix is absorbed so 192.168.1.1/24 does not leave a dangling mask.
+// The address may follow or be followed by an underscore (`host_10.0.0.1_old`), which `\b`
+// would reject, but not by a letter.
 const IPV4_REGEX = new RegExp(
-  String.raw`(?<![0-9]\.)(?<![0-9])\b${V4_ADDRESS}\b(?:\/(?:3[0-2]|[12]?[0-9]))?(?!\.[0-9])(?![0-9])`,
+  String.raw`(?<![0-9]\.)(?<![A-Za-z0-9])${V4_ADDRESS}(?![A-Za-z])(?:\/(?:3[0-2]|[12]?[0-9]))?(?!\.[0-9])(?![0-9])`,
   'g',
 );
 
@@ -54,8 +56,9 @@ const IPV6_REGEX = new RegExp(
 
 // A 4-part version is shaped exactly like an IPv4 address, so a match led by
 // a version keyword, a version-constraint operator, or sitting inside a
-// `from X to Y` range is skipped. v-prefixed forms never reach here: \b fails
-// between v and a digit.
+// `from X to Y` range is skipped. v-prefixed forms never reach here: a letter before
+// the address fails the lookbehind. An underscore after a keyword (`build_1.2.3.4`)
+// separates it like a space does.
 //
 // The `from X to Y` check has to see *something* on both sides to tell a
 // version range from a real `transfer 192.168.1.1 to 192.168.1.2` — so a bare
@@ -63,7 +66,7 @@ const IPV6_REGEX = new RegExp(
 // "192.168.1.1 to 192.168.1.2" without a leading `from` still matches too.
 function isVersionContext(text: string, start: number): boolean {
   const before = text.slice(Math.max(0, start - 24), start);
-  if (/(?:\bv\b|version|release|build|bump\w*|assembly|[~^]|>=|<=|=>|==)[\s:=]*$/i.test(before)) {
+  if (/(?:\bv\b|version|release|build|bump\w*|assembly|[~^]|>=|<=|=>|==)[\s:=_]*$/i.test(before)) {
     return true;
   }
   // First endpoint of `from X to Y`: `from` precedes, `to <4-segment>` follows.
