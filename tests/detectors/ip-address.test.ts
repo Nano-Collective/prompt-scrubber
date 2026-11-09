@@ -204,6 +204,79 @@ test('absorbs a CIDR suffix instead of leaving a dangling mask', (t) => {
   t.is(findings[0]?.value, '192.168.1.0/24');
 });
 
+test('finds an IPv4 address that is followed by an underscore', (t) => {
+  for (const [text, address] of [
+    ['gw 192.168.10.25_old', '192.168.10.25'],
+    ['host 10.0.0.1_', '10.0.0.1'],
+    ['net 10.0.0.0/8_x', '10.0.0.0/8'],
+    ['ip 192.168.10.255_', '192.168.10.255'],
+  ] as const) {
+    const findings = detector.detect(text);
+    t.is(findings.length, 1, text);
+    t.is(findings[0]?.value, address, text);
+    const [start, end] = findings[0]!.span;
+    t.is(text.slice(start, end), address, text);
+  }
+});
+
+test('finds an IPv4 address that is preceded by an underscore', (t) => {
+  for (const [text, address] of [
+    ['host_192.168.10.25', '192.168.10.25'],
+    ['host_192.168.10.25_old', '192.168.10.25'],
+    ['_10.0.0.1', '10.0.0.1'],
+    ['ip_10.0.0.0/8', '10.0.0.0/8'],
+  ] as const) {
+    const findings = detector.detect(text);
+    t.is(findings.length, 1, text);
+    t.is(findings[0]?.value, address, text);
+    const [start, end] = findings[0]!.span;
+    t.is(text.slice(start, end), address, text);
+  }
+});
+
+// A 4-part version is shaped like an address, so a version keyword followed by an underscore
+// still marks it, as a space does. A letter on either side is part of a longer word.
+test('does not match a version after an underscore, or an address next to a letter', (t) => {
+  for (const text of [
+    'build_1.2.3.4',
+    'version_1.2.3.4',
+    'release_2.0.0.1',
+    'x_1.2.3.4.5',
+    '192.168.10.25x',
+    '192.168.10.25abc',
+    'host192.168.10.25',
+  ]) {
+    t.is(detector.detect(text).length, 0, text);
+  }
+});
+
+test('an address next to an underscore is redacted next to another detector', (t) => {
+  for (const [text, scrubbed] of [
+    ['gw 192.168.10.25_old mail bob@example.com', 'gw «IpAddress_1»_old mail «Email_1»'],
+    ['alice@example.com_old 192.168.10.25_old', '«Email_1»_old «IpAddress_1»_old'],
+    ['192.168.10.25_old https://example.com/status', '«IpAddress_1»_old «Url_1»'],
+    ['host_192.168.10.25 mail bob@example.com', 'host_«IpAddress_1» mail «Email_1»'],
+    ['bob@example.com host_192.168.10.25_old', '«Email_1» host_«IpAddress_1»_old'],
+    ['host_192.168.10.25 https://example.com/status', 'host_«IpAddress_1» «Url_1»'],
+  ] as const) {
+    t.is(scrub({ content: text, sessionMap: {} }).scrubbedContent, scrubbed, text);
+  }
+});
+
+test('long runs around an underscore and an IPv4-shaped number scan in linear time', (t) => {
+  for (const input of [
+    'build_1.2.3.4 '.repeat(30_000),
+    '_1.1.1.1.1'.repeat(30_000),
+    '1.1.1.1x_'.repeat(30_000),
+    `${'_'.repeat(300_000)}1.1.1.1`,
+    `1.1.1.1${'_'.repeat(300_000)}`,
+  ]) {
+    const start = Date.now();
+    detector.detect(input);
+    t.true(Date.now() - start < 1000, `took ${Date.now() - start}ms`);
+  }
+});
+
 test('does not match a bare double colon in prose', (t) => {
   t.is(detector.detect('Compare a :: b in the spec').length, 0);
   t.is(detector.detect('Use std::vector for this').length, 0);
