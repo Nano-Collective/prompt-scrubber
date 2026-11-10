@@ -173,17 +173,11 @@ export function createSseRehydrator(
       const tail = emitCompleteEvents(state, `${buffer}\n\n`, (rest) => {
         buffer = rest;
       });
-      // A tail still held here means the stream ended mid-placeholder (a
-      // truncated or hallucinated `«`). Emitting it as a vendor-shaped delta
-      // event of its own is the only way to hand those bytes over without
-      // corrupting the framing — dropping them would silently truncate the
-      // tool's arguments. It lands after the terminating event, which a
-      // client may ignore; losing the bytes outright is worse.
-      let orphans = '';
-      for (const pending of state.tails.values()) {
-        orphans += pending.synthesize(pending.text);
-      }
-      state.tails.clear();
+      // A tail still held here means the stream ended mid-placeholder with no
+      // terminating event to release it before (see `releaseTails`), such as an
+      // upstream that closed without `[DONE]`. Handing the bytes over is still
+      // better than dropping them.
+      const orphans = releaseTails(state, () => true);
       // After flushing, anything still in `buffer` is the trailing fragment
       // that never had a terminating blank line. Emit it as-is so the client
       // receives the final bytes (e.g. the `[DONE]` sentinel or a trailing
@@ -228,10 +222,74 @@ function emitCompleteEvents(
       out += '\n\n';
       continue;
     }
+    // A tail held mid-placeholder has to reach the client before the event that ends
+    // its text or call: an SDK stops reading at `[DONE]` or `message_stop`, so a
+    // fragment sent after it is lost. An OpenAI chunk that carries a last fragment
+    // alongside its `finish_reason` is transformed first, so its tail follows it.
+    const ending = state.tails.size > 0 ? endingTails(event) : undefined;
+    if (ending?.before) out += releaseTails(state, ending.before);
     out += transformSseEvent(state, event);
     out += '\n\n';
+    if (ending?.after) out += releaseTails(state, ending.after);
   }
   return out;
+}
+
+/** Emit and forget every held tail whose key `matches`, as standalone delta events. */
+function releaseTails(state: StreamState, matches: (key: string) => boolean): string {
+  let out = '';
+  for (const [key, pending] of state.tails) {
+    if (!matches(key)) continue;
+    out += pending.synthesize(pending.text);
+    state.tails.delete(key);
+  }
+  return out;
+}
+
+/**
+ * Which held tails an event ends, and whether they must be released before it or,
+ * when the event also carries a last fragment for them, after it.
+ */
+type KeyMatcher = ((key: string) => boolean) | undefined;
+
+function endingTails(event: string): { before: KeyMatcher; after: KeyMatcher } | undefined {
+  const before: string[] = [];
+  const after: string[] = [];
+  for (const line of event.split(LINE_BREAK)) {
+    if (!line.startsWith('data:')) continue;
+    const payload = line.slice(5).trim();
+    if (payload === '[DONE]') return { before: () => true, after: undefined };
+    let parsed: Record<string, unknown> | undefined;
+    try {
+      parsed = asRecord(JSON.parse(payload));
+    } catch {
+      continue;
+    }
+    if (!parsed) continue;
+    if (parsed.type === 'message_stop' || parsed.type === 'message_delta') {
+      return { before: () => true, after: undefined };
+    }
+    if (parsed.type === 'content_block_stop' && typeof parsed.index === 'number') {
+      before.push(`anthropic:${parsed.index}`, `anthropic:${parsed.index}:text`);
+    }
+    if (Array.isArray(parsed.choices)) {
+      for (const raw of parsed.choices) {
+        const choice = asRecord(raw);
+        if (!choice || typeof choice.finish_reason !== 'string') continue;
+        const prefix = `openai:${typeof choice.index === 'number' ? choice.index : 0}:`;
+        const delta = asRecord(choice.delta);
+        const carriesFragment =
+          typeof delta?.content === 'string' || Array.isArray(delta?.tool_calls);
+        (carriesFragment ? after : before).push(prefix);
+      }
+    }
+  }
+  if (before.length === 0 && after.length === 0) return undefined;
+  const matcher = (keys: string[]) =>
+    keys.length === 0
+      ? undefined
+      : (key: string) => keys.some((k) => (k.endsWith(':') ? key.startsWith(k) : key === k));
+  return { before: matcher(before), after: matcher(after) };
 }
 
 /**

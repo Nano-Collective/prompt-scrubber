@@ -13,6 +13,12 @@ const CARD_PATTERNS: RegExp[] = [
   /(?<![0-9A-Za-z])(?:30[0-5][0-9]|36[0-9]{2}|38[0-9]{2}|39[0-9]{2})[ -]?[0-9]{6}[ -]?[0-9]{4}(?![0-9A-Za-z])/g,
 ];
 
+// A number that passes Luhn is almost never anything else.
+const CARD_CONFIDENCE = 0.95;
+
+// A separated 3-digit tail that does not belong to the card: `4111 1111 1111 1111 123`.
+const SEPARATED_TAIL = /[ -][0-9]{3}$/;
+
 /**
  * Validates a credit card number using the Luhn (Mod-10) algorithm.
  */
@@ -55,7 +61,13 @@ export class CreditCardDetector implements Detector {
       let match: RegExpExecArray | null;
 
       while ((match = regex.exec(text)) !== null) {
-        const value = match[0];
+        let value = match[0];
+
+        // The optional 19-digit tail is taken greedily, so a 16-digit card followed by a
+        // separate 3-digit number (a CVV, a count) fails Luhn as a whole. Try it without.
+        if (!isValidLuhn(value) && SEPARATED_TAIL.test(value)) {
+          value = value.slice(0, -4);
+        }
 
         if (isValidLuhn(value)) {
           raw.push({
@@ -63,6 +75,8 @@ export class CreditCardDetector implements Detector {
             span: [match.index, match.index + value.length],
             value,
             placeholderPrefix: 'CreditCard',
+            confidence: CARD_CONFIDENCE,
+            method: 'checksum',
           });
         }
       }

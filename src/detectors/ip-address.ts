@@ -84,6 +84,9 @@ function isVersionContext(text: string, start: number): boolean {
   return false;
 }
 
+// The shape is exact, but version numbers and other dotted or colon-separated runs share it.
+const IP_CONFIDENCE = 0.85;
+
 export class IpAddressDetector implements Detector {
   readonly name = 'IpAddressDetector';
 
@@ -103,6 +106,8 @@ export class IpAddressDetector implements Detector {
         span: [match.index, match.index + value.length],
         value,
         placeholderPrefix: 'IpAddress',
+        confidence: IP_CONFIDENCE,
+        method: 'structural',
       });
     }
 
@@ -126,6 +131,8 @@ export class IpAddressDetector implements Detector {
         span: [start, start + value.length],
         value,
         placeholderPrefix: 'IpAddress',
+        confidence: IP_CONFIDENCE,
+        method: 'structural',
       });
     }
 

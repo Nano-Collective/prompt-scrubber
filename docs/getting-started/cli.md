@@ -208,7 +208,7 @@ Responses are rehydrated in the same places as requests: message content, `tool_
 - `--host <host>`: Local interface to bind (default `127.0.0.1`).
 - `--disable <detectors>`, `--enable <detectors>`, `--strict-name`, `--code-tell-terms`, `--url-allowlist`: Same scrubber options as the `scrub` command.
 - `-v, --verbose`: Log a one-line summary of every proxied request to `stderr` (including the scrubbed/rehydrated counts and session ID). Request paths are logged without their query string, because some providers take an API key there (`?api-key=...`).
-- `--strict`: Fail closed. Refuse with `403` any request whose body cannot be scrubbed (unknown endpoint, compressed body, or non-JSON body) instead of forwarding it. Off by default.
+- `--strict`: Fail closed. Refuse with `403` any request whose body cannot be scrubbed (unknown endpoint, compressed body, non-JSON body, or JSON that is not a chat request) instead of forwarding it. Off by default.
 - `--audit-log <path>`: Append one JSON line per completed request to this file. Records hold counts, detector categories, timings and the request path. They never hold values, bodies, headers or query strings. The file is created with mode `0600`.
 - `--auth-token <token>`: Require this token in the `x-prompt-scrub-token` header of every request except `/healthz`; anything else gets `401`. The header is not forwarded upstream. Without the flag the proxy is open to anyone who can reach its port, so use it whenever `--host` is not a loopback address. Prefer the `PROMPT_SCRUB_AUTH_TOKEN` environment variable over the flag, which shows in the process list. A blank token, from either, is an error rather than an open proxy. A Prometheus scrape of `/metrics` then needs the header too.
 - `--max-sessions <n>`: How many sessions to keep in memory before the least recently used is dropped (default `1000`). A session that holds no placeholders is not kept at all.
@@ -252,7 +252,7 @@ An audit record looks like this:
 
 **Limitations:**
 
-- `--strict` checks that a body can be scrubbed, not that every field in it was. A JSON body in a shape the scrubber does not traverse on a recognised endpoint (for example `{"input": "…"}` sent to `/v1/chat/completions`), or a value nested past the 64-level cap, is still forwarded unscrubbed in strict mode.
+- `--strict` checks that a body can be scrubbed, not that every field in it was. On a recognised endpoint it blocks a body that is not a JSON object with a `messages` list (for example `{"input": "…"}` sent to `/v1/chat/completions`), but a field the scrubber does not know inside an otherwise ordinary request, or a value nested past the 64-level cap, is still forwarded unscrubbed.
 - The proxy cannot decompress request bodies. Without `--strict` a compressed body is forwarded as received; with it, the request is blocked. Most SDKs send uncompressed JSON by default.
 - Request bodies larger than 10 MB are rejected with `413 Payload Too Large`. Tune with `maxBodyBytes` on the programmatic `ProxyOptions`.
 - A value nested deeper than 64 levels inside tool arguments, a tool schema, or a chain of `tool_result` blocks is forwarded unscrubbed. The cap keeps a hostile body from exhausting the stack; nothing legitimate nests that deep.

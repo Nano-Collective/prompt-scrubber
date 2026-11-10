@@ -2005,3 +2005,30 @@ test('a CRLF event stream is rehydrated and delivered as it arrives', async (t) 
     await upstream.close();
   }
 });
+
+test('strict mode blocks JSON on a chat endpoint that is not a chat request', async (t) => {
+  const upstream = await startFakeUpstream((_req, _body, res) => jsonResponse(res, 200, {}));
+  const events: ProxyEvent[] = [];
+  const proxy = await withProxy(upstream, { strict: true }, events);
+  try {
+    for (const body of [
+      '"alice@example.com"',
+      '[{"role":"user","content":"alice@example.com"}]',
+      '{"input":"alice@example.com"}',
+      '{"messages":"alice@example.com"}',
+    ]) {
+      const res = await makeRequest(`${proxy.url}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body,
+      });
+      t.is(res.status, 403, body);
+      t.true(res.body.includes('unrecognised body'), body);
+    }
+    t.is(upstream.requestCount(), 0);
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+  t.true(events.some((e) => e.type === 'blocked' && e.reason === 'unrecognised body'));
+});

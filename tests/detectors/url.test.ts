@@ -280,3 +280,18 @@ test('an allowlisted host still exempts ordinary query strings and fragments', (
     t.is(allowlisted.detect(url).length, 0, url);
   }
 });
+
+test('trims a long run of closing brackets in linear time', (t) => {
+  const start = Date.now();
+  const findings = detector.detect(`see http://x.com/${')'.repeat(100_000)}`);
+  t.true(Date.now() - start < 1000);
+  t.is(findings[0]?.value, 'http://x.com/');
+});
+
+test('an allowlisted host does not exempt a compound credential parameter', (t) => {
+  const allowlistDetector = new UrlDetector(['docs.example.org']);
+  for (const name of ['refreshtoken', 'accesstoken', 'clientsecret', 'dbpassword', 'pass']) {
+    const url = `https://docs.example.org/cb?${name}=abcd1234efgh5678`;
+    t.is(allowlistDetector.detect(url)[0]?.value, url, name);
+  }
+});

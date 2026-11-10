@@ -26,17 +26,33 @@ function isValidSessionId(id: string): boolean {
   return true;
 }
 
+// Before IDs were validated, macOS and Linux saved a session under any name a file could
+// have, such as a timestamp with `:` in it. Such a session stays usable while its file
+// exists, so it can still be listed, read, encrypted and deleted. Without a `/` a name
+// cannot leave the sessions directory on these systems; new sessions still need a valid ID.
+function isExistingLegacySession(id: string, filePath: string): boolean {
+  return (
+    process.platform !== 'win32' &&
+    id.length >= 1 &&
+    id.length <= 255 &&
+    !id.includes('/') &&
+    !id.includes('\0') &&
+    fs.existsSync(filePath)
+  );
+}
+
 /**
  * Gets the file path for a specific session ID. IDs that could leave the sessions
  * directory are rejected.
  */
 export function getSessionStoragePath(sessionId: string): string {
-  if (!isValidSessionId(sessionId)) {
-    throw new Error(
-      `Invalid session ID ${JSON.stringify(sessionId)}: it must be 1-255 characters and must not contain path separators (/ or \\), ":", "*", "?", quotes, "<", ">", "|" or control characters.`,
-    );
+  const filePath = path.join(getConfigDir(), 'sessions', `${sessionId}.json`);
+  if (isValidSessionId(sessionId) || isExistingLegacySession(sessionId, filePath)) {
+    return filePath;
   }
-  return path.join(getConfigDir(), 'sessions', `${sessionId}.json`);
+  throw new Error(
+    `Invalid session ID ${JSON.stringify(sessionId)}: it must be 1-255 characters and must not contain path separators (/ or \\), ":", "*", "?", quotes, "<", ">", "|" or control characters.`,
+  );
 }
 
 /**

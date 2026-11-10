@@ -11,7 +11,8 @@ import type { ProxyProvider } from './types.js';
  * and a few gateways use `/openai/v1/chat/completions` and similar.
  */
 const OPENAI_CHAT_RE = /(^|\/)v1\/chat\/completions\/?$/;
-const ANTHROPIC_MESSAGES_RE = /(^|\/)v1\/messages\/?$/;
+// `count_tokens` takes the same body as a message request, prompt and all.
+const ANTHROPIC_MESSAGES_RE = /(^|\/)v1\/messages(?:\/count_tokens)?\/?$/;
 
 export function detectProvider(pathname: string): ProxyProvider {
   if (OPENAI_CHAT_RE.test(pathname)) return 'openai';
@@ -339,7 +340,8 @@ function scrubAnthropicContentPart(
     return { ...record, text };
   }
 
-  if (record.type === 'tool_result') {
+  // An MCP connector result nests content the same way a tool result does.
+  if (record.type === 'tool_result' || record.type === 'mcp_tool_result') {
     // A tool result's `content` follows the same string-or-parts rule as a
     // message's, so recurse through this very function.
     const content = scrubContent(record.content, scrub, add, scrubAnthropicContentPart, depth + 1);
@@ -347,7 +349,13 @@ function scrubAnthropicContentPart(
     return { ...record, content };
   }
 
-  if (record.type === 'tool_use') {
+  // Server-run tools (web search, code execution, MCP connectors) echo their
+  // arguments back in later turns just as a client tool does.
+  if (
+    record.type === 'tool_use' ||
+    record.type === 'server_tool_use' ||
+    record.type === 'mcp_tool_use'
+  ) {
     const { value, count } = mapJsonStrings(record.input, asJsonTransform(scrub));
     add(count);
     if (value === record.input) return part;
@@ -355,6 +363,18 @@ function scrubAnthropicContentPart(
   }
 
   if (record.type === 'document') return scrubAnthropicDocument(record, scrub, add, depth);
+
+  // A web search result's title comes back in later turns. Its `url` and
+  // `encrypted_content` are left alone: the API checks them on the way back in.
+  if (record.type === 'web_search_tool_result' && Array.isArray(record.content)) {
+    const content = mapPreservingIdentity(record.content, (raw) => {
+      const result = asRecord(raw);
+      if (!result) return raw;
+      const title = scrubText(result.title, scrub, add);
+      return title === result.title ? raw : { ...result, title };
+    });
+    return content === record.content ? part : { ...record, content };
+  }
 
   if (record.type === 'search_result') {
     const patch: Record<string, unknown> = {};
@@ -408,6 +428,13 @@ function scrubOpenAIToolCalls(value: unknown, scrub: ScrubFn, add: Accumulate): 
   return mapPreservingIdentity(value, (call) => {
     const record = asRecord(call);
     if (!record) return call;
+    // A custom tool takes free-form text rather than JSON arguments.
+    const custom = asRecord(record.custom);
+    if (custom && typeof custom.input === 'string') {
+      const input = scrubText(custom.input, scrub, add);
+      if (input === custom.input) return call;
+      return { ...record, custom: { ...custom, input } };
+    }
     const fn = scrubCallArguments(record.function, scrub, add);
     if (fn === record.function) return call;
     return { ...record, function: fn };

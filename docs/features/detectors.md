@@ -74,6 +74,11 @@ produced it.
 | `PathDetector` | Bare absolute path | 0.80 | `structural` |
 | `PhoneDetector` | E.164 or `(555) 123-4567` | 0.90 | `structural` |
 | `PhoneDetector` | Bare `555-123-4567` | 0.80 | `structural` |
+| `CreditCardDetector` | Number that passes Luhn | 0.95 | `checksum` |
+| `IbanDetector` | IBAN that passes mod-97 | 0.95 | `checksum` |
+| `SsnDetector` | After an SSN label (`SSN`, `tax id`, ...) | 0.90 | `structural` |
+| `SsnDetector` | Bare `123-45-6789` | 0.80 | `structural` |
+| `IpAddressDetector` | IPv4 or IPv6 address | 0.85 | `structural` |
 | `AddressDetector` | Any match | 0.70 | `heuristic` |
 | `NameDetector` | Any match (0.60 in strict mode) | 0.50 | `heuristic` |
 | `CodeTellDetector` | Any match | 0.95 | `user-defined` |

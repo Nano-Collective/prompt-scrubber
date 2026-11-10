@@ -143,11 +143,13 @@ See the [CLI Reference](docs/getting-started/cli.md#watch-mode) for all watch op
 prompt-scrub proxy --target https://api.openai.com --port 8080 &
 export OPENAI_BASE_URL=http://localhost:8080/v1
 
-# Any request your app sends to OpenAI is now scrubbed on the way out and
-# rehydrated on the way back, transparently. Streaming (SSE) responses work.
+# Chat Completions (/v1/chat/completions) and Anthropic Messages (/v1/messages)
+# requests are scrubbed on the way out and rehydrated on the way back,
+# streaming (SSE) included. Add --strict to refuse anything else rather than
+# forward it unscrubbed, and --auth-token when binding beyond localhost.
 ```
 
-See the [CLI Reference](docs/getting-started/cli.md#proxy-mode) for the full set of options and supported providers.
+Other endpoints (such as OpenAI `/v1/responses`), compressed bodies and non-JSON bodies are forwarded as they are unless `--strict` is set. See the [CLI Reference](docs/getting-started/cli.md#proxy-mode) for the full set of options and supported providers.
 
 **Node.js API: Scrubbing, Rehydrating, and Key Injection**
 ```typescript

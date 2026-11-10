@@ -129,3 +129,18 @@ test('rejects dates and phone numbers', (t) => {
   const findings = detector.detect('Date 2026-08-30 or phone 555-123-4567');
   t.is(findings.length, 0);
 });
+
+test('does not read an SSN label inside another word', (t) => {
+  for (const text of [
+    'classname 123456789',
+    'syntax id 123456789',
+    'className="row" data-id="123456789"',
+  ]) {
+    t.is(detector.detect(text).length, 0, text);
+  }
+});
+
+test('scores a labelled SSN above a bare one', (t) => {
+  t.is(detector.detect('SSN: 123456789')[0]?.confidence, 0.9);
+  t.is(detector.detect('id 123-45-6789')[0]?.confidence, 0.8);
+});

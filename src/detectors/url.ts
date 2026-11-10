@@ -24,33 +24,35 @@ const BARE_URL_CONFIDENCE = 0.7;
 // character of a query value unredacted.
 const TRAILING_PUNCTUATION = new Set(['.', ',', ':', '?']);
 
+// Brackets are counted once and the counts kept up to date as characters come off the
+// end. Recounting the whole URL for each trimmed character made a run of `)` quadratic.
 function trimTrailingUrlPunctuation(url: string): string {
-  let trimmed = url;
-  while (trimmed.length > 0) {
-    const lastChar = trimmed[trimmed.length - 1]!;
+  let end = url.length;
+  const open = { '(': 0, '[': 0 };
+  const close = { ')': 0, ']': 0 };
+  for (const char of url) {
+    if (char === '(' || char === '[') open[char]++;
+    else if (char === ')' || char === ']') close[char]++;
+  }
+  while (end > 0) {
+    const lastChar = url[end - 1]!;
     if (TRAILING_PUNCTUATION.has(lastChar)) {
-      trimmed = trimmed.slice(0, -1);
+      end--;
       continue;
     }
-    if (lastChar === ')') {
-      const openCount = (trimmed.match(/\(/g) ?? []).length;
-      const closeCount = (trimmed.match(/\)/g) ?? []).length;
-      if (closeCount > openCount) {
-        trimmed = trimmed.slice(0, -1);
-        continue;
-      }
+    if (lastChar === ')' && close[')'] > open['(']) {
+      close[')']--;
+      end--;
+      continue;
     }
-    if (lastChar === ']') {
-      const openCount = (trimmed.match(/\[/g) ?? []).length;
-      const closeCount = (trimmed.match(/\]/g) ?? []).length;
-      if (closeCount > openCount) {
-        trimmed = trimmed.slice(0, -1);
-        continue;
-      }
+    if (lastChar === ']' && close[']'] > open['[']) {
+      close[']']--;
+      end--;
+      continue;
     }
     break;
   }
-  return trimmed;
+  return url.slice(0, end);
 }
 
 export function isValidFullUrl(url: string): boolean {
@@ -71,6 +73,7 @@ function isValidBareApi(url: string): boolean {
 const SECRET_PARAM_WORDS = new Set([
   'key',
   'apikey',
+  'pass',
   'token',
   'secret',
   'password',
@@ -87,6 +90,10 @@ const SECRET_PARAM_WORDS = new Set([
   'bearer',
 ]);
 
+// As in the secret detector, these are matched anywhere in the name, so a compound such as
+// `refreshtoken`, `clientsecret` or `dbpassword` counts too.
+const STRONG_SECRET_PARAM = /token|secret|passw(?:or)?d|passphrase|credential/;
+
 function hasSecretParam(url: string): boolean {
   // The first `?` or `#` begins the query or fragment: neither is legal unescaped in the
   // scheme, user info, host or path that come before it. The scheme may be absent (a
@@ -99,6 +106,7 @@ function hasSecretParam(url: string): boolean {
     .some((pair) => {
       if (!pair.includes('=')) return false;
       const name = (pair.split('=')[0] ?? '').replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase();
+      if (STRONG_SECRET_PARAM.test(name)) return true;
       return name.split(/[_.-]/).some((word) => SECRET_PARAM_WORDS.has(word));
     });
 }

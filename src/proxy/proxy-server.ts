@@ -518,6 +518,12 @@ async function handleClientRequest(
       } catch {
         unscrubbedReason = 'non-json body';
       }
+      // Valid JSON in a shape the scrubber does not walk (a bare string or array,
+      // `{"input": ...}`, a `messages` that is not a list) would be forwarded as it
+      // came. Without `--strict` the fields it does recognise are still scrubbed.
+      if (options.strict && parsed !== undefined && !isChatShapedBody(parsed)) {
+        unscrubbedReason = 'unrecognised body';
+      }
     }
   }
 
@@ -1073,4 +1079,14 @@ function pipeStreamingResponse(
     // No-op when the stream already completed; otherwise the client went away first.
     finishTrace(trace, emit, downstream.statusCode, 'client_aborted');
   });
+}
+
+/** A chat request is a JSON object whose `messages` is a list. */
+function isChatShapedBody(body: unknown): boolean {
+  return (
+    typeof body === 'object' &&
+    body !== null &&
+    !Array.isArray(body) &&
+    Array.isArray((body as Record<string, unknown>).messages)
+  );
 }

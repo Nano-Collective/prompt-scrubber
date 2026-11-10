@@ -79,3 +79,15 @@ test('does not match a Luhn-valid digit run embedded in an identifier', (t) => {
   t.is(detector.detect('Release 10.15.7 build 4532015000000007x').length, 0);
   t.is(detector.detect('ref a4532015000000007').length, 0);
 });
+
+test('finds a 16-digit card followed by a separate 3-digit number', (t) => {
+  for (const text of ['card 4111 1111 1111 1111 123 cvv', 'card 4111111111111111 123']) {
+    const findings = detector.detect(text);
+    t.is(findings.length, 1, text);
+    t.is(findings[0]?.value.replace(/\D/g, ''), '4111111111111111', text);
+  }
+});
+
+test('scores a card high enough to survive a confidence threshold', (t) => {
+  t.is(detector.detect('4111111111111111')[0]?.confidence, 0.95);
+});

@@ -772,3 +772,22 @@ test.serial('listSessions does not report a lock file as a session', (t) => {
     t.false(listSessions().some((s) => s.id.startsWith('lock-listed')));
   });
 });
+
+test('a session saved under a name earlier versions allowed can still be listed, read and deleted', (t) => {
+  if (process.platform === 'win32') {
+    t.pass('Windows never allowed these names');
+    return;
+  }
+  const legacy = '2026-11-10T09:00:00';
+  const file = path.join(path.dirname(getSessionStoragePath('probe')), `${legacy}.json`);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ '«Email_1»': 'alice@example.com' }));
+
+  t.true(listSessions().some((s) => s.id === legacy));
+  t.false(isSessionEncrypted(legacy));
+  t.deepEqual(readSessionMap(legacy), { '«Email_1»': 'alice@example.com' });
+  t.true(withSessionLock(legacy, () => deleteSessionMap(legacy)));
+  t.false(fs.existsSync(file));
+  // Once it is gone, the name is rejected again like any other new one.
+  t.throws(() => getSessionStoragePath(legacy), { message: /Invalid session ID/ });
+});

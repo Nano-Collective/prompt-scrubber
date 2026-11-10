@@ -8,9 +8,15 @@ import type { Detector, Finding } from '../types/index.js';
 const SSN_DELIMITED = /(?<!\d)(([0-9]{3})([ -])([0-9]{2})\3([0-9]{4}))(?!\d)/g;
 
 // Separator-tolerant form, gated behind an SSN label within a wider window.
-// The label carries the evidence the shape alone cannot.
+// The label carries the evidence the shape alone cannot. It must start a word, so
+// `className` and `syntax id` do not count as `ssn` and `tax id`.
 const SSN_CONTEXTUAL =
-  /(?:ssn|social security(?:\s+number)?|tax\s*id)\D{0,40}?(?<![\d-])(([0-9]{3})[ -]?([0-9]{2})[ -]?([0-9]{4}))(?!\d)/gi;
+  /(?<![A-Za-z])(?:ssn|social security(?:\s+number)?|tax\s*id)\D{0,40}?(?<![\d-])(([0-9]{3})[ -]?([0-9]{2})[ -]?([0-9]{4}))(?!\d)/gi;
+
+// A labelled SSN is near certain. A bare `123-45-6789` is the right shape, but so are
+// part numbers and other ids.
+const LABELLED_CONFIDENCE = 0.9;
+const DELIMITED_CONFIDENCE = 0.8;
 
 /**
  * Validates whether the 3 components of an SSN satisfy Social Security Administration rules.
@@ -55,6 +61,8 @@ export class SsnDetector implements Detector {
           span: [start, start + value.length],
           value,
           placeholderPrefix: 'Ssn',
+          confidence: regex === SSN_CONTEXTUAL ? LABELLED_CONFIDENCE : DELIMITED_CONFIDENCE,
+          method: 'structural',
         });
       }
     }

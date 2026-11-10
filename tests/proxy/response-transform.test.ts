@@ -716,3 +716,61 @@ test('createSseRehydrator restores an Anthropic text_delta split across events',
 
   t.is(collectText(out), 'Contact alice@example.com today.');
 });
+
+test('createSseRehydrator releases a held OpenAI tail before finish_reason and [DONE]', (t) => {
+  const r = createSseRehydrator('openai', SESSION);
+  const out =
+    r.push(
+      Buffer.from(
+        'data: {"choices":[{"index":0,"delta":{"content":"price is «50"}}]}\n\n' +
+          'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n' +
+          'data: [DONE]\n\n',
+      ),
+    ) + r.flush();
+  const held = out.indexOf('«50');
+  t.true(held !== -1);
+  t.true(held < out.indexOf('finish_reason'));
+  t.true(held < out.indexOf('[DONE]'));
+});
+
+test('createSseRehydrator releases a tail after a finish chunk that carries the last fragment', (t) => {
+  const r = createSseRehydrator('openai', SESSION);
+  const out =
+    r.push(
+      Buffer.from(
+        'data: {"choices":[{"index":0,"delta":{"content":"a «x"},"finish_reason":"stop"}]}\n\n' +
+          'data: [DONE]\n\n',
+      ),
+    ) + r.flush();
+  t.true(out.indexOf('«x') !== -1);
+  t.true(out.indexOf('«x') < out.indexOf('[DONE]'));
+});
+
+test('createSseRehydrator releases a held Anthropic tail before content_block_stop', (t) => {
+  const r = createSseRehydrator('anthropic', SESSION);
+  const out =
+    r.push(
+      Buffer.from(
+        'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"see «note"}}\n\n' +
+          'data: {"type":"content_block_stop","index":0}\n\n' +
+          'data: {"type":"message_stop"}\n\n',
+      ),
+    ) + r.flush();
+  t.true(out.indexOf('«note') !== -1);
+  t.true(out.indexOf('«note') < out.indexOf('content_block_stop'));
+});
+
+test('createSseRehydrator still joins a placeholder split across events', (t) => {
+  const r = createSseRehydrator('openai', SESSION);
+  const out =
+    r.push(
+      Buffer.from(
+        'data: {"choices":[{"index":0,"delta":{"content":"mail «Email_"}}]}\n\n' +
+          'data: {"choices":[{"index":0,"delta":{"content":"1» now"}}]}\n\n' +
+          'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n' +
+          'data: [DONE]\n\n',
+      ),
+    ) + r.flush();
+  t.true(out.includes('alice@example.com'));
+  t.false(out.includes('«Email_'));
+});

@@ -968,3 +968,65 @@ test('redacts a credential nested under a credential key in Anthropic tool input
   t.deepEqual(out.metadata, { user_id: 'u-1', api_keys: { primary: '«Secret_2»' } });
   t.is(result.entities, 2);
 });
+
+test('detectProvider recognises Anthropic count_tokens', (t) => {
+  t.is(detectProvider('/v1/messages/count_tokens'), 'anthropic');
+});
+
+test('scrubOpenAIChatBody scrubs the input of a custom tool call', (t) => {
+  const body = {
+    messages: [
+      {
+        role: 'assistant',
+        tool_calls: [
+          { id: 'c1', type: 'custom', custom: { name: 'x', input: 'mail john@example.com' } },
+        ],
+      },
+    ],
+  };
+  const out = scrubOpenAIChatBody(body, fakeScrub).body as {
+    messages: Array<{ tool_calls: Array<{ custom: { name: string; input: string } }> }>;
+  };
+  t.is(out.messages[0]?.tool_calls[0]?.custom.input, 'mail «Email_1»');
+  t.is(out.messages[0]?.tool_calls[0]?.custom.name, 'x');
+});
+
+test('scrubAnthropicMessagesBody scrubs server and MCP tool blocks', (t) => {
+  const body = {
+    messages: [
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'server_tool_use',
+            id: 's',
+            name: 'web_search',
+            input: { query: 'john@example.com' },
+          },
+          {
+            type: 'mcp_tool_use',
+            id: 'm',
+            name: 'x',
+            server_name: 's',
+            input: { to: 'john@example.com' },
+          },
+          {
+            type: 'web_search_tool_result',
+            tool_use_id: 's',
+            content: [
+              { type: 'web_search_result', title: 'john@example.com', url: 'https://x.io' },
+            ],
+          },
+          {
+            type: 'mcp_tool_result',
+            tool_use_id: 'm',
+            content: [{ type: 'text', text: 'john@example.com' }],
+          },
+        ],
+      },
+    ],
+  };
+  const out = JSON.stringify(scrubAnthropicMessagesBody(body, fakeScrub).body);
+  t.false(out.includes('john@example.com'));
+  t.true(out.includes('https://x.io'));
+});

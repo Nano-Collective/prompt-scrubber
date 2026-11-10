@@ -52,6 +52,9 @@ function isValidIban(ibanStr: string): boolean {
   }
 }
 
+// A value that passes the mod-97 check and the country's length is almost never anything else.
+const IBAN_CONFIDENCE = 0.95;
+
 export class IbanDetector implements Detector {
   readonly name = 'IbanDetector';
 
@@ -71,6 +74,8 @@ export class IbanDetector implements Detector {
         span: [match.index, match.index + value.length],
         value,
         placeholderPrefix: 'Iban',
+        confidence: IBAN_CONFIDENCE,
+        method: 'checksum',
       });
     }
 
